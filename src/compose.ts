@@ -585,7 +585,7 @@ export function createTxDb(
     /** 覆盖关停排空上限（测试注入）；省略即 {@link DEFAULT_TX_DRAIN_TIMEOUT_MS}。 */
     readonly drainTimeoutMs?: number;
   } = {},
-): { readonly db: DbClient; readonly dispose: () => Promise<void> } {
+): TxDbPort {
   const drainTimeoutMs = hooks.drainTimeoutMs ?? DEFAULT_TX_DRAIN_TIMEOUT_MS;
   let handle: TxClientHandle | null = null;
   let pending: Promise<TxClientHandle> | null = null;
@@ -970,15 +970,48 @@ export async function inspectRls(
   }
 }
 
-/** 装配全部服务。 */
-export function compose(config: ComposeConfig): ComposedPlugin {
-  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
-  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
-  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
-    throw new Error(
-      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
-    );
-  }
+/**
+ * 独占写连接的端口（`createTxDb` 的产物）。
+ *
+ * 具名而不是内联返回形状：安装器要把它当作产品的一部分传给调用方，
+ * 内联形状会让下游只能用 `ReturnType<typeof createTxDb>` 表达类型。
+ */
+export interface TxDbPort {
+  readonly db: DbClient;
+  readonly dispose: () => Promise<void>;
+}
+
+/** 后台循环用的作用域端口：在 {@link RlsScopePort} 之上补一个作业列举。 */
+export interface BackgroundScopes {
+  readonly run: RlsScopePort['run'];
+  readonly current: RlsScopePort['current'];
+  readonly listEngagementIds: () => Promise<readonly string[]>;
+}
+
+/** `installDatabase` 的产物：连接池、读写通道、RLS 作用域端口。 */
+export interface DatabaseInstallation {
+  readonly pool: Pool;
+  readonly readDb: DbClient;
+  readonly txDb: DbClient;
+  readonly txPort: TxDbPort;
+  readonly rlsContext: RuntimeRlsContext | undefined;
+  readonly rlsScopePort: RlsScopePort;
+  readonly backgroundScopes: BackgroundScopes | undefined;
+}
+
+/**
+ * 安装数据库层（连接池 + 读写通道 + RLS 作用域）。
+ *
+ * ── 为什么拆成安装器（2026-10-05 复核 C2）──
+ *
+ * `compose()` 此前是一个 880 行的函数：连接池、账本、索引器、策略、执行、工作流、
+ * 控制台**顺序平铺**在一个作用域里，任何一处接线改动都要在整段里找位置，启动失败
+ * （`config` 形状不对、数据库不可达）也没有局部性——错误栈只会指向 `compose` 的某一行。
+ *
+ * 安装器把「一块基础设施」的输入与产物显式写成类型：调用方只看
+ * {@link DatabaseInstallation} 就知道这一层给出去什么，而这一层内部改接线不影响调用方。
+ */
+export function installDatabase(config: ComposeConfig): DatabaseInstallation {
   const pool = createDatabasePool(config.database, (error) => {
     console.warn(`[dsh-pentest] 连接池错误（空闲连接被终止或网络断开，池将自行回收重建）：${error.message}`);
   });
@@ -1042,11 +1075,32 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     );
     return result.rows.map((row) => row.id);
   };
-  /** 后台循环用的作用域端口：在 {@link RlsScopePort} 之上补一个作业列举。 */
-  const backgroundScopes = rlsContext === undefined
+  const backgroundScopes: BackgroundScopes | undefined = rlsContext === undefined
     ? undefined
     : { run: runWithRlsScope, current: () => rlsScopes.getStore(), listEngagementIds };
 
+  return { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes };
+}
+
+/** `installIndexing` 的产物：队列、账本与索引器。 */
+export interface IndexingInstallation {
+  readonly outbox: PgOutboxQueue;
+  readonly ledger: MemoryLedger;
+  readonly indexer: MemoryIndexer;
+}
+
+/**
+ * 安装「事件 → 分块」这条链：outbox 队列、账本（含锚点）与记忆索引器（§8.4）。
+ *
+ * 锚点与版本登记器**不**作为产物给出：它们只服务于这一层的内部装配
+ * （锚点与账本共用写连接、登记器供索引器调用），调用方拿不到也不需要它们。
+ */
+export function installIndexing(input: {
+  readonly config: ComposeConfig;
+  readonly readDb: DbClient;
+  readonly txDb: DbClient;
+}): IndexingInstallation {
+  const { config, readDb, txDb } = input;
   // ── 索引任务队列（§8.4）──
   //
   // 队列用 `txDb`（写连接）而不是连接池：账本要在**同一事务**里入队。
@@ -1093,6 +1147,21 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     }),
     ...(config.projectForSearch === undefined ? {} : { projectForSearch: config.projectForSearch }),
   });
+
+  return { outbox, ledger, indexer };
+}
+
+/** 装配全部服务。 */
+export function compose(config: ComposeConfig): ComposedPlugin {
+  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
+  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
+  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
+    throw new Error(
+      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
+    );
+  }
+  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
+  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
 
   // ── 策略与会话 ──
   const policy = new PgPolicyService(readDb, {

@@ -661,3 +661,41 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 两个入口的**事务外尾段**（签发租约；控制台再新建 dsh 会话，Agent 路径只把行推到 `active`）
 仍是各自实现——它们的事务边界本就不同（一个要 `ctx.agents.create`，一个不能），
 强行统一会把「不新建会话」这条安全语义搅浑。行内已写清理由。
+
+---
+
+## 附十四：C2 组合根安装器表（2026-10-05，**部分完成**）
+
+### 已落地
+
+`compose()` 此前是一个 **880 行**的函数：连接池、账本、索引器、策略、执行、工作流、控制台
+顺序平铺在一个作用域里——任何接线改动都要在整段里找位置，启动失败也没有局部性
+（错误栈只指向 `compose` 的某一行）。
+
+本轮抽出两个安装器，并把它们的**输入/输出写成具名类型**（消费者不再需要用
+`ReturnType<typeof …>` 表达契约）：
+
+| 安装器 | 产物（具名类型） | 内部细节 |
+|---|---|---|
+| `installDatabase(config)` | `DatabaseInstallation` = `{pool, readDb, txDb, txPort: TxDbPort, rlsContext, rlsScopePort, backgroundScopes: BackgroundScopes}` | 连接池与错误钩子、RLS 作用域（`AsyncLocalStorage`）、惰性写连接、租户级作业列举 |
+| `installIndexing({config, readDb, txDb})` | `IndexingInstallation` = `{outbox, ledger, indexer}` | 队列与写连接同源的理由、锚点与账本共用写连接（避免死锁）、版本登记器与索引器的接线 |
+
+锚点与版本登记器**不作为产物**给出：它们只服务于这一层内部（`PgAnchorSink` 由账本持有、
+登记器由索引器调用），调用方拿不到也不需要。
+
+顺带具名化两处此前只能靠内联形状表达的类型：`TxDbPort`（`createTxDb` 的产物）与
+`BackgroundScopes`（后台循环的作用域端口）。
+
+**度量**：`compose()` **880 → 769 行**；`compose.test.ts` **48/48**、全量套件通过。
+
+### 未完成（明确记录，不冒充完成）
+
+复核的目标是「安装器表 + 组合根 ≈ 200 行编排」——本轮只完成 **2/5**：
+
+| 剩余安装器 | 为什么本轮没做 |
+|---|---|
+| `installExecution`（策略/会话/动作策略 + 沙箱/store + `GateFailureSink` + `createExecutionService`，~180 行） | 其中「闸门失败 sink」不是纯接线而是**服务构造**（写账本 + 计数 + 触发暂停，约 100 行），且与 `ledger`/`workflowRef`/`policy` 交叉引用。它应当先像 `admission.ts` 那样**独立成模块**，再作为安装器接线——顺手搬会把它埋进安装器的参数表里 |
+| `installWorkflow`（会话工厂 + 报告/记忆/诊断面 + `PgWorkflowService`） | 与 leases/workerTools 双向引用（`workflowRef`），边界要先想清 |
+| `installConsole`（控制台方法表 + 客户端面） | 依赖上面两项的产物，最后做 |
+
+模式已经立住（具名产物 + 单点装配），后续三个安装器是机械延展。
