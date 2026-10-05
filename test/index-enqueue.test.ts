@@ -17,8 +17,8 @@ import { Pool } from 'pg';
 import { cleanupEngagements } from './helpers/cleanup.ts';
 import type { PoolClient } from 'pg';
 
-import { LedgerIndexEnqueue, INDEX_EVENT_JOB_TYPE, pendingJobCountOnTx } from '../src/memory/index-enqueue.ts';
-import { PgOutboxQueue } from '../src/memory/outbox.ts';
+import { LedgerIndexEnqueue, pendingJobCountOnTx } from '../src/memory/index-enqueue.ts';
+import { PgOutboxQueue, INDEX_EVENT_JOB } from '../src/memory/outbox.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
 import type { DbClient } from '../src/memory/ledger.ts';
 
@@ -123,7 +123,7 @@ describe('索引入队适配器（真实 PostgreSQL）', { skip: DATABASE_URL ==
       `select job_type, entity_id, status, attempts from pentest.outbox_jobs where engagement_id = $1::uuid and entity_id = $2::uuid`,
       [engagementId, eventId],
     );
-    assert.equal(row.rows[0]!.job_type, INDEX_EVENT_JOB_TYPE);
+    assert.equal(row.rows[0]!.job_type, INDEX_EVENT_JOB);
     assert.equal(row.rows[0]!.entity_id, eventId);
     assert.equal(row.rows[0]!.status, 'pending');
     assert.equal(row.rows[0]!.attempts, 0, '入队时 attempts 应为 0，领取时才递增');
@@ -220,7 +220,7 @@ describe('索引入队适配器（真实 PostgreSQL）', { skip: DATABASE_URL ==
       [result.eventId],
     );
     assert.equal(job.rows.length, 1, '账本追加必须自动产生索引任务');
-    assert.equal(job.rows[0]!.job_type, INDEX_EVENT_JOB_TYPE);
+    assert.equal(job.rows[0]!.job_type, INDEX_EVENT_JOB);
   });
 
   test('未接入队端口时：账本仍可工作，只是不产生索引任务（明确降级）', async () => {

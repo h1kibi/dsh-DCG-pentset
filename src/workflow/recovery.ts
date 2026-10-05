@@ -40,6 +40,7 @@
 import type { DbClient } from '../memory/ledger.ts';
 import { transactionRunnerFor } from '../memory/ledger.ts';
 import type { MemoryLedgerService } from '../contracts.ts';
+import { describeError } from '../contracts.ts';
 import type { LeaseStore } from './lease.ts';
 import { revokeLease } from './lease.ts';
 import type { SessionReconciliationInput, SessionReconciliation } from './reconcile.ts';
@@ -352,7 +353,7 @@ export class StartupRecovery {
           blocked.push(engagementId);
         }
       } catch (error) {
-        errors.push({ engagementId, message: describe(error) });
+        errors.push({ engagementId, message: describeError(error) });
       }
     }
 
@@ -402,7 +403,7 @@ export class StartupRecovery {
           detail: verdict.action.reason,
         });
       } catch (error) {
-        errors.push({ engagementId: row.engagement_id, message: describe(error) });
+        errors.push({ engagementId: row.engagement_id, message: describeError(error) });
       }
     }
 
@@ -569,8 +570,4 @@ export class StartupRecovery {
  */
 export function requiresHumanReconfirmation(phase: Phase): boolean {
   return isHighRiskPhase(phase);
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -18,9 +18,7 @@ import { RECOMMENDED_MOVES } from './phases.ts';
 import type { SessionFactory, ModelRoute, ActionTemplateBrief } from './session-port.ts';
 import type { LeaseStore } from './lease.ts';
 import type { MemoryLedgerService, PentestReportService, ReportSignatureService, RequiredHandoffKey } from '../contracts.ts';
-
-export /** 公共记忆的长度上限（字符）。见 `updateEngagementMemory` 的说明。 */
-const PUBLIC_MEMORY_MAX_CHARS = 8000;
+import { PUBLIC_MEMORY_MAX_CHARS } from '../contracts.ts';
 
 export /**
  * 公共记忆的长度闸门。

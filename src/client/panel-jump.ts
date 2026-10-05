@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 
-import { describe, logWarn } from './log.ts';
+import { logWarn } from './log.ts';
+import { describeError } from '../contracts.ts';
 
 /**
  * 跳到渗透作业主面板（常驻状态条与卡片上的「打开控制台」都走这里）。
@@ -40,6 +41,6 @@ export function selectPentestPanel(ctx: Context, panelId: string): void {
     // 那是宿主事实，不该把点击变成未捕获异常。
     select.call(layout, panelId);
   } catch (error) {
-    logWarn(ctx, `跳转渗透作业主面板失败（不影响其它功能）：${describe(error)}`);
+    logWarn(ctx, `跳转渗透作业主面板失败（不影响其它功能）：${describeError(error)}`);
   }
 }

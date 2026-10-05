@@ -17,10 +17,8 @@
  */
 
 import type { DbClient, IndexEnqueuePort } from './ledger.ts';
+import { INDEX_EVENT_JOB } from './outbox.ts';
 import type { OutboxQueue } from './outbox.ts';
-
-/** 单个事件对应的索引任务类型（`outbox.ts` 的取值表之一）。 */
-export const INDEX_EVENT_JOB_TYPE = 'index_event' as const;
 
 /**
  * 把一批事件入队为索引任务。
@@ -47,7 +45,7 @@ export class LedgerIndexEnqueue implements IndexEnqueuePort {
     for (const eventId of input.eventIds) {
       await this.#queue.enqueueInTransaction(tx, {
         engagementId: input.engagementId,
-        jobType: INDEX_EVENT_JOB_TYPE,
+        jobType: INDEX_EVENT_JOB,
         entityId: eventId,
       });
     }

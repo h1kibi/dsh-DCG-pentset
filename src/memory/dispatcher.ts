@@ -41,15 +41,10 @@
  */
 
 import type { DbClient } from './ledger.ts';
-import { deriveIdempotencyKey } from './outbox.ts';
+import { deriveIdempotencyKey, INDEX_EVENT_JOB, INDEX_MEMORY_ITEM_JOB, REINDEX_ENGAGEMENT_JOB } from './outbox.ts';
 import type { OutboxQueue, ClaimedJob } from './outbox.ts';
 import { INDEX_STRATEGY_VERSION } from './indexer.ts';
 import type { MemoryIndexer, IndexEventResult } from './indexer.ts';
-
-/** 任务类型常量（与 `outbox.ts` 的取值表一致）。 */
-export const INDEX_EVENT_JOB = 'index_event';
-export const INDEX_MEMORY_ITEM_JOB = 'index_memory_item';
-export const REINDEX_ENGAGEMENT_JOB = 'reindex_engagement';
 
 /**
  * 单次重建的批预算：`REINDEX_BATCH_BUDGET` 批 × `runOnce` 的 100 事件上限

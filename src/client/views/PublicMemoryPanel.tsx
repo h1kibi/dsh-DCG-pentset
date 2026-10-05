@@ -31,9 +31,7 @@ import type { EngagementMemory } from '../../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { formatTimestamp } from '../format.ts';
 import { Button, Card, Empty, ErrorBar, Field, TextArea } from '../ui.tsx';
-
-/** 与服务端 `PUBLIC_MEMORY_MAX_CHARS` 一致；这里提前拦，避免提交后才被拒。 */
-export const PUBLIC_MEMORY_MAX_CHARS = 8000;
+import { PUBLIC_MEMORY_MAX_CHARS } from '../../contracts.ts';
 
 export interface PublicMemoryPanelProps {
   readonly controller: ConsoleController;

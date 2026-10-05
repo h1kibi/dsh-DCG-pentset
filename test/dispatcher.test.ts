@@ -14,12 +14,9 @@ import { Pool } from 'pg';
 
 import {
   IndexDispatcher,
-  INDEX_EVENT_JOB,
-  INDEX_MEMORY_ITEM_JOB,
   REINDEX_BATCH_BUDGET,
-  REINDEX_ENGAGEMENT_JOB,
 } from '../src/memory/dispatcher.ts';
-import { PgOutboxQueue } from '../src/memory/outbox.ts';
+import { PgOutboxQueue, INDEX_EVENT_JOB, INDEX_MEMORY_ITEM_JOB, REINDEX_ENGAGEMENT_JOB } from '../src/memory/outbox.ts';
 import { INDEX_STRATEGY_VERSION, MemoryIndexer } from '../src/memory/indexer.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
 import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';

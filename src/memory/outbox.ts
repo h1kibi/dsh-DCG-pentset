@@ -56,6 +56,16 @@ export const OUTBOX_JOB_TYPES = [
 ] as const;
 export type OutboxJobType = (typeof OUTBOX_JOB_TYPES)[number];
 
+/**
+ * 具名常量：**唯一**的字面量出处（`satisfies` 保证它们仍在取值表内，写错即编译失败）。
+ *
+ * 此前 `dispatcher.ts` 与 `index-enqueue.ts` 各写了一份同名/同值的字面量
+ * （第六轮质检）；取值表说「新增类型时只改这里」，那这条也得真的只在这里。
+ */
+export const INDEX_EVENT_JOB = 'index_event' satisfies OutboxJobType;
+export const INDEX_MEMORY_ITEM_JOB = 'index_memory_item' satisfies OutboxJobType;
+export const REINDEX_ENGAGEMENT_JOB = 'reindex_engagement' satisfies OutboxJobType;
+
 export function isOutboxJobType(value: unknown): value is OutboxJobType {
   return typeof value === 'string' && (OUTBOX_JOB_TYPES as readonly string[]).includes(value);
 }

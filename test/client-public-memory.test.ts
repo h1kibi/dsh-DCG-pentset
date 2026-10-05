@@ -16,7 +16,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { describeConsoleMethods, lookupConsoleMethod } from '../src/console/rpc.ts';
-import { PUBLIC_MEMORY_MAX_CHARS, publicMemoryBlockers } from '../src/client/views/PublicMemoryPanel.tsx';
+import { PUBLIC_MEMORY_MAX_CHARS } from '../src/contracts.ts';
+import { publicMemoryBlockers } from '../src/client/views/PublicMemoryPanel.tsx';
 
 // ─────────────────── 简化的契约面 ───────────────────
 
@@ -84,11 +85,12 @@ test('公共记忆：改了就必须要理由', () => {
   assert.match(gates[0]!, /改动必须写理由/);
 });
 
-test('客户端上限必须与服务端一致（两个独立字面量，必须显式绑定）', () => {
-  // 此前这条测试用**被测模块自己的常量**构造边界，于是两侧随常量一起漂移、永远绿：
-  // 服务端改成 12000 → 客户端仍在 8000 拦（过度拦截）；客户端改成 20000 →
-  // 放行 8001–20000，而第 35 行注释声称的「提前拦，避免提交后才被拒」失效。
-  assert.equal(PUBLIC_MEMORY_MAX_CHARS, 8000, '必须与 pg-workflow.ts 的 PUBLIC_MEMORY_MAX_CHARS 一致');
+test('客户端上限与服务端同源（单一声明，漂移在结构上不可能）', () => {
+  // 此前两侧各写一份字面量，这条测试只能断言「等于 8000」；服务端改 12000 → 客户端
+  // 仍在 8000 拦（过度拦截），客户端改 20000 → 放行 8001–20000（注释声称的「提前拦」失效）。
+  // 现在两侧都 import `contracts.ts` 的同一个常量（第八轮改动），因此这里只钉住「取值本身」
+  // ——它变了就是合同变了，必须是有意为之。
+  assert.equal(PUBLIC_MEMORY_MAX_CHARS, 8000, '公共记忆上限是契约值：改动需同步设计文档与两侧文案');
 });
 
 test('公共记忆：超长在客户端就拦下（不等服务端拒了才知道）', () => {

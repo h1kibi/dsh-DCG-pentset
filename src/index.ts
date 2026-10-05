@@ -41,6 +41,7 @@ import { compose } from './compose.ts';
 import { inspectRls } from './compose.ts';
 import { migrate } from './db/migrate.ts';
 import { DshSessionFactory } from './agents/dsh-session-factory.ts';
+import { assertGraph } from './workflow/phases.ts';
 import type { ComposeConfig, ComposedPlugin } from './compose.ts';
 import type { DshBudgetPort } from './workflow/budget.ts';
 
@@ -251,6 +252,10 @@ export async function applyPentest(ctx: Context, config: PluginConfig = {}): Pro
   // mask/observe 尚未注册 runtime 时产生假阴性。等待只针对配置中的 entry，entry
   // 缺失、导入失败或 apply 失败仍由后面的精确 identity 断言/loader 错误 fail closed。
   assertSessionVocabularyClean();
+  // 状态机自检（`phases.ts` 的 `assertGraph`）：转移表/邻接表是**静态**数据，
+  // 坏一行不会有测试之外的任何症状（真实后果是状态机在运行期走出设计外的路径）。
+  // 放在启动路径一次性校验，坏表即开即失败——第六轮质检发现它此前只被测试调用。
+  assertGraph();
   const requireEcosystem = config.requireEcosystem ?? true;
   if (requireEcosystem) {
     const required = config.ecosystemPlugins ?? REQUIRED_ECOSYSTEM_PLUGINS;

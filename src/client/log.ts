@@ -20,7 +20,3 @@ export function logWarn(ctx: Context, message: string): void {
     }
   }
 }
-
-export function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

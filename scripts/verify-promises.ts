@@ -84,10 +84,8 @@ const PROMISES: readonly PromiseEntry[] = [
   {
     symbol: 'assertGraph',
     file: 'src/workflow/phases.ts',
-    status: 'pending',
-    note:
-      '注释自称「启动自检」，但 src 内除定义外无调用（仅 test/phases.test.ts 用它）；'
-      + '即状态图合法性（含「只有回环递增迭代」）在运行期没有被校验。接线形态：在 apply/启动路径调用一次',
+    status: 'wired',
+    note: '启动自检：`applyPentest` 在生态断言后调用一次（第六轮质检前它只被测试调用）；坏表即开即失败，不留给运行期',
   },
   {
     symbol: 'assertLeaseValid',

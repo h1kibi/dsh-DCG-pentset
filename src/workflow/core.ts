@@ -24,9 +24,9 @@ import type { NormalizedScope } from '../policy/scope-snapshot.ts';
 import type { ScopeTarget } from '../contracts.ts';
 import type { DbRlsContext, RlsAwareDbClient } from '../memory/ledger.ts';
 import { isPhase } from '../contracts.ts';
-import { planTransition, RUNTIME_MARKER_TYPES } from './transition-table.ts';
+import { planTransition } from './transition-table.ts';
 import type { TransitionPlan, TransitionPlanOutcome } from './transition-table.ts';
-import { isLegalStatusEdge } from './phases.ts';
+import { RUNTIME_MARKER_TRANSITION_TYPES, isLegalStatusEdge } from './phases.ts';
 import type { FrozenSessionInput, ActionTemplateBrief } from './session-port.ts';
 import type { BehaviorBrief } from '../policy/behavior-prompts.ts';
 import { SessionFactoryError } from './session-port.ts';
@@ -253,7 +253,7 @@ export class WorkflowCore {
     readonly reason?: string;
   }): Promise<void> {
     const plan = input.plan;
-    const runtimeMarker = (RUNTIME_MARKER_TYPES as readonly string[]).includes(plan.type);
+    const runtimeMarker = (RUNTIME_MARKER_TRANSITION_TYPES as readonly string[]).includes(plan.type);
     if (runtimeMarker) {
       if (plan.fromStatus !== plan.toStatus) {
         throw new WorkflowRejection(

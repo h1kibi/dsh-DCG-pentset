@@ -124,6 +124,17 @@ export function advancesIteration(t: TransitionType): boolean {
   return t === 'loop';
 }
 
+/**
+ * 把 `unknown` 的错误收成一句可读文本。
+ *
+ * **唯一实现**：此前 `client/log.ts`、`agents/dsh-session-factory.ts`、`workflow/recovery.ts`
+ * 各写了一份逐字相同的私有副本（第六轮质检）；放在契约层是因为两侧（host 与 client 包）
+ * 都要用，而它只依赖 Error/String，没有平台依赖。
+ */
+export function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ───────────────────────────── 风险与动作类别 ─────────────────────────────
 
 export const ACTION_CLASSES = [
@@ -1472,6 +1483,15 @@ export interface ContextRef {
  * 「超出预算的部分不会随交接包带过去」。那个模块 import 了 node:crypto，进不了浏览器包。
  */
 export const HANDOFF_MAX_CONTEXT_REFS = 50;
+
+/**
+ * 公共记忆的长度上限（字符）。
+ *
+ * 放在契约层而不是 `workflow/model.ts`：客户端面板要在**提交之前**就用同一个数拦一次，
+ * 两侧各写一份必然漂移（实测：客户端曾用 8000 拦住服务端已放宽的值，注释声称的
+ * 「提前拦」变成过度拦截）。服务端在创建与更新两个入口都用它。
+ */
+export const PUBLIC_MEMORY_MAX_CHARS = 8000;
 
 export interface HandoffDraft {
   readonly draftId: string;

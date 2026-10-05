@@ -906,3 +906,46 @@
 | RUNBOOK 未写 `build` 现在会先 clean | §4b 的生产路径说明改为：`build = clean && build:host && build:client`，并说明陈旧产物曾随 `files` 进 npm 包、随 `COPY lib` 进镜像 | `RUNBOOK.md:206` |
 
 **验证**：`typecheck` 退出码 0；`lint` / `verify:styles` / `verify:promises`（9 项 8 告警 0 失败）；`npm pack` 文件数保持 157；`package.json` 可解析且 `exports` 键集合不变（`.` `./client` `./cordis.patch.yml` `./src/*` `./package.json`）。
+
+---
+
+## 附录 K：第七轮改进（未接线闭合 + 四处单源化）
+
+> 依据「持续改进」：挑**零风险、收益确定**的项，且每一项都用编译期 + 测试双重验证。
+
+### K.1 唯一能自行闭合的「未接线」：`assertGraph` 接入启动自检
+
+- 改动：`src/index.ts` 的 `applyPentest` 在 `assertSessionVocabularyClean()` 之后调用 `assertGraph()`（状态图/分派表是**静态**数据，坏一行在运行期的表现是「状态机走上设计外路径」，此前只有测试会拦）。
+- 门禁闭环：`verify-promises` 里该条由 `pending` 翻为 **`wired`** —— 从此谁删掉这次调用，门禁**失败**（新的棘轮）。实测：告警数 8 → **7**。
+- 验证：`boot` / `phases` / `assemble` 61 个用例通过；全量 1663/1663 ✅。
+
+### K.2 四处单源化（消除「同一事实两处写」）
+
+| 项 | 处置 | 为什么这样选 |
+|---|---|---|
+| `describe(error)` **三份逐字相同**的私有副本（`client/log.ts`、`agents/dsh-session-factory.ts`、`workflow/recovery.ts`） | 收敛为 `contracts.ts` 的 **`describeError`**；三处删除本地实现，调用点（含 `client/index.ts` 两处、`panel-jump.ts`）改指契约层 | 放契约层是因为 **host 与 client 两侧都要用**，而它只依赖 `Error`/`String`（无平台依赖）。改名而非沿用 `describe`：避免与 `node:test` 的 `describe` 混淆 |
+| `'index_event'` 字面量**三处**（`outbox.ts` 取值表、`dispatcher.ts`、`index-enqueue.ts`） | `outbox.ts` 导出三个具名常量（`satisfies OutboxJobType` 让「写错即编译失败」）；两处改为 import；两处测试同步改导入源 | 取值表自称「新增类型时只改这里」——那就让这条真的成立；`satisfies` 保证常量仍在表内 |
+| `RUNTIME_MARKER_TYPES` ≡ `RUNTIME_MARKER_TRANSITION_TYPES`（同值双导出） | 保留 `phases.ts` 的 `RUNTIME_MARKER_TRANSITION_TYPES`，`transition-table.ts` 与 `core.ts` 改消费它 | `phases.ts` 是既有测试的导入源，且它**不被** `transition-table` 反向依赖（无环）；反向保留会在两个模块间造出循环 |
+| `PUBLIC_MEMORY_MAX_CHARS` 两侧各一份（服务端私有 + 客户端导出） | 单源到 `contracts.ts`；`workflow/model.ts` 删私有副本、`client/views/PublicMemoryPanel.tsx` 删重复导出；测试改为钉住**契约值** | 客户端要在提交前拦、服务端要在创建/更新两入口拦，两侧必须同数；`contracts.ts` 是两侧都已有的 import（进浏览器包不引入服务端依赖） |
+
+### K.3 过程中的自纠（记一笔）
+
+`edit` 的 `replace_all` 只匹配「上下文完全相同」的行，因此我漏了 **3 处**同类调用点：
+`client/index.ts:899`（`describe(cause)`，变量名不同）、`workflow/recovery.ts:406`（对象字面量里带 `row.engagement_id`）、`test/index-enqueue.test.ts:223`（`job` vs `row`）。
+它们是**被验证链抓出来的**：`typecheck` 报 3 个 TS 错误、定向测试报 2 个失败（`index-enqueue`/`recovery`）→ 修好后 typecheck 0 错、定向 102/102。
+**教训**：批量替换后必须用「编译 + 测试」而不是肉眼看 diff 来确认完备性（这也正是本仓把 `typecheck` 与 1663 个用例放在同一条链上的价值）。
+
+### K.4 验证（全量链，按 RUNBOOK 新写的分库口径）
+
+| 步骤 | 结果 |
+|---|---|
+| `lint` / `typecheck` | 退出码 0 |
+| `npm test`（库 `pentest`） | **1663 / 1663** |
+| `npm run build`（含 `clean`） | ✓ |
+| `npm run verify`（五道；迁移演练用可建库角色） | 全过：样式 346/346 · **承诺接线 9 项（7 告警，0 失败）** · 端点面 53/53 · 客户端产物 22 项 · 前向迁移 25 项 |
+
+### K.5 仍未做（保持登记/待决策）
+
+- `taskRef` **跨任务提权检查**的接线：生产三条路径都不比对任务绑定（doc:3607/4374 的验收标准），登记在 `verify-promises` 的 `pending` 里；接线前提是**先定义「提交所属任务」的来源**（`ExecutionPlan` 与审批都不携带任务标识）——属产品决策，未擅自改工具面；
+- `LivenessMonitor`（§10.5）与 `planCompaction`（§8.10）：阻塞在宿主能力（回合边界 effect 点、模型客户端、`SessionPort` 的 `replace` 追加写），已登记并指向设计文档 §8.10.0；
+- `enrichContextRefs`（交接视图的引用来源/可信度）：待确认控制台是否显示该信息后再定接线或删除。

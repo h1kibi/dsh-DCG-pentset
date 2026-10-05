@@ -66,7 +66,7 @@ import { SessionSeq } from '@deepseek-ai/dsh-session';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
-import { SANDBOX_TOOLBELT } from '../contracts.ts';
+import { SANDBOX_TOOLBELT, describeError } from '../contracts.ts';
 import type {
   CreatedSession,
   FrozenSessionInput,
@@ -320,7 +320,7 @@ export class DshSessionFactory implements SessionFactory {
       });
     } catch (error) {
       if (error instanceof SessionFactoryError) throw error;
-      throw new SessionFactoryError(`创建 dsh 会话失败：${describe(error)}`, {
+      throw new SessionFactoryError(`创建 dsh 会话失败：${describeError(error)}`, {
         dshSessionId: input.dshSessionId,
         // dsh 对 setup 的抛出/拒绝、commit 失败、owner 卸载都会**整体回滚**且不公告任何 id，
         // 因此带上同一标识重试是安全的；是否重试由工作流决定（§17.2 对账）。
@@ -392,7 +392,7 @@ export class DshSessionFactory implements SessionFactory {
       // 不吞异常：预设挂不上说明部署配置有问题（id 写错、组合有坏行），
       // 而「静默不挂」会让会话以错误的提示词工作到人类发现为止。
       throw new SessionFactoryError(
-        `挂载会话预设 ${presetId} 失败：${describe(error)}`,
+        `挂载会话预设 ${presetId} 失败：${describeError(error)}`,
         { cause: error, retryable: false },
       );
     }
@@ -432,7 +432,7 @@ export class DshSessionFactory implements SessionFactory {
     try {
       record.handle.agent.cancel({ kind: 'hook', reason: `pentest interrupt: ${reason}` }, { keepInbox: true });
     } catch (error) {
-      throw new SessionFactoryError(`中止会话失败：${describe(error)}`, {
+      throw new SessionFactoryError(`中止会话失败：${describeError(error)}`, {
         dshSessionId,
         cause: error,
       });
@@ -460,7 +460,7 @@ export class DshSessionFactory implements SessionFactory {
       await record.handle.dispose();
     } catch (error) {
       throw new SessionFactoryError(
-        `关闭会话失败（${reason}；会话已标记关闭，投递仍会失败）：${describe(error)}`,
+        `关闭会话失败（${reason}；会话已标记关闭，投递仍会失败）：${describeError(error)}`,
         { dshSessionId, retryable: true, cause: error },
       );
     }
@@ -511,7 +511,7 @@ export class DshSessionFactory implements SessionFactory {
       if (agent.status === 'running') agent.steer(message);
       else agent.followup(message);
     } catch (error) {
-      throw new SessionFactoryError(`投递失败：${describe(error)}`, {
+      throw new SessionFactoryError(`投递失败：${describeError(error)}`, {
         dshSessionId: agent.session.id,
         cause: error,
       });
@@ -713,8 +713,4 @@ function createUserMessage(text: string): UserMessageView {
       source: { kind: 'plugin' as const, plugin: PLUGIN_NAME },
     }),
   );
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

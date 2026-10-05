@@ -27,7 +27,8 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState } from
 import type { ReactNode } from 'react';
 import type { Context } from '@deepseek-ai/cordis';
 
-import { describe, logWarn } from './log.ts';
+import { logWarn } from './log.ts';
+import { describeError } from '../contracts.ts';
 import { selectPentestPanel } from './panel-jump.ts';
 
 import type {
@@ -235,7 +236,7 @@ export function apply(ctx: Context): void {
     // **同时打到 console**：`ctx.logger` 默认只写内存环形缓冲、没有 console 出口，
     // 因此只走 logger 的失败在浏览器里是**完全静默**的——「标签消失且零错误」正是这样
     // 拼出来的。降级可以，但必须留下可见的痕迹。
-    logWarn(ctx, `渗透作业标签注册失败（已降级，不影响宿主启动）：${describe(error)}`);
+    logWarn(ctx, `渗透作业标签注册失败（已降级，不影响宿主启动）：${describeError(error)}`);
   }
 }
 
@@ -896,7 +897,7 @@ function ConsoleApp(props: {
       else throw new Error('宿主未提供会话导航（ctx.sessions / ctx.uiWorkspace 都不可用）');
       setNavFailure(null);
     } catch (cause: unknown) {
-      setNavFailure(`${describe(cause)}｜若该会话属于尚未打开的工作区，请先在左侧栏打开它`);
+      setNavFailure(`${describeError(cause)}｜若该会话属于尚未打开的工作区，请先在左侧栏打开它`);
     }
   }, [props.ctx]);
 

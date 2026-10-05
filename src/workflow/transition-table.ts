@@ -19,7 +19,7 @@
 
 import { HANDOFF_TRANSITION_TYPES, TRANSITION_TYPES, advancesIteration } from '../contracts.ts';
 import type { ErrorCode, HandoffTransitionType, MainStatus, TransitionType } from '../contracts.ts';
-import { isLegalStatusEdge, statusEdgesFor } from './phases.ts';
+import { RUNTIME_MARKER_TRANSITION_TYPES, isLegalStatusEdge, statusEdgesFor } from './phases.ts';
 
 /**
  * 会话处置：
@@ -187,9 +187,6 @@ export interface DispatchProblem {
 /** 允许携带强制跳转标记的取值：§5.3 的强制入口只对阶段切换/回补/回环开放。 */
 export const FORCEABLE_TRANSITION_TYPES: readonly TransitionType[] = ['advance', 'rollback', 'loop'];
 
-/** 只改运行标记、没有状态边的取值（§5.1）。 */
-export const RUNTIME_MARKER_TYPES: readonly TransitionType[] = ['pause', 'resume', 'abort'];
-
 /** 该取值是否产生交接记录，且是否为 `handoffs.transition_type` 的合法取值。 */
 export function handoffTransitionTypeOf(
   type: TransitionType,
@@ -270,7 +267,7 @@ export function validateDispatchTable(
         detail: `${key} 的会话复用处置与 §5.4 / §6.7 不符：${String(row.sessionReused)}`,
       });
     }
-    if (statusEdgesFor(row.type).length === 0 && !(RUNTIME_MARKER_TYPES as readonly string[]).includes(key)) {
+    if (statusEdgesFor(row.type).length === 0 && !(RUNTIME_MARKER_TRANSITION_TYPES as readonly string[]).includes(key)) {
       problems.push({
         kind: 'status_edge_mismatch',
         type: row.type,
@@ -353,7 +350,7 @@ export function planTransition(request: TransitionRequest): TransitionPlanOutcom
   // 运行标记类（pause / resume / abort）在 §5.2 的状态图上**没有边**：
   // 它们只改 engagements.status，不改 current_status。因此不能用边校验，
   // 改为断言「主状态不变」——那正是 §5.1 两层状态表要求的语义。
-  const isRuntimeMarker = (RUNTIME_MARKER_TYPES as readonly string[]).includes(request.type);
+  const isRuntimeMarker = (RUNTIME_MARKER_TRANSITION_TYPES as readonly string[]).includes(request.type);
   if (isRuntimeMarker) {
     if (request.fromStatus !== request.toStatus) {
       return {
