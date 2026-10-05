@@ -751,12 +751,25 @@ describe(
       return admin;
     };
 
+    /**
+     * 故意「脱离」一个长生命周期 promise：`connection.listen(...)` 返回的循环 promise
+     * 会一直挂着，直到测试收尾时连接被关闭——那一刻它的拒绝**没有接收者**，会变成
+     * unhandled rejection 让整个测试进程报错。这里显式接收并丢弃：它描述的是收尾路径，
+     * 不是断言对象（断言走 `received` 数组与 `settleSubscription`）。
+     *
+     * 这个包装存在的意义就是把「有意的脱离」与「吞掉清理失败」区分开——
+     * 后者是本轮复核（REQ-12）专门要清掉的东西。
+     */
+    const detach = (promise: Promise<unknown>): void => {
+      void promise.catch(() => undefined);
+    };
+
     test('订阅后收到 pg_notify：事务内发送，提交时才投递', async () => {
       const admin = await connectAdmin();
       const connection = await createPgNotifyConnection(url());
       const received: string[] = [];
       const lifetime = connection.listen(TEST_CHANNEL, (payload) => { received.push(payload); });
-      lifetime.catch(() => undefined);
+      detach(lifetime);
       try {
         await settleSubscription();
 
@@ -781,7 +794,7 @@ describe(
       const connection = await createPgNotifyConnection(url());
       const received: string[] = [];
       const lifetime = connection.listen(TEST_CHANNEL, (payload) => { received.push(payload); });
-      lifetime.catch(() => undefined);
+      detach(lifetime);
       try {
         await settleSubscription();
 
@@ -808,7 +821,7 @@ describe(
       const connection = await createPgNotifyConnection(url());
       const received: string[] = [];
       const lifetime = connection.listen(TEST_CHANNEL, (payload) => { received.push(payload); });
-      lifetime.catch(() => undefined);
+      detach(lifetime);
       try {
         await settleSubscription();
 

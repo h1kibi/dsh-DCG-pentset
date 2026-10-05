@@ -157,7 +157,14 @@ describe('关键路径：真实角色（pentest_app）+ RLS', { skip: DATABASE_U
           await client.query('commit');
           return value;
         } catch (error) {
-          await client.query('rollback').catch(() => undefined);
+          try {
+            await client.query('rollback');
+          } catch (rollbackError) {
+            // 回滚失败不能顶掉原始错误（它才是「为什么失败」的答案），但也不能丢。
+            if (error instanceof Error) {
+              error.message += `（附带：回滚也失败——${String(rollbackError)}）`;
+            }
+          }
           throw error;
         }
       };
@@ -174,7 +181,8 @@ describe('关键路径：真实角色（pentest_app）+ RLS', { skip: DATABASE_U
           await client.query('select pentest.set_rls_context($1, $2::uuid)', [TENANT, engagementId]);
           await assert.rejects(run, pattern, message);
         } finally {
-          await client.query('rollback').catch(() => undefined);
+          // 不吞错：回滚失败意味着这条连接的清理没做完，测试该红（REQ-12）。
+          await client.query('rollback');
         }
       };
 

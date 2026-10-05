@@ -31,7 +31,7 @@
  * 后续所有写入都不再受约束，那是更严重的问题。
  */
 
-import type { Pool, PoolClient } from 'pg';
+import type { Client, Pool, PoolClient } from 'pg';
 
 /**
  * 清理目标：表名 + 按 engagement 过滤的 WHERE 片段。
@@ -69,6 +69,11 @@ const CLEANUP_TARGETS: readonly CleanupTarget[] = [
   // 工具与证据
   { table: 'pentest.tool_runs', where: 'engagement_id = any($1::uuid[])' },
   { table: 'pentest.approvals', where: 'engagement_id = any($1::uuid[])' },
+  // 请求快照：有外键指回 engagements，漏了它「删作业」会被 23503 挡住。
+  // 当前没有生产写入方，但清单漏表的代价是**将来**某次给测试加写入后清理报错，
+  // 因此按 schema 补齐（缺口 2026-10-05 由「清单 vs schema」自检发现，见
+  // `test/cleanup-fixture.test.ts`）。
+  { table: 'pentest.request_snapshots', where: 'engagement_id = any($1::uuid[])' },
   { table: 'pentest.artifacts', where: 'engagement_id = any($1::uuid[])' },
   { table: 'pentest.llm_calls', where: 'engagement_id = any($1::uuid[])' },
   // 状态与决策
@@ -91,6 +96,9 @@ const CLEANUP_TARGETS: readonly CleanupTarget[] = [
   { table: 'pentest.ledger_anchors', where: 'engagement_id = any($1::uuid[])' },
   // 会话与 engagement 本身
   { table: 'pentest.worker_sessions', where: 'engagement_id = any($1::uuid[])' },
+  // 销毁记录：**没有**外键指回 engagements（它是删除动作本身的唯一证据，独立于被删作业），
+  // 因此不删它不会挡住清理，但测试跑一次就积一行，属于跨运行累积的残留。一并删。
+  { table: 'pentest.engagement_purges', where: 'engagement_id = any($1::uuid[])' },
   { table: 'pentest.engagements', where: 'id = any($1::uuid[])' },
 ];
 
@@ -109,17 +117,46 @@ const LATE_CLEANUP_TARGETS: readonly CleanupTarget[] = [
 ];
 
 /**
+ * 清单里的表名（不含 schema 前缀），供「清单 vs schema」自检使用。
+ *
+ * 自检存在的原因：这份清单漏一张表，代价不是「多几行残留」而是**下一次全量套件
+ * 里某个文件的清理抛 23503**——排查成本高、且与本次改动的因果关系很隐蔽。
+ * 2026-10-05 的自检当场发现漏了 `request_snapshots` 与 `engagement_purges`。
+ */
+export const CLEANUP_TARGET_TABLES: readonly string[] = [
+  ...new Set([...CLEANUP_TARGETS, ...LATE_CLEANUP_TARGETS].map((t) => t.table.replace('pentest.', ''))),
+];
+
+/**
+ * 清理目标接受的连接：池、**已借出的池连接**，或裸 `Client`。
+ *
+ * 为什么三者都要：多数文件用池（本模块自己借一条连接），但有些用例已经把连接
+ * 捏在手里（`SET ROLE` / 事务状态下），那种场景必须复用同一条连接——另借一条
+ * 会拿不到相同的角色与会话状态。裸 `Client` 出现在迁移类测试里（`new pg.Client`）。
+ */
+export type CleanupConnection = Pool | PoolClient | Client;
+
+function isPool(value: CleanupConnection): value is Pool {
+  // 判定**不能只看 `connect`**：裸 `Client` 也有 `connect`，但那是「建立连接」而不是
+  // 「借一条」——误判会以 `Client has already been connected. You cannot reuse a client.`
+  // 失败（2026-10-05 实际踩到）。`Pool` 独有的是计数属性。
+  return typeof (value as Pool).totalCount === 'number' && typeof (value as Pool).connect === 'function';
+}
+
+/**
  * 删掉给定 engagement（及其全部从属数据）。
  *
  * `engagementIds` 为空时直接返回（没有要清的东西，也不需要拿连接）。
  */
 export async function cleanupEngagements(
-  pool: Pool,
+  connection: CleanupConnection,
   engagementIds: readonly string[],
 ): Promise<void> {
   if (engagementIds.length === 0) return;
   const ids = [...new Set(engagementIds)];
-  const client: PoolClient = await pool.connect();
+  const owned = isPool(connection);
+  // `owned` 为真时借出的是池连接（有 `release`）；否则调用方的连接由调用方关闭。
+  const client: Client = owned ? await (connection as Pool).connect() : connection;
   try {
     await client.query("SET session_replication_role = 'replica'");
     for (const target of CLEANUP_TARGETS) {
@@ -138,22 +175,22 @@ export async function cleanupEngagements(
   } finally {
     // 恢复不可吞：未恢复的连接上后续写入都不再受约束。
     await client.query("SET session_replication_role = 'origin'");
-    client.release();
+    if (owned) (client as PoolClient).release();
   }
 }
 
 /**
  * 断言清理有效：库里没有残留的 engagement。
  *
- * 供测试可选调用——把「清理是否真的生效」变成一个可断言的检查，
+ * 供测试调用——把「清理是否真的生效」变成一个可断言的检查，
  * 而不是靠人工查库。这是本模块存在的直接原因（此前残留无人发现）。
  */
 export async function assertNoResidue(
-  pool: Pool,
+  connection: CleanupConnection,
   engagementIds: readonly string[],
 ): Promise<void> {
   if (engagementIds.length === 0) return;
-  const r = await pool.query<{ n: string }>(
+  const r = await connection.query<{ n: string }>(
     'select count(*)::text as n from pentest.engagements where id = any($1::uuid[])',
     [[...new Set(engagementIds)]],
   );

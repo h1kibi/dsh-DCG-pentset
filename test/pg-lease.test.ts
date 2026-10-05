@@ -31,63 +31,22 @@ import {
   validateLeaseForOperation,
 } from '../src/workflow/lease.ts';
 import { PgLeaseStore } from '../src/workflow/pg-lease.ts';
+import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 
 const DATABASE_URL = process.env['PENTEST_DATABASE_URL'];
 
 // ───────────────────────────── 共享库清理夹具 ─────────────────────────────
 //
-// 这些集成用例跑在**共享**数据库上，且与兄弟测试文件并行。compose.test.ts 里的 `apply()`
-// 会触发 `StartupRecovery.recoverAll()`——对账是**全库扫描**，会把本文件刚建、尚未心跳的
-// 会话判为「无主」，并为它补写审计行（context_events / ledger_anchors / outbox_jobs）。
-// 这些行通过外键把 worker_sessions 钉住，于是「删自己的种子数据」会被兄弟测试写的数据挡住
-// （实测：23503 context_events_worker_session_id_fkey）。而 §9.5 的追加写触发器又拒绝
-// DELETE 事件行，靠 `.catch()` 吞掉只会留下静默残留。
+// 这些集成用例跑在**共享**数据库上，且与兄弟测试文件并行：compose.test.ts 里的 `apply()`
+// 会触发 `StartupRecovery.recoverAll()`（对账是**全库扫描**），为本文件刚建、尚未心跳的
+// 会话补写审计行（context_events / ledger_anchors / outbox_jobs）；那些行通过外键把
+// `worker_sessions` 钉住，而 §9.5 的追加写触发器又拒绝 DELETE 事件行。
 //
-// 因此：在**同一条连接**上临时切到 replica 角色（用户触发器与 FK 触发器都不触发），
-// 按外键依赖倒序删除，删完立刻切回 origin。`session_replication_role` 是**会话级**设置：
-// `pool.query` 每次可能借出不同的连接，因此清理必须在显式取得的那一条连接上完成。
-
-/** 先断开两处外键环：tool_runs ↔ approvals、engagements.active_agent_session_id ↔ worker_sessions。
- *  replica 角色下并不必要，但留着可让随后的倒序删除自身自洽。 */
-const RING_BREAKERS = [
-  'update pentest.approvals set consumed_by_tool_run = null where engagement_id = any($1::uuid[])',
-  'update pentest.engagements set active_agent_session_id = null where id = any($1::uuid[])',
-] as const;
-
-/** 按外键依赖倒序删除：引用方在前、被引用方在后；末两项固定是 worker_sessions → engagements。 */
-const CLEANUP_STATEMENTS = [
-  'delete from pentest.retrieval_hits where query_id in (select id from pentest.retrieval_queries where engagement_id = any($1::uuid[]))',
-  'delete from pentest.retrieval_queries where engagement_id = any($1::uuid[])',
-  'delete from pentest.request_snapshots where engagement_id = any($1::uuid[])',
-  'delete from pentest.memory_access_log where engagement_id = any($1::uuid[])',
-  'delete from pentest.memory_chunks where engagement_id = any($1::uuid[])',
-  // findings.origin_memory_item_id 指向 memory_items：引用方必须先走。
-  'delete from pentest.findings where engagement_id = any($1::uuid[])',
-  'delete from pentest.memory_items where engagement_id = any($1::uuid[])',
-  'delete from pentest.reports where engagement_id = any($1::uuid[])',
-  'delete from pentest.state_transitions where engagement_id = any($1::uuid[])',
-  'delete from pentest.handoffs where engagement_id = any($1::uuid[])',
-  'delete from pentest.worker_reports where engagement_id = any($1::uuid[])',
-  // artifacts.tool_run_id 指向 tool_runs：引用方必须先走。
-  'delete from pentest.artifacts where engagement_id = any($1::uuid[])',
-  'delete from pentest.tool_runs where engagement_id = any($1::uuid[])',
-  'delete from pentest.llm_calls where engagement_id = any($1::uuid[])',
-  'delete from pentest.approvals where engagement_id = any($1::uuid[])',
-  'delete from pentest.session_leases where engagement_id = any($1::uuid[])',
-  'delete from pentest.outbox_jobs where engagement_id = any($1::uuid[])',
-  'delete from pentest.index_watermarks where engagement_id = any($1::uuid[])',
-  'delete from pentest.asset_scope_versions where engagement_id = any($1::uuid[])',
-  'delete from pentest.assets where engagement_id = any($1::uuid[])',
-  'delete from pentest.scope_versions where engagement_id = any($1::uuid[])',
-  'delete from pentest.context_events where engagement_id = any($1::uuid[])',
-  'delete from pentest.ledger_anchors where engagement_id = any($1::uuid[])',
-  'delete from pentest.human_decisions where engagement_id = any($1::uuid[])',
-  'delete from pentest.embedding_revisions where engagement_id = any($1::uuid[])',
-  'delete from pentest.worker_sessions where engagement_id = any($1::uuid[])',
-  // policy_versions 也引用 engagements：先删子表，engagements 才删得掉。
-  'delete from pentest.policy_versions where engagement_id = any($1::uuid[])',
-  'delete from pentest.engagements where id = any($1::uuid[])',
-] as const;
+// 清理方式（同一条连接上临时切 replica 角色 → 按依赖倒序删 → 立刻切回 origin）此前在
+// 这里有一份**本地副本**，与 `test/helpers/cleanup.ts` 的共享实现重复。两份清单漂移过：
+// 共享那份曾漏掉 `request_snapshots`（有外键指回 engagements，漏了会让「删作业」抛 23503），
+// 本地这份则少了后来新增的几张表。2026-10-05 复核（REQ-12）统一到共享夹具，
+// 并新增 `test/cleanup-fixture.test.ts` 的「清单 vs schema」自检，防止再漏。
 
 // ───────────────────────────── 测试工具 ─────────────────────────────
 
@@ -184,38 +143,12 @@ describe(
       );
     });
 
-    /**
-     * 清理本文件自己造的 engagement 下的全部种子数据（含兄弟测试对账时补写的审计行）。
-     *
-     * 用**同一条连接**收发 `SET session_replication_role`：它是会话级设置，
-     * 用 `pool.query` 设只影响当时借出的那条连接，删表却可能落在另一条上。
-     */
-    async function cleanupEngagements(ids: readonly string[]): Promise<void> {
-      const client = await pool.connect();
-      // 只在 replica 确实生效后才需要恢复：若 SET 本身失败，再发一条同样会失败的
-      // origin 只会掩盖原始错误，而那时连接上并没有 replica 状态可恢复。
-      let replicaActive = false;
-      try {
-        // 用户触发器与 FK 触发器都不触发；该设置只作用于 teardown 的这条连接。
-        await client.query("SET session_replication_role = 'replica'");
-        replicaActive = true;
-        for (const statement of RING_BREAKERS) await client.query(statement, [ids]);
-        for (const statement of CLEANUP_STATEMENTS) await client.query(statement, [ids]);
-      } finally {
-        try {
-          // 恢复不能被吞：这条连接之后可能回到池里继续被别的查询借用，
-          // 带着 replica 语义（触发器/FK 失效）会让后续写入静默失去保护。
-          if (replicaActive) await client.query("SET session_replication_role = 'origin'");
-        } finally {
-          client.release();
-        }
-      }
-    }
-
     after(async () => {
-      // 整体按外键依赖倒序清理；清理失败会直接冒泡（不再 `.catch()` 吞错），
-      // 以免残留被静默累积、拖垮后续运行。
-      await cleanupEngagements([engagementId]);
+      // 共享夹具（`test/helpers/cleanup.ts`）：临时切 replica 角色绕过追加写触发器与外键，
+      // 删完立刻切回；失败直接冒泡，不吞错。`assertNoResidue` 把「清理是否真的生效」
+      // 变成断言，而不是靠人工查库。
+      await cleanupEngagements(pool, [engagementId]);
+      await assertNoResidue(pool, [engagementId]);
       await pool.end();
     });
 
@@ -349,8 +282,8 @@ describe(
           '失败的签发不得留下任何行',
         );
       } finally {
-        await holder.query('rollback').catch(() => undefined);
-        await contender.query('rollback').catch(() => undefined);
+        await holder.query('rollback');
+        await contender.query('rollback');
         holder.release();
         contender.release();
       }
@@ -669,7 +602,7 @@ describe(
         openGate();
         await holding;
       } finally {
-        await holder.query('rollback').catch(() => undefined);
+        await holder.query('rollback');
         holder.release();
         prober.release();
       }
@@ -707,8 +640,10 @@ describe(
           [{ leaseId: outcome.lease.id, workerSessionId, expiresAt: outcome.lease.expiresAt }],
         );
       } finally {
-        await client.query('reset role').catch(() => undefined);
-        await client.query('rollback').catch(() => undefined);
+        // 先回滚再复位角色：角色未复位时连接回池会带着租户上下文（静默的跨租户可见）。
+        // 两条都不吞错——失败就是失败，测试该红（2026-10-05 复核 REQ-12）。
+        await client.query('rollback');
+        await client.query('reset role');
         client.release();
       }
     });

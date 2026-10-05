@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 
-import { cleanupEngagements } from './helpers/cleanup.ts';
+import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 import { scopeContentHash } from '../src/policy/scope-snapshot.ts';
 import { policyContentHash } from '../src/policy/behavior-profile.ts';
 import { TERMINAL_SESSION_STATUSES } from '../src/contracts.ts';
@@ -156,7 +156,15 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
           await readDb.query('commit');
           return value;
         } catch (error) {
-          await readDb.query('rollback').catch(() => undefined);
+          try {
+            await readDb.query('rollback');
+          } catch (rollbackError) {
+            // 回滚失败**不能顶掉**原始错误：原始错误才是「这次调用为什么失败」的答案。
+            // 但也不能丢——把它并进消息里，两件事都留在记录上（2026-10-05 复核 REQ-12）。
+            if (error instanceof Error) {
+              error.message += `（附带：回滚也失败——${String(rollbackError)}）`;
+            }
+          }
           throw error;
         }
       },
@@ -183,11 +191,13 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     // 现在用共享夹具清理，并按依赖覆盖全部相关表。
     if (pool !== undefined) {
       await cleanupEngagements(pool, madeEngagements);
+      // 断言清理生效：残留会跨运行累积，让后续用例读到前次数据（REQ-12）。
+      await assertNoResidue(pool, madeEngagements);
     }
     if (readClient !== null) {
-      await readClient
-        .query('select pentest.set_rls_context($1, null, null)', [TENANT])
-        .catch(() => undefined);
+      // 不吞错：这是**租户上下文复位**，而连接要还给池。复位失败时把它放回池里，
+      // 会让下一个借到它的用例带着上一个租户的 RLS 上下文——静默的跨租户可见。
+      await readClient.query('select pentest.set_rls_context($1, null, null)', [TENANT]);
       readClient.release();
       readClient = null;
     }

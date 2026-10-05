@@ -24,7 +24,7 @@ import { applyPentest, PENTEST_HOST_SERVICES } from '../src/index.ts';
 import { CONSOLE_TYPRET_SERVICE } from '../src/console/method-names.ts';
 import { WORKER_TOOL_NAMES } from '../src/tools/worker.ts';
 
-import { cleanupEngagements } from './helpers/cleanup.ts';
+import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 import type { AllowedImage } from '../src/execution/docker-sandbox.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;
@@ -1052,20 +1052,12 @@ describe('组合接线：记忆链路端到端', { skip: DATABASE_URL === undefi
       assert.equal(after.counts.done, 1);
     } finally {
       if (engagementId !== '') {
-        await probe.query('alter table pentest.context_events disable trigger context_events_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.ledger_anchors disable trigger ledger_anchors_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions disable trigger policy_versions_append_only').catch(() => undefined);
-        await probe.query('delete from pentest.outbox_jobs where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.memory_chunks where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.index_watermarks where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.ledger_anchors where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.context_events where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        // policy_versions 也引用 engagements：先删子表，engagements 才删得掉。
-        await probe.query('delete from pentest.policy_versions where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.engagements where id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('alter table pentest.context_events enable trigger context_events_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.ledger_anchors enable trigger ledger_anchors_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions enable trigger policy_versions_append_only').catch(() => undefined);
+        // 清理走共享夹具（2026-10-05 复核 REQ-12）：此前这十几行是手抄的本地副本——
+        // 表清单缺 `findings`/`reports`/`handoffs`/`worker_sessions`/`tool_runs` 等
+        // （那几张表一旦有行，「删作业」就会被外键挡住），而每一条都
+        // `.catch(() => undefined)` 把失败一并吞掉：删不掉与删成功表面上一样。
+        await cleanupEngagements(probe, [engagementId]);
+        await assertNoResidue(probe, [engagementId]);
       }
       await probe.end();
       await c.dispose();
@@ -1107,6 +1099,10 @@ describe('apply 启动索引调度（§14.3）', { skip: DATABASE_URL === undefi
     const disposers: Array<() => unknown> = [];
     let engagementId = '';
     let composedCalls = 0;
+    // disposer 失败在这里收集，**断言放在 try/finally 之后**：在 finally 里 throw 会掩盖
+    // 正在传播的原始错误（eslint 的 no-unsafe-finally 拦下了上一版）——而原始错误才是
+    // 「为什么失败」的答案，收尾故障不该把原因顶掉。
+    const disposeFailures: unknown[] = [];
 
     try {
       // 1) 造 engagement + 事件 + 积压任务（直接用 SQL，不经 apply）
@@ -1191,27 +1187,26 @@ describe('apply 启动索引调度（§14.3）', { skip: DATABASE_URL === undefi
       assert.match(chunks.rows[0]!.content, /启动重扫应处理这条/);
     } finally {
       // 释放：调 apply 注册的 disposer（停调度器 + 关连接池）
+      // disposer 失败不能吞：它意味着定时器/监听器/连接没被释放，后续用例会读到脏状态。
+      // 逐个执行（不因一个失败中断其余）并收集——断言在 try/finally 之后（见上面的说明）。
       for (const d of disposers.reverse()) {
-        await Promise.resolve(d()).catch(() => undefined);
+        try {
+          await d();
+        } catch (error) {
+          disposeFailures.push(error);
+        }
       }
       if (engagementId !== '') {
-        await probe.query('alter table pentest.context_events disable trigger context_events_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.ledger_anchors disable trigger ledger_anchors_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions disable trigger policy_versions_append_only').catch(() => undefined);
-        await probe.query('delete from pentest.outbox_jobs where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.memory_chunks where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.index_watermarks where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.ledger_anchors where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.context_events where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        // policy_versions 也引用 engagements：先删子表，engagements 才删得掉。
-        await probe.query('delete from pentest.policy_versions where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.engagements where id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('alter table pentest.context_events enable trigger context_events_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.ledger_anchors enable trigger ledger_anchors_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions enable trigger policy_versions_append_only').catch(() => undefined);
+        // 清理走共享夹具（2026-10-05 复核 REQ-12）：此前这十几行是手抄的本地副本——
+        // 表清单缺 `findings`/`reports`/`handoffs`/`worker_sessions`/`tool_runs` 等
+        // （那几张表一旦有行，「删作业」就会被外键挡住），而每一条都
+        // `.catch(() => undefined)` 把失败一并吞掉：删不掉与删成功表面上一样。
+        await cleanupEngagements(probe, [engagementId]);
+        await assertNoResidue(probe, [engagementId]);
       }
       await probe.end();
     }
+    assert.deepEqual(disposeFailures, [], 'disposer 失败：收尾路径坏了（定时器/连接未释放）');
   });
 });
 
@@ -1230,6 +1225,9 @@ describe('apply 启动对账', { skip: DATABASE_URL === undefined ? '未设置 P
     const probe = new Pool({ connectionString: DATABASE_URL });
     const disposers: Array<() => unknown> = [];
     let engagementId = '';
+    // 收尾失败在这里收集，断言放在 try/finally 之后（见另一处同样的说明）：
+    // 在 finally 里 throw 会掩盖原始错误（no-unsafe-finally）。
+    const disposeFailures: unknown[] = [];
     try {
       engagementId = randomUUID();
       await probe.query(
@@ -1314,28 +1312,24 @@ describe('apply 启动对账', { skip: DATABASE_URL === undefined ? '未设置 P
         '未结算的工具执行必须标为 unknown——副作用是否已作用于目标未知，不能自动重放',
       );
     } finally {
+      // disposer 失败不能吞：它意味着定时器/监听器/连接没被释放，后续用例会读到脏状态。
+      // 逐个执行（不因一个失败中断其余）并收集——断言在 try/finally 之后（见上面说明）。
       for (const d of disposers.reverse()) {
-        await Promise.resolve(d()).catch(() => undefined);
+        try {
+          await d();
+        } catch (error) {
+          disposeFailures.push(error);
+        }
       }
       if (engagementId !== '') {
-        await probe.query('alter table pentest.context_events disable trigger context_events_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.ledger_anchors disable trigger ledger_anchors_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions disable trigger policy_versions_append_only').catch(() => undefined);
-        await probe.query('delete from pentest.outbox_jobs where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.tool_runs where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.session_leases where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.ledger_anchors where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.context_events where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.worker_sessions where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        // policy_versions 也引用 engagements：先删子表，engagements 才删得掉。
-        await probe.query('delete from pentest.policy_versions where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.engagements where id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('alter table pentest.context_events enable trigger context_events_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.ledger_anchors enable trigger ledger_anchors_append_only').catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions enable trigger policy_versions_append_only').catch(() => undefined);
+        // 同前：手抄清单只覆盖 6 张表（缺 `findings`/`reports`/`handoffs`/`memory_chunks`
+        // 等），且逐条吞错。统一走共享夹具 + 残留断言。
+        await cleanupEngagements(probe, [engagementId]);
+        await assertNoResidue(probe, [engagementId]);
       }
       await probe.end();
     }
+    assert.deepEqual(disposeFailures, [], 'disposer 失败：收尾路径坏了（定时器/连接未释放）');
   });
 
   test('组合产物暴露对账执行者', async () => {
@@ -1791,6 +1785,8 @@ describe('apply 启动租约心跳', { skip: DATABASE_URL === undefined ? '未�
     const disposers: Array<() => unknown> = [];
     let engagementId = '';
     let sessionId: string;
+    // 收尾失败在这里收集，断言放在 try/finally 之后（在 finally 里 throw 会掩盖原始错误）。
+    const disposeFailures: unknown[] = [];
     try {
       engagementId = randomUUID();
       await probe.query(
@@ -1865,21 +1861,25 @@ describe('apply 启动租约心跳', { skip: DATABASE_URL === undefined ? '未�
           `否则 TTL 一到会话的每次动作都会被拒绝`,
       );
     } finally {
+      // disposer 失败不能吞：它意味着定时器/监听器/连接没被释放，后续用例会读到脏状态。
+      // 逐个执行（不因一个失败中断其余）并收集——断言在 try/finally 之后（见上面说明）。
       for (const d of disposers.reverse()) {
-        await Promise.resolve(d()).catch(() => undefined);
+        try {
+          await d();
+        } catch (error) {
+          disposeFailures.push(error);
+        }
       }
       if (engagementId !== '') {
-        await probe.query('delete from pentest.session_leases where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('delete from pentest.worker_sessions where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        // policy_versions 也引用 engagements：先删子表（并临时停掉它的追加写触发器），
-        // engagements 才删得掉。漏掉触发器会让删除静默失败，留下一个删不掉的作业。
-        await probe.query('alter table pentest.policy_versions disable trigger policy_versions_append_only').catch(() => undefined);
-        await probe.query('delete from pentest.policy_versions where engagement_id = $1::uuid', [engagementId]).catch(() => undefined);
-        await probe.query('alter table pentest.policy_versions enable trigger policy_versions_append_only').catch(() => undefined);
-        await probe.query('delete from pentest.engagements where id = $1::uuid', [engagementId]).catch(() => undefined);
+        // 同前：这份手抄清单只有 5 张表，靠「停用/启用追加写触发器」当门闩，
+        // 每条 `.catch(() => undefined)` ——注释自己都承认「漏掉触发器会让删除静默失败」，
+        // 而吞错正好保证失败看不见。统一走共享夹具（replica 角色不需要停触发器）。
+        await cleanupEngagements(probe, [engagementId]);
+        await assertNoResidue(probe, [engagementId]);
       }
       await probe.end();
     }
+    assert.deepEqual(disposeFailures, [], 'disposer 失败：收尾路径坏了（定时器/连接未释放）');
   });
 
   test('组合产物暴露心跳', async () => {
@@ -1938,7 +1938,17 @@ describe('apply 注册控制台端点面', { skip: DATABASE_URL === undefined ? 
 
   async function release(ctx: unknown): Promise<void> {
     const disposers = (ctx as { __disposers: Array<() => unknown> }).__disposers;
-    for (const d of disposers.reverse()) await Promise.resolve(d()).catch(() => undefined);
+    // 不吞错：disposer 失败就是 apply 的清理路径坏了。逐个执行（不中断其余），
+    // 最后把第一个失败抛出去（2026-10-05 复核 REQ-12）。
+    const failures: unknown[] = [];
+    for (const d of disposers.reverse()) {
+      try {
+        await d();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) throw failures[0];
   }
 
   test('配置了 operator 时把端点面注册为 Remote 服务', async () => {

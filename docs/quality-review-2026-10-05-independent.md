@@ -444,3 +444,35 @@ recomputed = 452a422db96206d98ad598f51938d03605995247ec27bc2e5a968f73ca8cb149
 ### 验证
 
 `test/dispatcher.test.ts` 16/16（新增 4 条单元用例：预算耗尽不报 done / 旧策略才重置 / 追平报 done / 水位 failed 必须失败；1 条 PG 用例：策略落后自动入队 + 每版本一次幂等）；`test/indexer.test.ts` 17/17（新增：非生效版本拒绝索引、零分块残留）。
+
+---
+
+## 附九：REQ-12 测试清理纪律（2026-10-05，续）
+
+### 统一到共享夹具：8 个文件
+
+| 文件 | 之前 | 现在 |
+|---|---|---|
+| `compose.test.ts` | 4 处手抄清理块（14/14/14/5 条 DELETE，**逐条** `.catch(() => undefined)`）+ 3 处 disposer 吞错 | 共享夹具 + `assertNoResidue`；disposer 失败**收集后**在清理与关池之后抛（先抛会让清理整段跳过，两个坏结果叠在一起） |
+| `recovery.test.ts` | 本地 `cleanup()`：10 张表、逐条吞错 | 共享夹具 + 断言 |
+| `db.test.ts` | 迁移行删除吞错；RLS 清理 2 条吞错；审批 RLS 清理 5 条吞错 | 三条都不吞；RLS 两处走共享夹具（含 `RESET ROLE` 顺序理由） |
+| `pg-lease.test.ts` | **本地清理函数**（`RING_BREAKERS` + 30 条语句清单，与共享实现重复） + 5 处 `rollback` 吞错 | 共享夹具 + 断言；`rollback`/`reset role` 不吞（顺序改为先回滚再复位角色——事务中止时后者会失败） |
+| `pg-workflow.test.ts` | `rollback` 吞错；RLS 上下文复位吞错；`after` 无残留断言 | `rollback` 失败**并入**原始错误（不顶掉它、也不丢）；复位不吞（失败会把带租户上下文的连接还给池 = 静默跨租户可见）；`after` 加 `assertNoResidue` |
+| `dispatcher.test.ts` | 本地清理（10 张表） | 共享夹具 + 断言 |
+| `notify-listener.test.ts` | 3 处 `lifetime.catch(() => undefined)` | 具名 `detach()` 并写清理由：那是**有意脱离**的长生命周期 promise（收尾时连接关闭会把它的拒绝变成 unhandled rejection），与「吞掉清理失败」是两件事 |
+| `rls-critical-paths.test.ts` | 2 处 `rollback` 吞错 | 一处并入原始错误，一处不吞 |
+
+### 自检发现清单缺口（本轮新增的锁）
+
+新增 `test/cleanup-fixture.test.ts`：
+
+1. **清单 vs schema**：查 `pg_class`/`pg_attribute`，断言「每一张带 `engagement_id` 的表都在清理清单里」。自检当场抓到共享清单漏了：
+   - `request_snapshots`——**有外键指回 `engagements`**，漏它的表现不是「多几行残留」而是**别处某个文件清理时抛 23503**；
+   - `engagement_purges`——没有外键（销毁记录的语义要求它独立于被删作业），但跑一次积一行，属跨运行累积。
+2. **端到端**：造 engagement + worker_sessions + `request_snapshots` → `assertNoResidue` 必须**先抛**（证明判据本身有效）→ 清理后必须通过 → 子表行数归零。
+
+夹具本身也扩了能力并踩到一个真坑：`isPool` 起初只看 `connect`——而裸 `Client` 也有 `connect`（那是「建立连接」不是「借一条」），于是以 `Client has already been connected. You cannot reuse a client.` 失败。判定改为看 `Pool` 独有的计数属性，并把这条写进注释。
+
+### 度量
+
+`test/` 下的 `.catch(() =>` 从 **77+ 处（仅报告点名的 5 个文件）降到 1 处**——那一处就是具名 `detach()`，它描述的是「有意的脱离」，不是吞失败。

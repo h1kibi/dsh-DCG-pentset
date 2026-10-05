@@ -17,6 +17,7 @@ import { PgLeaseStore } from '../src/workflow/pg-lease.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
 import type { DbClient } from '../src/memory/ledger.ts';
 import type { Phase } from '../src/contracts.ts';
+import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;
 
@@ -37,35 +38,15 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
 
   after(async () => {
     if (pool === undefined) return;
-    await cleanup();
+    // 清理走共享夹具（2026-10-05 复核 REQ-12）：此前这里有一份本地副本，
+    // 表清单缺 `memory_chunks`/`artifacts`/`findings` 等，且每一条都
+    // `.catch(() => undefined)` 把失败一并吞掉——残留因此无人发现。
+    // `assertNoResidue` 把「清理是否真的生效」变成断言，而不是靠人工查库。
+    await cleanupEngagements(pool, engagements);
+    await assertNoResidue(pool, engagements);
+    engagements.length = 0;
     await pool.end();
   });
-
-  async function cleanup(): Promise<void> {
-    if (engagements.length === 0) return;
-    await pool.query('alter table pentest.context_events disable trigger context_events_append_only').catch(() => undefined);
-    await pool.query('alter table pentest.ledger_anchors disable trigger ledger_anchors_append_only').catch(() => undefined);
-    await pool.query('alter table pentest.policy_versions disable trigger policy_versions_append_only').catch(() => undefined);
-    try {
-      for (const id of engagements) {
-        await pool.query('delete from pentest.outbox_jobs where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.tool_runs where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.session_leases where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.ledger_anchors where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.context_events where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.human_decisions where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.worker_sessions where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        // policy_versions 也引用 engagements：先删子表，engagements 才删得掉。
-        await pool.query('delete from pentest.policy_versions where engagement_id = $1::uuid', [id]).catch(() => undefined);
-        await pool.query('delete from pentest.engagements where id = $1::uuid', [id]).catch(() => undefined);
-      }
-    } finally {
-      await pool.query('alter table pentest.context_events enable trigger context_events_append_only').catch(() => undefined);
-      await pool.query('alter table pentest.ledger_anchors enable trigger ledger_anchors_append_only').catch(() => undefined);
-      await pool.query('alter table pentest.policy_versions enable trigger policy_versions_append_only').catch(() => undefined);
-    }
-    engagements.length = 0;
-  }
 
   async function newEngagement(): Promise<string> {
     const id = randomUUID();

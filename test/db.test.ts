@@ -26,6 +26,7 @@ import {
   splitSqlStatements,
 } from '../src/db/migrate.ts';
 import { isLeaseRevocationReason } from '../src/workflow/lease.ts';
+import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INIT_SQL_PATH = path.join(HERE, '..', 'src', 'db', 'migrations', '001_init.sql');
@@ -714,7 +715,8 @@ void integration('集成：真实 PostgreSQL + pgvector', () => {
         },
       );
     } finally {
-      await client.query(`DELETE FROM pentest.schema_migrations WHERE version = 999`).catch(() => {});
+      // 不吞错：这条合成的迁移行若删不掉，下一次运行会读到它（版本 999 已应用的假象）。
+      await client.query(`DELETE FROM pentest.schema_migrations WHERE version = 999`);
       await client.end();
     }
   });
@@ -907,11 +909,15 @@ void integration('集成：真实 PostgreSQL + pgvector', () => {
       );
       assert.equal(none.rows[0]?.n, 0, '未设 pentest.engagement_id 时必须看不见任何行');
     } finally {
-      await client.query('RESET ROLE').catch(() => {});
-      await client
-        .query(`DELETE FROM pentest.memory_items WHERE engagement_id IN ($1, $2)`, [e1, e2])
-        .catch(() => {});
-      await client.query(`DELETE FROM pentest.engagements WHERE id IN ($1, $2)`, [e1, e2]).catch(() => {});
+      // 清理走共享夹具（2026-10-05 复核 REQ-12）：这里此前是两条手写 DELETE，
+      //   - 两条都 `.catch(() => {})`：删不掉时**静默残留**（RLS 下未复位角色时
+      //     删除会被过滤成 0 行，而失败与「没删到」都无痕迹）；
+      //   - 表清单只覆盖 memory_items 与 engagements，`worker_sessions` 等引用
+      //     `engagements` 的行会让最后那条 DELETE 被外键挡住——正好被吞掉。
+      // `RESET ROLE` 必须保留且**不吞**：角色未复位时删除会被 RLS 过滤（0 行 = 静默残留）。
+      await client.query('RESET ROLE');
+      await cleanupEngagements(client, [e1, e2]);
+      await assertNoResidue(client, [e1, e2]);
       await client.end();
     }
   });
@@ -1016,13 +1022,13 @@ void integration('集成：审批权限与 resolver 边界', () => {
       );
       await client.query('ROLLBACK');
     } finally {
-      await client.query('RESET ROLE').catch(() => undefined);
-      await client.query('ROLLBACK').catch(() => undefined);
-      await client.query('SET session_replication_role = replica').catch(() => undefined);
-      for (const table of ['approvals', 'worker_sessions', 'engagements']) {
-        await client.query(`DELETE FROM pentest.${table} WHERE id = ANY($1::uuid[])`, [[pendingId, forgedId, crossId, expiredId, workerA, workerB, engagementA, engagementB]]).catch(() => undefined);
-      }
-      await client.query('SET session_replication_role = origin').catch(() => undefined);
+      // 顺序有意义：事务被中止时除 ROLLBACK 外的语句都会失败，因此先回滚、再复位角色。
+      // 这两条以前都被 `.catch(() => undefined)` 吞掉——那样角色未复位时后面按
+      // `id` 删除会被 RLS 过滤成 0 行，而「没删到」与「删成功」都无痕迹（REQ-12）。
+      await client.query('ROLLBACK');
+      await client.query('RESET ROLE');
+      await cleanupEngagements(client, [engagementA, engagementB]);
+      await assertNoResidue(client, [engagementA, engagementB]);
       await client.end();
     }
   });

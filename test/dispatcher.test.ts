@@ -22,6 +22,7 @@ import {
 import { PgOutboxQueue } from '../src/memory/outbox.ts';
 import { INDEX_STRATEGY_VERSION, MemoryIndexer } from '../src/memory/indexer.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
+import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 import { LedgerIndexEnqueue } from '../src/memory/index-enqueue.ts';
 import type { DbClient } from '../src/memory/ledger.ts';
 import type { EmbeddingProvider } from '../src/memory/embedding.ts';
@@ -94,43 +95,11 @@ describe('索引调度器（真实 PostgreSQL）', { skip: DATABASE_URL === unde
   }
 
   async function cleanup(): Promise<void> {
-    if (madeEngagements.length === 0) return;
-    // 用 `session_replication_role = 'replica'` 一次性绕过**用户触发器与 FK 触发器**。
-    //
-    // 为什么不用「临时 disable trigger + 按外键倒序删」：
-    //   1. `context_events` / `ledger_anchors` 只允许追加（002 的触发器），要删必须先停触发器；
-    //   2. 更麻烦的是外键——`session_leases`、`scope_versions`、`assets` 等都引用
-    //      `engagements`，漏掉任何一张，`delete from engagements` 就失败。用 replica
-    //      角色后这些顺序问题全部消失。
-    //
-    // **必须用同一条连接**：`session_replication_role` 是会话级设置，用 `pool.query`
-    // 设只影响当时借出的那条连接，而删除可能落在另一条上——那会导致「设置看似生效
-    // 但删除仍被 FK 挡住」，且失败被下面的 catch 吞掉，表现为静默残留。
-    const client = await pool.connect();
-    try {
-      await client.query("SET session_replication_role = 'replica'");
-      for (const id of madeEngagements) {
-        for (const sql of [
-          'delete from pentest.outbox_jobs where engagement_id = $1::uuid',
-          'delete from pentest.memory_chunks where engagement_id = $1::uuid',
-          'delete from pentest.index_watermarks where engagement_id = $1::uuid',
-          'delete from pentest.ledger_anchors where engagement_id = $1::uuid',
-          'delete from pentest.context_events where engagement_id = $1::uuid',
-          // session_leases 引用 engagements：漏了这一句，engagements 永远删不掉
-          'delete from pentest.session_leases where engagement_id = $1::uuid',
-          'delete from pentest.worker_sessions where engagement_id = $1::uuid',
-          // policy_versions 也引用 engagements：先删子表，engagements 才删得掉。
-          'delete from pentest.policy_versions where engagement_id = $1::uuid',
-          'delete from pentest.engagements where id = $1::uuid',
-        ]) {
-          await client.query(sql, [id]);
-        }
-      }
-    } finally {
-      // 恢复必须执行且不可吞：否则这条连接后续的所有写入都不再触发约束
-      await client.query("SET session_replication_role = 'origin'");
-      client.release();
-    }
+    // 清理走共享夹具（2026-10-05 复核 REQ-12）：此前这里是一份本地副本，表清单只有
+    // 10 张（缺 `tool_runs`/`approvals`/`handoffs`/`findings`…），只是碰巧没被那几张表的
+    // 外键挡过。共享实现 + `assertNoResidue` 让「清理是否真的生效」可断言。
+    await cleanupEngagements(pool, madeEngagements);
+    await assertNoResidue(pool, madeEngagements);
     madeEngagements.length = 0;
   }
 
