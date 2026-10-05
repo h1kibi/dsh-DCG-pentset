@@ -1,0 +1,71 @@
+# 开发用补丁层：让 harness **源码树**直接加载本插件的 TypeScript 源码。
+#
+# 用法（在 harness 仓库根）：
+#   pnpm dsh --profile dev --patch C:/Projects/Agent-projects/dsh-DCG-pentest/harness.dev.patch.yml web --no-open
+#
+# ── 为什么用相对入口 `./src/index.ts` ──
+#
+# 官方补丁层的 `name` 支持相对路径入口，且该路径**锚定在这个补丁文件所在目录**，
+# 经 CLI 的 tsx loader 直接执行（范式见 harness 自己的
+# `packages/experimental/inspector/cordis.source.patch.yml`）。于是：
+#
+#   - **免构建**：改完 src 直接重启即可，不必先 `npm run build`；
+#   - 与生产路径（profile 安装 `link:` 到 lib/）互不干扰，可随时对比两者。
+#
+# ── 与生产配置的差异 ──
+#
+# 这里把 config 内联在补丁里（生产走 profile 的 cordis.patch.yml）。两者都必需：
+#   - `operator`：宿主通道级认证只给「已认证」这个二元事实，操作者身份必须由部署方声明；
+#   - `runtime`：本插件据此自行 compose() 连库。
+#
+# 值走 `!!js` 读环境变量，因此这个文件可以进版本库而不含密钥。
+
+- insert:
+    - id: pentest
+      name: './src/index.ts'
+      config:
+        operator:
+          id: dev-operator
+          source: harness-dev-patch
+        runtime:
+          database:
+            url: !!js process.env.PENTEST_DATABASE_URL ?? 'postgresql://postgres:check@127.0.0.1:55446/pentest'
+          # 密钥必须由环境注入：不再有仓库内默认值（缺它会在 compose 期直接失败，
+          # 而不是拿一个公开常量去签账本）。因此这个文件可以进版本库而不含密钥。
+          ledgerSecret: !!js process.env.PENTEST_LEDGER_SECRET
+          # ── 沙箱：这些是**真实可用**的值，不是占位 ──
+          #
+          # 镜像引用被拼成 `<name>@<digest>`，所以 name 必须是**完整仓库名**
+          # （含 registry 主机与端口）。写裸名 `pentest-tools` 时 docker 会去
+          # Docker Hub 找 `docker.io/library/pentest-tools` 并按那个仓库查摘要，必然找不到。
+          #
+          # 本地 `docker build` 出来的镜像**没有 RepoDigest**，所以这里必须走本地
+          # registry：`docker tag` + `docker push` 之后 `docker inspect` 才有真摘要。
+          # 重新生成（含 registry、网络、代理）与取得本次摘要：
+          #     sh scripts/dev-sandbox-up.sh up
+          sandbox:
+            allowedImages:
+              - name: 127.0.0.1:5005/pentest-tools
+                digest: sha256:a197af1d36f678eee84372309e7f08d2c81151af93915cd454fd6fa02abe4bae
+            # internal=true 的网络：容器**没有**外网出口，只能打到同网容器。
+            # 出网必须经下面的代理——这正是 §10.4 第 2 层边界想守住的形状。
+            internalNetwork: pentest-internal
+            # 双接（bridge + pentest-internal）的出口代理，由 scripts/egress-proxy.py 提供。
+            # 起它：sh scripts/dev-sandbox-up.sh proxy
+            proxyHost: pentest-proxy
+            proxyPort: 8080
+          # 模型路由。省略时插件内置默认也是这一对（与 harness 基础 bundle 的
+          # agent-default-model 一致）；写出来是为了让换模型有个显眼的落点。
+          # 注意 provider 必须是宿主**已注册**的路由名——写错不会在建会话时报错，
+          # 而是第一个回合直接失败（no adapter registered for provider ...），
+          # 表现为「Agent 起来了但永远不产出」。
+          modelRoute:
+            provider: deepseek-official
+            model: deepseek-flash
+          # 新建 dsh 会话的工作目录；省略用进程 cwd。独立出来是为了让会话不把
+          # 临时文件写进 harness 仓库。
+          sessionCwd: C:/tmp/dsh-pentest-sessions
+        # 开发期不做启动对账：它会全库扫描，而这里共用测试库（见项目测试的隔离纪律）。
+        # **与 runtime 并列**：放进 runtime 不会生效（那里没有这个字段，插件会告警）。
+        recovery:
+          onStartup: false

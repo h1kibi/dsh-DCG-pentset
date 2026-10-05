@@ -1,0 +1,25 @@
+{
+  // 构建专用配置：在 tsconfig.json（typecheck 用的 noEmit 配置）之上打开产物输出。
+  //
+  // 关键一项是 `rewriteRelativeImportExtensions`：源码大量使用
+  // `from './contracts.ts'` 这类带 .ts 后缀的相对导入（配合 tsconfig.json 的
+  // `allowImportingTsExtensions` + `noEmit`）。TypeScript 5.7+ 的该选项会在发射时把
+  // 相对导入说明符的后缀改写为 .js，从而让产物能被 Node 直接解析。
+  // 若把它去掉，TS 会以 TS5096 拒绝「allowImportingTsExtensions 且会发射」的组合。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "lib",
+    "declaration": true,
+    "declarationDir": "lib/types",
+    "rewriteRelativeImportExtensions": true,
+    "sourceMap": false
+  },
+  // 只编译运行时源码：test/ 与 scripts/ 不属于发布产物。
+  // 只编译运行时源码：test/ 与 scripts/ 不属于发布产物，src/client/ 由 tsdown 单独构建
+  // （见 tsdown.config.ts）——若让 tsc 也编译它，产出的 `lib/client/index.js` 既不是
+  // 宿主模块加载器要的格式，也会与 tsdown 的 `lib/client.js` 形成两份互不相同的客户端代码。
+  "include": ["src/**/*.ts"],
+  "exclude": ["test", "scripts", "lib", "node_modules", "src/client"]
+}

@@ -1,0 +1,10 @@
+# 依赖
+node_modules/
+
+# 构建产物（`pnpm build` 生成；发布时由 package.json 的 files 决定打包内容）
+lib/
+
+# 本地工具产物与临时目录（不入库）
+.tmp-chrome-live/
+__pycache__/
+*.pyc

@@ -1,0 +1,85 @@
+{
+  "name": "dsh-pentest",
+  "version": "0.1.18",
+  "private": true,
+  "type": "module",
+  "description": "人类驾驶的渗透测试多 Agent 插件（DeepSeek Harness）",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "npm run build:host && npm run build:client",
+    "build:host": "tsc -p tsconfig.build.json",
+    "prebuild:client": "node scripts/embed-font.mjs",
+    "build:client": "tsdown",
+    "postbuild": "node -e \"require('node:fs').cpSync('src/db/migrations','lib/db/migrations',{recursive:true})\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./test/helpers/tsx-loader.mjs --test --test-concurrency=1 --experimental-strip-types --test-timeout=40000 \"test/**/*.test.ts\"",
+    "test:parallel": "node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=40000 \"test/**/*.test.ts\"",
+    "verify:client": "node --experimental-strip-types scripts/verify-client-bundle.ts",
+    "verify:styles": "node scripts/verify-style-coverage.mjs",
+    "verify:forward-migration": "node --experimental-strip-types scripts/verify-forward-migration.ts",
+    "db:verify": "node --experimental-strip-types scripts/verify-schema.ts"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-session": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
+    "react": "^18.2.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "0.1.5-rc.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-test-runtime": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tsdown": "0.23.0",
+    "typescript": "^5.7.2"
+  }
+}

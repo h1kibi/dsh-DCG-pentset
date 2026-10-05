@@ -1,0 +1,31 @@
+{
+  "name": "dsh-pentest-image-deps",
+  "private": true,
+  "description": "镜像内的运行期依赖清单（由 docker/Dockerfile 使用）。",
+  "//": [
+    "为什么单独一份而不是复用仓库根的 package.json：",
+    "",
+    "根 package.json 把宿主包声明为 peerDependencies（正确——开发时它们由宿主提供，",
+    "不该被插件拖进自己的依赖树）。但镜像**自带宿主**，因此在镜像里它们是真实依赖。",
+    "若沿用根清单 + `npm install <pkg>@<ver>` 的形式，npm 会忽略命令行里那些已在",
+    "peerDependencies 中声明的包（实测：装完只有 typert-protocol 与 pg 落地，",
+    "cordis / dsh-session / dsh-tools / dsh-util-values 全部缺失），",
+    "结果是插件在镜像里加载即 `Cannot find module`。",
+    "",
+    "这份清单必须覆盖 lib/ 的全部外部 import。核对方式：",
+    "  node -e \"...扫描 lib/**/*.js 的非相对 import...\"   （见 docker/README 的说明）",
+    "当前应有：pg、@deepseek-ai/cordis、@deepseek-ai/dsh-session、",
+    "@deepseek-ai/dsh-tools、@deepseek-ai/dsh-typert-protocol、@deepseek-ai/dsh-util-values。",
+    "",
+    "版本一律**精确锁定**：npm 上 @deepseek-ai/dsh-session 等的 `latest` 标签停在",
+    "0.0.1-rc.1，而插件要求 ^0.1.5-rc.2；写死可让「镜像里到底是哪个版本」可 diff、可复现。"
+  ],
+  "dependencies": {
+    "pg": "8.23.0",
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2"
+  }
+}

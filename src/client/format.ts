@@ -1,0 +1,211 @@
+/**
+ * 客户端展示格式化：把契约里的机器值转成人类可读的标签与文本。
+ *
+ * 设计依据：docs/dsh-pentest-plugin-design.md §6.2
+ *
+ * ── 为什么集中在这里 ──
+ *
+ * 阶段名、状态名、风险等级的中文标签会在多个视图里出现（轨道、时间轴、报告、
+ * 放行队列）。散落各处会让「同一个状态在两个页面显示成不同词」成为必然，
+ * 而那对人类判断是实打实的干扰——他会以为那是两件事。
+ *
+ * 因此所有标签只在这里定义一处；视图只调用 `phaseLabel()` 这类函数，
+ * 不自己拼字符串。
+ */
+
+import type {
+  ActionClass,
+  MainStatus,
+  Phase,
+  RunMarker,
+  SessionStatus,
+  TrustLevel,
+} from '../contracts.ts';
+
+/** 五个阶段的中文名。键与契约的 `Phase` 对齐，缺项会在类型层暴露。 */
+const PHASE_LABELS: Readonly<Record<Phase, string>> = {
+  'intelligence-gathering': '情报收集',
+  'threat-modeling': '威胁建模',
+  'vulnerability-analysis': '漏洞分析',
+  exploitation: '利用验证',
+  'post-exploitation': '后渗透',
+};
+
+export function phaseLabel(phase: Phase): string {
+  return PHASE_LABELS[phase];
+}
+
+/**
+ * 主状态的中文名。
+ *
+ * 与阶段不同，主状态在界面上通常显示为「动作提示」而不是名词——例如
+ * `waiting_human_review` 显示为「等待你判断」。因为这一屏的核心信息是
+ * 「现在该谁动」，名词式状态需要人类多做一次转换。
+ */
+const MAIN_STATUS_LABELS: Readonly<Record<MainStatus, string>> = {
+  auth_pending: '授权确认中',
+  ready: '可以启动 Agent',
+  worker_running: 'Agent 工作中',
+  waiting_human_review: '等待你判断',
+  handoff_drafting: '准备交接',
+  transition_confirmation: '等待你确认交接',
+  report_ready: '报告待签字',
+  complete: '已完成',
+};
+
+export function mainStatusLabel(status: MainStatus): string {
+  return MAIN_STATUS_LABELS[status];
+}
+
+/** 正交运行标记。 */
+const RUN_MARKER_LABELS: Readonly<Record<RunMarker, string>> = {
+  running: '运行中',
+  paused: '已暂停',
+  blocked: '已阻塞',
+  aborted: '已终止',
+  failed: '已失败',
+};
+
+export function runMarkerLabel(marker: RunMarker): string {
+  return RUN_MARKER_LABELS[marker];
+}
+
+/**
+ * 运行标记的语义色名（不是色值）。
+ *
+ * 回 `tone` 而不是 CSS 颜色：颜色由官方设计令牌决定（§6.2.3「不硬编码颜色」），
+ * 这里只表达**语义**——哪些标记需要人类注意。
+ */
+export type Tone = 'neutral' | 'active' | 'attention' | 'danger' | 'done';
+
+export function runMarkerTone(marker: RunMarker): Tone {
+  switch (marker) {
+    case 'running':
+      return 'active';
+    case 'paused':
+      return 'neutral';
+    case 'blocked':
+      return 'attention';
+    case 'aborted':
+    case 'failed':
+      return 'danger';
+  }
+}
+
+export function sessionStatusTone(status: SessionStatus): Tone {
+  switch (status) {
+    case 'starting':
+    case 'active':
+      return 'active';
+    case 'waiting_human':
+    case 'handoff_drafting':
+    case 'transition_confirmation':
+      return 'attention';
+    case 'paused':
+      return 'neutral';
+    case 'failed':
+      return 'danger';
+    case 'blocked':
+      return 'attention';
+    case 'closed':
+    case 'superseded':
+      return 'done';
+  }
+}
+
+/** 动作类别（风险分级）。 */
+const ACTION_CLASS_LABELS: Readonly<Record<ActionClass, string>> = {
+  passive_read: '被动读取',
+  active_discovery: '主动发现',
+  authenticated_read: '认证读取',
+  exploit_validation: '利用验证',
+  lateral_movement: '横向移动',
+  persistence: '持久化',
+  destructive: '破坏性动作',
+  exfiltration: '数据外传',
+};
+
+export function actionClassLabel(actionClass: ActionClass): string {
+  return ACTION_CLASS_LABELS[actionClass];
+}
+
+/** 需要逐次人工放行的类别（与契约的 `PER_ACTION_APPROVAL_CLASSES` 对齐）。 */
+export function needsPerActionApproval(actionClass: ActionClass): boolean {
+  return actionClass === 'exploit_validation' || actionClass === 'lateral_movement';
+}
+
+/** 记忆来源可信度。 */
+const TRUST_LABELS: Readonly<Record<TrustLevel, string>> = {
+  human_decision: '人工决策',
+  tool_observation: '工具观测',
+  agent_claim: 'Agent 陈述',
+  model_reasoning: '模型推理',
+  external_untrusted: '外部不可信',
+};
+
+export function trustLabel(trust: TrustLevel): string {
+  return TRUST_LABELS[trust];
+}
+
+/**
+ * 时间戳的展示形式。
+ *
+ * 只显示到分钟：秒级精度在运维以外没有决策价值，而多出来的字符会挤占
+ * 时间轴的横向空间。`now` 可注入以便测试稳定。
+ */
+export function formatTimestamp(value: string | null | undefined, now?: Date): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return '—';
+  const at = new Date(ts);
+  const base = `${String(at.getFullYear())}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  const reference = now ?? new Date();
+  const deltaMs = reference.getTime() - ts;
+  // 一小时内的用相对时间：运维看的是「多久之前」，而不是具体时刻
+  if (deltaMs >= 0 && deltaMs < 60 * 60 * 1000) return `${base}（${relative(deltaMs)}前）`;
+  return base;
+}
+
+function relative(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${String(seconds)} 秒`;
+  return `${String(Math.floor(seconds / 60))} 分钟`;
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/** 持续时长（秒 → 人类可读）。 */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '—';
+  if (seconds < 60) return `${String(Math.floor(seconds))} 秒`;
+  if (seconds < 3600) return `${String(Math.floor(seconds / 60))} 分钟`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return minutes === 0 ? `${String(hours)} 小时` : `${String(hours)} 小时 ${String(minutes)} 分`;
+}
+
+/** 置信度（0..1 → 百分比）。`null` 显示为未评估，而不是 0%——两者的含义完全不同。 */
+export function formatConfidence(confidence: number | null | undefined): string {
+  if (confidence === null || confidence === undefined || !Number.isFinite(confidence)) return '未评估';
+  const clamped = Math.min(Math.max(confidence, 0), 1);
+  return `${String(Math.round(clamped * 100))}%`;
+}
+
+/**
+ * 截断长文本用于列表展示。
+ *
+ * 用码点而不是 UTF-16 单元计数：中文与 emoji 的代理对会被切坏，产生乱码。
+ */
+export function truncate(text: string, maxChars: number): string {
+  const points = [...text];
+  if (points.length <= maxChars) return text;
+  return `${points.slice(0, maxChars).join('')}…`;
+}
+
+/** 计数展示：`0` 显示为 `0`，`null` 显示为 `—`（未知与零不是一回事）。 */
+export function formatCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return String(value);
+}

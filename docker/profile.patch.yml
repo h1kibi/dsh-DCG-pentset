@@ -1,0 +1,34 @@
+# dsh-pentest 容器内的 profile 补丁层。
+#
+# 这是 profile 自己的 overlay（官方契约：`$DSH_HOME/profiles/<name>/cordis.patch.yml`），
+# 在 bundle 层之后应用，因此这里可以覆盖 dsh-pentest 插件行自带的 config。
+#
+# 值走 `!!js` 表达式读取环境变量：容器是同一个镜像跑不同部署（库地址、操作者身份、
+# 沙箱网络名都可能变），把它写死会让镜像只能用一次。
+# 这是官方 patch 里已有的写法（例如 `mode: !!js process.env.DSH_TOOLS_MODE`）。
+#
+# config.operator 是**必需**的：宿主的通道级认证只提供「已认证」这个二元事实，
+# handler 拿不到认证主体，因此「本实例的操作者是谁」必须由部署方声明。
+# 缺它时控制台 RPC 通道不注册（插件会因此打一条 warn，而不是静默降级）。
+
+- id: pentest
+  name: dsh-pentest
+  config:
+    operator:
+      id: !!js process.env.PENTEST_OPERATOR ?? 'container-operator'
+      source: !!js process.env.PENTEST_OPERATOR_SOURCE ?? 'container'
+    runtime:
+      database:
+        url: !!js process.env.PENTEST_DATABASE_URL ?? 'postgresql://postgres:check@127.0.0.1:5432/pentest'
+      # 密钥必须由部署注入：不再有仓库内默认值（缺它会在 compose 期直接失败）。
+      ledgerSecret: !!js process.env.PENTEST_LEDGER_SECRET
+      # 沙箱：compose 期只校验这些值**形状合法**（镜像摘要必须是 sha256、网络名非空），
+      # 不探测 Docker 守护进程。因此容器内没有 dockerd 也能把插件跑起来——
+      # 真正执行动作时才会失败，而那时是 fail-closed 的（拒绝执行，不降级为直接跑）。
+      sandbox:
+        allowedImages:
+          - name: !!js process.env.PENTEST_TOOL_IMAGE ?? 'kali-tools'
+            digest: !!js process.env.PENTEST_TOOL_DIGEST ?? 'sha256:0000000000000000000000000000000000000000000000000000000000000001'
+        internalNetwork: !!js process.env.PENTEST_INTERNAL_NETWORK ?? 'pentest-internal'
+        proxyHost: !!js process.env.PENTEST_PROXY_HOST ?? 'pentest-proxy'
+        proxyPort: !!js Number(process.env.PENTEST_PROXY_PORT ?? 8080)

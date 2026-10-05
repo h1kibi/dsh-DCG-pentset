@@ -1,0 +1,19 @@
+# dsh-pentest 的 bundle patch：作为一层 overlay，插入本插件自己的那一行。
+#
+# 语义要点（与官方 dsh-base 的说明一致）：patch 是**按 id 整行替换**——被命中的行，
+# 其整个 `config` 会被本文件（或更靠上的层）里写的值取代，而不是逐键合并。因此这里
+# 只声明本插件自己的行，不重复声明任何核心行：核心行的值属于 profile，不属于本插件。
+#
+# 行的顺序不承载加载语义：激活顺序由「服务是否可用」驱动。本插件 `inject` 了
+# tools / agents / sessions 三个宿主服务（见 src/index.ts），宿主会在这些服务就绪
+# 之后才调用 apply，所以这一行放在 insert 列表首位也是安全的。
+#
+# 装配路径：`dsh plugin --profile <name> add <本目录>` 会读到 package.json 的
+# `dsh.bundle.patch`（官方契约字段），把包名自动追加进 profile 的
+# `dsh.profile.bundles`，此后每次 boot 都会把本文件当作一层 overlay 应用。
+
+- insert:
+    # 插件本体：唯一入口（package.json 的 exports["."] → lib/index.js），
+    # 导出 name / inject / apply。这里不开 config，走插件自身的默认值。
+    - id: pentest
+      name: dsh-pentest

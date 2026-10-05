@@ -1,0 +1,23 @@
+# 构建上下文是仓库根，但镜像**只**需要运行期产物与迁移。
+#
+# 为什么必须排除 node_modules：宿主是 Windows，那份 node_modules 里含平台相关二进制
+# （koffi / node-pty 等），复制进 Linux 镜像既无用又会让镜像里出现「看似有依赖、
+# 实际加载不了」的假象。镜像内的依赖由 Dockerfile 用固定版本自行安装。
+node_modules
+
+# 版本库与文档与运行期无关；测试套件需要 devDependencies，镜像里不跑（见 docker/smoke.sh）
+.git
+.gitignore
+docs
+test
+
+# 探测/临时产物
+*.tmp.*
+.tmp-chrome-live/
+__pycache__/
+*.pyc
+_*
+*.tsbuildinfo
+# 刻意**不**排除 lib/types：它只 568K，而 package.json 的 `exports` 里三个
+# "types" 路径指向它——排掉会让发布出去的包在类型解析上悬空（运行期不受影响，
+# 因为 Node 走 "default"，但那是"恰好没坏"，不是设计）。
