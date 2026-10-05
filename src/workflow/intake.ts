@@ -13,7 +13,7 @@ import { requireApprovalMode, requireBehaviorSelection, withCustomGuidance } fro
 import { issueLease, revokeLease } from './lease.ts';
 import { DEFAULTS } from '../contracts.ts';
 import { BOOTSTRAP_NEXT_STEP, WorkflowRejection, actionPolicyRiskSummary, normalizeEngagementName, toInt } from './model.ts';
-import type { EngagementRow, SessionRow } from './model.ts';
+import type { EngagementRow, ResolvedCapabilities, SessionRow } from './model.ts';
 import type { WorkflowCore } from './core.ts';
 import { planTransition } from './transition-table.ts';
 
@@ -33,6 +33,9 @@ export class IntakeFlow {
    *
    * 该路径不写 scope_versions，也不把未确认输入当成授权；唯一可见的 Worker 能力是
    * 只读/报告/范围提案。相同租户与 clientSessionKey 通过唯一索引幂等恢复。
+   *
+   * 复用判定与建作业/建会话的全部步骤都在 {@link IntakeFlow.#stageIntake}——
+   * 与 Agent 自建路径（`bootstrapIntake`）共用同一份状态机（2026-10-05 复核 C5）。
    */
   async openTask(input: OpenTaskInput): Promise<OpenTaskResult> {
     const clientSessionKey = input.clientSessionKey.trim();
@@ -43,190 +46,13 @@ export class IntakeFlow {
       throw new WorkflowRejection('classification_rejected', 'clientSessionKey 过长');
     }
 
-    const caps = await this.#core.capabilities().resolve('intelligence-gathering');
-    const intakeTools = [
-      'memory_search',
-      'memory_read',
-      'artifact_read',
-      // 官方人机提问通道（带选项的提问界面）。intake 的全部工作就是「问清范围」，
-      // 纯文本问卷让人类手抄答案，正是这条通道要解决的问题（见 `HUMAN_QUESTION_TOOL`）。
-      HUMAN_QUESTION_TOOL,
-      'pentest_request_scope_confirmation',
-      'pentest_write_status_note',
-    ] as const;
-    const staged = await this.#core.tx(async () => {
-      // This lock covers the lookup and insert boundary. The partial unique index remains
-      // the durable invariant; the advisory lock makes concurrent callers converge instead
-      // of racing into a unique-violation retry loop.
-      await this.#core.deps.txDb.query(
-        `select pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
-        [clientSessionKey],
-      );
-      // 反查「本客户端键是否已有作业」。
-      //
-      // ── 为什么分两条路，而不是统一走函数 ──
-      //
-      // `engagement_for_client_session` 是 SECURITY DEFINER 函数，**在函数体内**要求
-      // `current_tenant_id()` 非空（那是它防跨租户探测的唯一手段）。而 `current_tenant_id()`
-      // 读的是 `set_rls_context` 写的 GUC，只有配置了 `config.rlsContext` 的部署才会设它。
-      //
-      // 于是：
-      //   - **配置了 RLS 的部署**：函数可用且必须用它——直接查 `engagements` 会被
-      //     `app_engagement` 挡下（此时上下文里还没有 engagement），而 `013` 当年正是
-      //     为了绕过这一点才加了租户级 PERMISSIVE，那同时放开了写入。
-      //   - **没配置 RLS 的部署**（`harness.dev.patch.yml`、`docker/profile.patch.yml` 两处
-      //     交付配置都是这种；`docs/...design.md` §9.4.1 有记录）：GUC 恒为空，函数恒返回
-      //     NULL。若仍然走函数，`openTask` 会把「已有作业」误判成「没有」→ 走 INSERT →
-      //     撞 `engagements_tenant_client_session` 唯一索引 23505。**这是实测的回归**：
-      //     控制台每次挂载都会调 `openTask`，于是第二次就失败，幂等恢复整条失效。
-      //     这种部署里 RLS 本来就不生效（运行时是超级用户），直查与改前逐字等价。
-      //
-      // 两条路的**结果形状相同**（0 或 1 行），因此下游逻辑不需要分支。
-      //
-      // 不加 `for update`：并发同一 `clientSessionKey` 的互斥由上面那条 advisory 锁保证，
-      // 而持久不变量是 `engagements_tenant_client_session` 部分唯一索引。
-      const found = this.#core.deps.rlsContext === undefined
-        ? (await this.#core.deps.txDb.query<{
-            id: string;
-            state_version: number | string;
-            active_agent_session_id: string | null;
-            current_status: MainStatus;
-            status: RunMarker;
-          }>(
-            `select id, state_version, active_agent_session_id, current_status, status
-               from pentest.engagements
-              where tenant_id = $1 and client_session_key = $2`,
-            [this.#core.tenantId(), clientSessionKey],
-          )).rows[0]
-        : (await this.#core.deps.txDb.query<{
-            id: string;
-            state_version: number | string;
-            active_agent_session_id: string | null;
-            current_status: MainStatus;
-            status: RunMarker;
-          }>(
-            `select id, state_version, active_agent_session_id, current_status, status
-               from pentest.engagements
-              where id = pentest.engagement_for_client_session($1, $2)`,
-            [this.#core.tenantId(), clientSessionKey],
-          )).rows[0];
-
-      const engagementId = found === undefined ? this.#core.id() : found.id;
-      // 本事务按租户作用域开启（此时还不知道/还没生成 engagement），因此这里只断言：
-      // 外层若已锁定到**别的**作业，说明调用方把请求路由错了，响亮失败比读错作业安全。
-      // 真正的上下文由下面那条 `set_rls_context` 显式设成刚确定的 id。
-      this.#core.assertRlsEngagement(engagementId);
-      // 上下文必须在**动任何 engagement 作用域的读写之前**设好。
-      //
-      // 三条理由，缺一不可：
-      //   1. `worker_sessions` 与 `session_leases` 没有任何租户级放行（015 拆掉了），
-      //      没有上下文时一行都看不见——「已存在的 intake 会话」这条分支会误判成不存在；
-      //   2. 新建 engagement 的 INSERT 要过 `app_engagement` 的 WITH CHECK
-      //      （`id = current_engagement_id()`），而新 id 是我们自己生成的，先设再插即可；
-      //   3. aborted/failed 的复位 UPDATE 同样需要上下文。
-      if (this.#core.deps.rlsContext !== undefined) {
-        await this.#core.deps.txDb.query('select pentest.set_rls_context($1, $2::uuid, $3::uuid)', [
-          this.#core.deps.rlsContext.tenantId,
-          engagementId,
-          null,
-        ]);
-      }
-
-      if (found !== undefined && found.status !== 'aborted' && found.status !== 'failed') {
-        if (found.active_agent_session_id !== null) {
-          const session = await this.#core.deps.txDb.query<SessionRow & { engagement_id: string }>(
-            `select id, engagement_id, dsh_session_id, phase, status, session_kind,
-                    attempt, iteration, scope_version, task_prompt
-               from pentest.worker_sessions
-              where id = $1::uuid
-              for update`,
-            [found.active_agent_session_id],
-          );
-          const row = session.rows[0];
-          if (row !== undefined && row.session_kind === 'intake' && toInt(row.scope_version, 'scope_version') === 0) {
-            return {
-              kind: 'existing' as const,
-              engagementId: found.id,
-              workerSessionId: row.id,
-              dshSessionId: row.dsh_session_id,
-              stateVersion: toInt(found.state_version, 'state_version'),
-            };
-          }
-        }
-        if (found.current_status !== 'auth_pending') {
-          throw new WorkflowRejection('classification_rejected', '该客户端任务已离开 intake 阶段，不能重新创建 intake');
-        }
-      }
-
-      const workerSessionId = this.#core.id();
-      const dshSessionId = this.#core.dshSessionIdOf(workerSessionId);
-      if (found === undefined) {
-        await this.#core.deps.txDb.query(
-          `insert into pentest.engagements
-             (id, tenant_id, name, status, current_status, state_version, graph_iteration,
-              target_snapshot, scope_snapshot, roe_snapshot, policy_snapshot, config_snapshot, created_by,
-              public_memory, public_memory_updated_at, public_memory_updated_by, client_session_key)
-           values ($1::uuid,$2,$3,'running','auth_pending',0,1,'{}'::jsonb,$4::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,'',null,null,$6)`,
-          [
-            engagementId,
-            this.#core.tenantId(),
-            `未命名任务 ${clientSessionKey.slice(0, 12)}`,
-            JSON.stringify({ version: 0, targets: [], exclusions: [], authorizationExpiresAt: '' }),
-            input.operatorId,
-            clientSessionKey,
-          ],
-        );
-      } else if (found.status === 'aborted' || found.status === 'failed') {
-        await this.#core.deps.txDb.query(
-          `update pentest.engagements
-              set status = 'running', current_status = 'auth_pending', current_phase = null,
-                  active_agent_session_id = null, updated_at = now()
-            where id = $1::uuid`,
-          [engagementId],
-        );
-      }
-
-      if (found === undefined) {
-        await this.#core.audit(engagementId, null, 'engagement.created', {
-          clientSessionKey,
-          hidden: true,
-          authorizationPending: true,
-        });
-      }
-      await this.#core.insertWorkerSession({
-        id: workerSessionId,
-        engagementId,
-        dshSessionId,
-        sessionKind: 'intake',
-        phase: 'intelligence-gathering',
-        caps,
-        skillIds: [],
-        toolAllow: intakeTools,
-        taskPrompt: '主动询问目标、排除项、协议、端口、允许动作、时间窗；在范围被人类确认前不得执行目标动作，只能提交待确认范围方案。',
-        scopeVersion: 0,
-        iteration: 1,
-      });
-      const updated = await this.#core.deps.txDb.query<{ state_version: number | string }>(
-        `update pentest.engagements
-            set current_status = 'auth_pending', current_phase = null,
-                active_agent_session_id = $2::uuid, state_version = state_version + 1, updated_at = now()
-          where id = $1::uuid
-        returning state_version`,
-        [engagementId, workerSessionId],
-      );
-      if (updated.rows[0] === undefined) throw new WorkflowRejection('classification_rejected', '创建 intake 任务时 engagement 不存在');
-      await this.#core.audit(engagementId, workerSessionId, 'worker.session.created', {
-        sessionKind: 'intake',
-        dshSessionId,
-        clientSessionKey,
-      });
-      return {
-        kind: 'created' as const,
-        engagementId,
-        workerSessionId,
-        dshSessionId,
-        stateVersion: toInt(updated.rows[0].state_version, 'state_version'),
-      };
+    const staged = await this.#stageIntake({
+      origin: 'console',
+      clientSessionKey,
+      engagementName: `未命名任务 ${clientSessionKey.slice(0, 12)}`,
+      operatorId: input.operatorId,
+      // dsh 会话标识由 staging 按 `dshSessionIdOf(workerSessionId)` 派生
+      // （控制台路径要**新建**一个 dsh 会话，不绑定调用方身份）。
     });
 
     if (staged.kind === 'existing') {
@@ -258,11 +84,11 @@ export class IntakeFlow {
       workerSessionId: staged.workerSessionId,
       dshSessionId: staged.dshSessionId,
       phase: 'intelligence-gathering',
-      profileId: caps.profileId,
-      profileRevision: caps.profileRevision,
-      modelRoute: caps.modelRoute,
+      profileId: staged.caps.profileId,
+      profileRevision: staged.caps.profileRevision,
+      modelRoute: staged.caps.modelRoute,
       skillIds: [],
-      toolAllow: intakeTools,
+      toolAllow: staged.intakeTools,
       taskPrompt: '请主动询问并澄清目标与范围信息；不得执行目标动作。收集完整后只能提交待人类确认的范围方案。',
       budget: undefined,
       approvalRequired: [],
@@ -282,6 +108,284 @@ export class IntakeFlow {
       resumed: false,
     };
   }
+
+  /**
+   * intake 会话的**唯一** staging 状态机（2026-10-05 复核 C5）。
+   *
+   * ── 为什么必须只有一份 ──
+   *
+   * 两个入口（控制台 `openTask`、Agent 自建 `bootstrapIntake`）此前各写一份「反查 →
+   * 上锁 → 设 RLS 上下文 → 复用判定 → 建作业 → 建会话 → 审计」。两份的**复用判定已经分叉**：
+   * `openTask` 不看绑定会话是否已终结，于是会把一个**已关闭**的 intake 会话当成「可复用」
+   * 返回；随后 `activeLeaseOf` 拿不到租约，控制台卡在「已有 intake 会话但租约不可用」——
+   * 而同一个状态在 `bootstrapIntake` 里是「重新绑定」这条恢复路径。
+   *
+   * ── 复用判定（单点）──
+   *
+   *   - **可复用**：绑定行是 intake、范围版本 0、会话**未终结**，且（调用方要求时）dsh 标识一致；
+   *   - **拒绝**：绑定行未终结但不匹配（例如已被别的 dsh 会话占用）——那是调用方路由错了；
+   *   - **重新绑定**：绑定行已终结（或不存在）——幂等重试的自然路径：上一次可能在建好作业后
+   *     才失败（签发租约时进程被打断），留下 `starting` 行并被启动对账判为中断。一律拒绝
+   *     会让这个会话被永久钉死在一个不能用的作业上，而能力边界没有任何变化（仍是
+   *     `auth_pending` + 范围版本 0）。
+   *
+   * 事务边界：整段在 `#core.tx` 里（advisory 锁 + 部分唯一索引是幂等的不变量）；
+   * 租约与「新建 dsh 会话」留在事务外，由两个入口各自处理（理由见 `bootstrapIntake` 的说明）。
+   */
+  async #stageIntake(spec: {
+    /** 审计载荷与来源标记（两个入口的字面差异仅此一处）。 */
+    readonly origin: 'console' | 'session_bootstrap';
+    readonly clientSessionKey: string;
+    readonly engagementName: string;
+    readonly operatorId: string;
+    /** 新建会话时登记的 dsh 标识；省略＝按 `dshSessionIdOf(workerSessionId)` 派生（控制台路径）。 */
+    readonly dshSessionId?: string;
+    /** 复用绑定时要求 dsh 标识一致（Agent 自建路径要求；控制台路径派生新 id，故省略）。 */
+    readonly requireDshSessionId?: string;
+  }): Promise<
+    | {
+        readonly kind: 'existing';
+        readonly engagementId: string;
+        readonly workerSessionId: string;
+        readonly dshSessionId: string;
+        readonly stateVersion: number;
+      }
+    | {
+        readonly kind: 'staged';
+        readonly engagementId: string;
+        readonly workerSessionId: string;
+        readonly dshSessionId: string;
+        readonly stateVersion: number;
+        readonly caps: ResolvedCapabilities;
+        readonly intakeTools: readonly string[];
+      }
+  > {
+    const caps = await this.#core.capabilities().resolve('intelligence-gathering');
+    // intake 的全部能力就是一个封闭表：只读检索 + 官方提问通道 + 范围提案 + 状态便笺。
+    // **没有**任何触及目标的工具——范围被人类确认前，它连动作模板都没有。
+    const intakeTools = [
+      'memory_search',
+      'memory_read',
+      'artifact_read',
+      // 官方人机提问通道（带选项的提问界面）。intake 的全部工作就是「问清范围」，
+      // 纯文本问卷让人类手抄答案，正是这条通道要解决的问题（见 `HUMAN_QUESTION_TOOL`）。
+      HUMAN_QUESTION_TOOL,
+      'pentest_request_scope_confirmation',
+      'pentest_write_status_note',
+    ] as const;
+
+    const staged = await this.#core.tx(async () => {
+      // 这条锁覆盖「反查 + 插入」的边界。持久不变量仍是部分唯一索引；
+      // advisory 锁让并发调用者**收敛**，而不是撞进唯一冲突的重试循环。
+      await this.#core.deps.txDb.query(
+        `select pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+        [spec.clientSessionKey],
+      );
+      // 反查「本客户端键是否已有作业」。
+      //
+      // ── 为什么分两条路，而不是统一走函数 ──
+      //
+      // `engagement_for_client_session` 是 SECURITY DEFINER 函数，**在函数体内**要求
+      // `current_tenant_id()` 非空（那是它防跨租户探测的唯一手段）。而 `current_tenant_id()`
+      // 读的是 `set_rls_context` 写的 GUC，只有配置了 `config.rlsContext` 的部署才会设它。
+      //
+      // 于是：
+      //   - **配置了 RLS 的部署**：函数可用且必须用它——直接查 `engagements` 会被
+      //     `app_engagement` 挡下（此时上下文里还没有 engagement），而 `013` 当年正是
+      //     为了绕过这一点才加了租户级 PERMISSIVE，那同时放开了写入。
+      //   - **没配置 RLS 的部署**（`harness.dev.patch.yml`、`docker/profile.patch.yml` 两处
+      //     交付配置都是这种；`docs/...design.md` §9.4.1 有记录）：GUC 恒为空，函数恒返回
+      //     NULL。若仍然走函数，本方法会把「已有作业」误判成「没有」→ 走 INSERT →
+      //     撞 `engagements_tenant_client_session` 唯一索引 23505。**这是实测的回归**：
+      //     控制台每次挂载都会调 `openTask`，于是第二次就失败，幂等恢复整条失效。
+      //     这种部署里 RLS 本来就不生效（运行时是超级用户），直查与改前逐字等价。
+      //
+      // 两条路的**结果形状相同**（0 或 1 行），因此下游逻辑不需要分支。
+      //
+      // 不加 `for update`：并发同一 `clientSessionKey` 的互斥由上面那条 advisory 锁保证，
+      // 而持久不变量是 `engagements_tenant_client_session` 部分唯一索引。
+      const found = this.#core.deps.rlsContext === undefined
+        ? (await this.#core.deps.txDb.query<{
+            id: string;
+            state_version: number | string;
+            active_agent_session_id: string | null;
+            current_status: MainStatus;
+            status: RunMarker;
+          }>(
+            `select id, state_version, active_agent_session_id, current_status, status
+               from pentest.engagements
+              where tenant_id = $1 and client_session_key = $2`,
+            [this.#core.tenantId(), spec.clientSessionKey],
+          )).rows[0]
+        : (await this.#core.deps.txDb.query<{
+            id: string;
+            state_version: number | string;
+            active_agent_session_id: string | null;
+            current_status: MainStatus;
+            status: RunMarker;
+          }>(
+            `select id, state_version, active_agent_session_id, current_status, status
+               from pentest.engagements
+              where id = pentest.engagement_for_client_session($1, $2)`,
+            [this.#core.tenantId(), spec.clientSessionKey],
+          )).rows[0];
+
+      const engagementId = found === undefined ? this.#core.id() : found.id;
+      // 本事务按租户作用域开启（此时还不知道/还没生成 engagement），因此这里只断言：
+      // 外层若已锁定到**别的**作业，说明调用方把请求路由错了，响亮失败比读错作业安全。
+      // 真正的上下文由下面那条 `set_rls_context` 显式设成刚确定的 id。
+      this.#core.assertRlsEngagement(engagementId);
+      // 上下文必须在**动任何 engagement 作用域的读写之前**设好。
+      //
+      // 三条理由，缺一不可：
+      //   1. `worker_sessions` 与 `session_leases` 没有任何租户级放行（015 拆掉了），
+      //      没有上下文时一行都看不见——「已存在的 intake 会话」这条分支会误判成不存在；
+      //   2. 新建 engagement 的 INSERT 要过 `app_engagement` 的 WITH CHECK
+      //      （`id = current_engagement_id()`），而新 id 是我们自己生成的，先设再插即可；
+      //   3. aborted/failed 的复位 UPDATE 同样需要上下文。
+      if (this.#core.deps.rlsContext !== undefined) {
+        await this.#core.deps.txDb.query('select pentest.set_rls_context($1, $2::uuid, $3::uuid)', [
+          this.#core.deps.rlsContext.tenantId,
+          engagementId,
+          null,
+        ]);
+      }
+
+      // ── 已经有绑定：按单点判定复用 / 拒绝 / 重新绑定 ──
+      if (found !== undefined && found.status !== 'aborted' && found.status !== 'failed') {
+        if (found.active_agent_session_id !== null) {
+          const existing = await this.#core.deps.txDb.query<SessionRow & { engagement_id: string }>(
+            `select id, engagement_id, dsh_session_id, phase, status, session_kind,
+                    attempt, iteration, scope_version, task_prompt
+               from pentest.worker_sessions
+              where id = $1::uuid
+              for update`,
+            [found.active_agent_session_id],
+          );
+          const row = existing.rows[0];
+          const reusable =
+            row !== undefined
+            && row.session_kind === 'intake'
+            && toInt(row.scope_version, 'scope_version') === 0
+            && !TERMINAL_SESSION_STATUSES.has(row.status)
+            && (spec.requireDshSessionId === undefined || row.dsh_session_id === spec.requireDshSessionId);
+          if (reusable && row !== undefined) {
+            return {
+              kind: 'existing' as const,
+              engagementId: found.id,
+              workerSessionId: row.id,
+              dshSessionId: row.dsh_session_id,
+              stateVersion: toInt(found.state_version, 'state_version'),
+            };
+          }
+          // 绑定行**仍在运行**却不匹配（另一个 dsh 会话占着，或不是 intake 会话）：
+          // 那是调用方路由错了，拒绝比抢占安全。
+          if (row !== undefined && !TERMINAL_SESSION_STATUSES.has(row.status)) {
+            throw new WorkflowRejection(
+              'classification_rejected',
+              '本会话已绑定到一个仍在运行的作业（或绑定已被别的会话占用），不能重复发起',
+            );
+          }
+          // 绑定行已终结（或行不存在）：为同一个作业**重新绑定**本会话。
+          //
+          // 这是幂等重试的自然路径，不是放松边界：上一次 staging 可能在建好作业后
+          // 才失败（如签发租约时进程被打断），于是库里留下 `starting` 行，随后被
+          // 启动对账判为中断。此时若一律拒绝，本会话就被永久钉死在一个不能用的作业上——
+          // 而人类看到的只是「无法开始」。重新绑定产生的仍是同一个作业、同样
+          // `auth_pending` + 范围版本 0，能力边界没有任何变化。
+        } else if (found.current_status !== 'auth_pending') {
+          throw new WorkflowRejection('classification_rejected', '该作业已离开 intake 阶段，不能重新创建 intake');
+        }
+      }
+
+      const workerSessionId = this.#core.id();
+      const dshSessionId = spec.dshSessionId ?? this.#core.dshSessionIdOf(workerSessionId);
+      if (found === undefined) {
+        await this.#core.deps.txDb.query(
+          `insert into pentest.engagements
+             (id, tenant_id, name, status, current_status, state_version, graph_iteration,
+              target_snapshot, scope_snapshot, roe_snapshot, policy_snapshot, config_snapshot, created_by,
+              public_memory, public_memory_updated_at, public_memory_updated_by, client_session_key)
+           values ($1::uuid,$2,$3,'running','auth_pending',0,1,'{}'::jsonb,$4::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,'',null,null,$6)`,
+          [
+            engagementId,
+            this.#core.tenantId(),
+            spec.engagementName,
+            JSON.stringify({ version: 0, targets: [], exclusions: [], authorizationExpiresAt: '' }),
+            spec.operatorId,
+            spec.clientSessionKey,
+          ],
+        );
+        await this.#core.audit(
+          engagementId,
+          null,
+          'engagement.created',
+          spec.origin === 'console'
+            ? { clientSessionKey: spec.clientSessionKey, hidden: true, authorizationPending: true }
+            : {
+                clientSessionKey: spec.clientSessionKey,
+                source: 'session_bootstrap',
+                authorizationPending: true,
+              },
+        );
+      } else {
+        // 已存在但已终结（aborted/failed）：复位成「等授权」，会话行随后重建。
+        await this.#core.deps.txDb.query(
+          `update pentest.engagements
+              set status = 'running', current_status = 'auth_pending', current_phase = null,
+                  active_agent_session_id = null, updated_at = now()
+            where id = $1::uuid`,
+          [engagementId],
+        );
+      }
+
+      await this.#core.insertWorkerSession({
+        id: workerSessionId,
+        engagementId,
+        dshSessionId,
+        sessionKind: 'intake',
+        phase: 'intelligence-gathering',
+        caps,
+        skillIds: [],
+        toolAllow: intakeTools,
+        taskPrompt:
+          '主动询问目标、排除项、协议、端口、允许动作、时间窗；在范围被人类确认前不得执行目标动作，只能提交待确认范围方案。',
+        scopeVersion: 0,
+        iteration: 1,
+      });
+      const updated = await this.#core.deps.txDb.query<{ state_version: number | string }>(
+        `update pentest.engagements
+            set current_status = 'auth_pending', current_phase = null,
+                active_agent_session_id = $2::uuid, state_version = state_version + 1, updated_at = now()
+          where id = $1::uuid
+        returning state_version`,
+        [engagementId, workerSessionId],
+      );
+      if (updated.rows[0] === undefined) {
+        throw new WorkflowRejection('classification_rejected', '创建 intake 时 engagement 不存在');
+      }
+      await this.#core.audit(
+        engagementId,
+        workerSessionId,
+        'worker.session.created',
+        spec.origin === 'console'
+          ? { sessionKind: 'intake', dshSessionId, clientSessionKey: spec.clientSessionKey }
+          : { sessionKind: 'intake', dshSessionId, source: 'session_bootstrap' },
+      );
+      return {
+        kind: 'staged' as const,
+        engagementId,
+        workerSessionId,
+        dshSessionId,
+        stateVersion: toInt(updated.rows[0].state_version, 'state_version'),
+        caps,
+        intakeTools,
+      };
+    });
+
+    return staged;
+  }
+
 
   /**
    * 把**当前会话**登记为某作业的 intake（「会话即 intake」）。
@@ -305,184 +409,21 @@ export class IntakeFlow {
    * ── 幂等 ──
    *
    * 客户端键由 dsh 会话标识派生（`session:<id>`），同一会话反复调用收敛到同一个作业；
-   * 与 `openTask` 用浏览器键收敛是同一条机制（含同一条 advisory 锁与部分唯一索引）。
+   * 与 `openTask` 用浏览器键收敛是同一条机制——**同一份 staging 状态机**（`#stageIntake`）。
    */
   async bootstrapIntake(input: BootstrapIntakeInput): Promise<BootstrapIntakeResult> {
     const dshSessionId = input.dshSessionId.trim();
     if (dshSessionId.length === 0) {
       throw new WorkflowRejection('classification_rejected', 'dshSessionId 不能为空');
     }
-    const clientSessionKey = `session:${dshSessionId}`;
-    const caps = await this.#core.capabilities().resolve('intelligence-gathering');
-    const intakeTools = [
-      'memory_search',
-      'memory_read',
-      'artifact_read',
-      // 官方人机提问通道（带选项的提问界面）。intake 的全部工作就是「问清范围」，
-      // 纯文本问卷让人类手抄答案，正是这条通道要解决的问题（见 `HUMAN_QUESTION_TOOL`）。
-      HUMAN_QUESTION_TOOL,
-      'pentest_request_scope_confirmation',
-      'pentest_write_status_note',
-    ] as const;
-
-    const staged = await this.#core.tx(async () => {
-      // 与 `openTask` 同一条互斥：并发调用收敛而不是撞唯一索引。
-      await this.#core.deps.txDb.query(
-        `select pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
-        [clientSessionKey],
-      );
-      const found = this.#core.deps.rlsContext === undefined
-        ? (await this.#core.deps.txDb.query<{
-            id: string;
-            state_version: number | string;
-            active_agent_session_id: string | null;
-            current_status: MainStatus;
-            status: RunMarker;
-          }>(
-            `select id, state_version, active_agent_session_id, current_status, status
-               from pentest.engagements
-              where tenant_id = $1 and client_session_key = $2`,
-            [this.#core.tenantId(), clientSessionKey],
-          )).rows[0]
-        : (await this.#core.deps.txDb.query<{
-            id: string;
-            state_version: number | string;
-            active_agent_session_id: string | null;
-            current_status: MainStatus;
-            status: RunMarker;
-          }>(
-            `select id, state_version, active_agent_session_id, current_status, status
-               from pentest.engagements
-              where id = pentest.engagement_for_client_session($1, $2)`,
-            [this.#core.tenantId(), clientSessionKey],
-          )).rows[0];
-
-      const engagementId = found === undefined ? this.#core.id() : found.id;
-      this.#core.assertRlsEngagement(engagementId);
-      if (this.#core.deps.rlsContext !== undefined) {
-        await this.#core.deps.txDb.query('select pentest.set_rls_context($1, $2::uuid, $3::uuid)', [
-          this.#core.deps.rlsContext.tenantId,
-          engagementId,
-          null,
-        ]);
-      }
-
-      // ── 已经有绑定：复用，不新建 ──
-      if (found !== undefined && found.status !== 'aborted' && found.status !== 'failed') {
-        if (found.active_agent_session_id !== null) {
-          const existing = await this.#core.deps.txDb.query<SessionRow & { engagement_id: string }>(
-            `select id, engagement_id, dsh_session_id, phase, status, session_kind,
-                    attempt, iteration, scope_version, task_prompt
-               from pentest.worker_sessions
-              where id = $1::uuid
-              for update`,
-            [found.active_agent_session_id],
-          );
-          const row = existing.rows[0];
-          if (
-            row !== undefined
-            && row.session_kind === 'intake'
-            && row.dsh_session_id === dshSessionId
-            && toInt(row.scope_version, 'scope_version') === 0
-            && !TERMINAL_SESSION_STATUSES.has(row.status)
-          ) {
-            return {
-              kind: 'existing' as const,
-              engagementId: found.id,
-              workerSessionId: row.id,
-              stateVersion: toInt(found.state_version, 'state_version'),
-            };
-          }
-          // 旧绑定**已终结**：为同一个作业重新绑定本会话。
-          //
-          // 这是幂等重试的自然路径，不是放松边界：上一次 bootstrap 可能在建好作业后
-          // 才失败（如签发租约时进程被打断），于是库里留下 `starting` 行，随后被
-          // 启动对账判为中断。此时若一律拒绝，本会话就被永久钉死在一个不能用的作业上——
-          // 而人类看到的只是「无法开始」。重新绑定产生的仍是同一个作业、同样
-          // `auth_pending` + 范围版本 0，能力边界没有任何变化。
-          if (row === undefined || !TERMINAL_SESSION_STATUSES.has(row.status)) {
-            throw new WorkflowRejection(
-              'classification_rejected',
-              '本会话已绑定到一个仍在运行的作业（或绑定已被别的会话占用），不能重复发起',
-            );
-          }
-        } else if (found.current_status !== 'auth_pending') {
-          throw new WorkflowRejection(
-            'classification_rejected',
-            '该作业已离开 intake 阶段，不能重新创建 intake',
-          );
-        }
-      }
-
-      const workerSessionId = this.#core.id();
-      if (found === undefined) {
-        await this.#core.deps.txDb.query(
-          `insert into pentest.engagements
-             (id, tenant_id, name, status, current_status, state_version, graph_iteration,
-              target_snapshot, scope_snapshot, roe_snapshot, policy_snapshot, config_snapshot, created_by,
-              public_memory, public_memory_updated_at, public_memory_updated_by, client_session_key)
-           values ($1::uuid,$2,$3,'running','auth_pending',0,1,'{}'::jsonb,$4::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,$5,'',null,null,$6)`,
-          [
-            engagementId,
-            this.#core.tenantId(),
-            normalizeEngagementName(input.name, dshSessionId),
-            JSON.stringify({ version: 0, targets: [], exclusions: [], authorizationExpiresAt: '' }),
-            input.operatorId,
-            clientSessionKey,
-          ],
-        );
-        await this.#core.audit(engagementId, null, 'engagement.created', {
-          clientSessionKey,
-          source: 'session_bootstrap',
-          authorizationPending: true,
-        });
-      } else {
-        await this.#core.deps.txDb.query(
-          `update pentest.engagements
-              set status = 'running', current_status = 'auth_pending', current_phase = null,
-                  active_agent_session_id = null, updated_at = now()
-            where id = $1::uuid`,
-          [engagementId],
-        );
-      }
-
-      await this.#core.insertWorkerSession({
-        id: workerSessionId,
-        engagementId,
-        // **关键差异**：登记的是调用方自己的会话标识，而不是派生一个新 id。
-        dshSessionId,
-        sessionKind: 'intake',
-        phase: 'intelligence-gathering',
-        caps,
-        skillIds: [],
-        toolAllow: intakeTools,
-        taskPrompt:
-          '主动询问目标、排除项、协议、端口、允许动作、时间窗；在范围被人类确认前不得执行目标动作，只能提交待确认范围方案。',
-        scopeVersion: 0,
-        iteration: 1,
-      });
-      const updated = await this.#core.deps.txDb.query<{ state_version: number | string }>(
-        `update pentest.engagements
-            set current_status = 'auth_pending', current_phase = null,
-                active_agent_session_id = $2::uuid, state_version = state_version + 1, updated_at = now()
-          where id = $1::uuid
-        returning state_version`,
-        [engagementId, workerSessionId],
-      );
-      if (updated.rows[0] === undefined) {
-        throw new WorkflowRejection('classification_rejected', '创建 intake 时 engagement 不存在');
-      }
-      await this.#core.audit(engagementId, workerSessionId, 'worker.session.created', {
-        sessionKind: 'intake',
-        dshSessionId,
-        source: 'session_bootstrap',
-      });
-      return {
-        kind: 'created' as const,
-        engagementId,
-        workerSessionId,
-        stateVersion: toInt(updated.rows[0].state_version, 'state_version'),
-      };
+    const staged = await this.#stageIntake({
+      origin: 'session_bootstrap',
+      clientSessionKey: `session:${dshSessionId}`,
+      engagementName: normalizeEngagementName(input.name, dshSessionId),
+      operatorId: input.operatorId,
+      // 登记调用方自己的会话标识，并要求复用时它也一致——本路径的会话身份就是调用方。
+      dshSessionId,
+      requireDshSessionId: dshSessionId,
     });
 
     // ── 事务外：租约 + 把会话置为 active ──
@@ -539,6 +480,7 @@ export class IntakeFlow {
       nextStep: BOOTSTRAP_NEXT_STEP,
     };
   }
+
 
   /**
    * 会话状态：这个 dsh 会话当前需要人类做什么（聊天里的「待你确认」卡片用它）。

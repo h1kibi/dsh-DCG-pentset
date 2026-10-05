@@ -160,15 +160,24 @@ export interface RlsScopePort {
   current(): { readonly tenantId: string; readonly engagementId: string | null; readonly workerSessionId: string | null } | undefined;
 }
 
+/**
+ * 阶段能力的解析结果（冻结进会话前的那一份）。
+ *
+ * 具名导出而不是内联在 {@link CapabilityResolver.resolve} 的返回位置：它是**跨模块的契约面**
+ * （会话工厂、intake staging 都要传递它），内联形状会让下游只能用
+ * `Awaited<ReturnType<...>>` 这类「跟着实现走」的写法表达类型——那是耦合，不是契约。
+ */
+export interface ResolvedCapabilities {
+  readonly profileId: string;
+  readonly profileRevision: string;
+  readonly defaultSkillIds: readonly string[];
+  readonly defaultToolAllow: readonly string[];
+  readonly modelRoute: { readonly provider: string; readonly model: string };
+}
+
 /** 阶段的默认能力来源。真实部署由 Profile 目录提供。 */
 export interface CapabilityResolver {
-  resolve(phase: Phase): Promise<{
-    readonly profileId: string;
-    readonly profileRevision: string;
-    readonly defaultSkillIds: readonly string[];
-    readonly defaultToolAllow: readonly string[];
-    readonly modelRoute: { readonly provider: string; readonly model: string };
-  }>;
+  resolve(phase: Phase): Promise<ResolvedCapabilities>;
 }
 
 export /**

@@ -607,3 +607,57 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 `PgWorkerTools` 仍是 1800+ 行的单类：复核建议的「族拆文件」（检索 / 读取与证据 / 提交与放行）
 本轮**未做**——那是纯机械拆分，而**语义单点**（租约、RLS、范围）已经收拢到 `session-context.ts`。
 拆分时只需移动方法体，不再触碰语义。
+
+---
+
+## 附十三：C5 intake staging 单点化（2026-10-05，续）
+
+### 分叉事实（复核点名，本轮确认）
+
+`openTask`（控制台路径）与 `bootstrapIntake`（Agent 自建路径）各写一份
+「反查 → 上锁 → 设 RLS 上下文 → 复用判定 → 建作业 → 建会话 → 审计」。两份的**复用判定已经分叉**：
+
+| | 复用条件 | 绑定会话已终结时的行为 |
+|---|---|---|
+| `openTask`（修前） | intake + 范围版本 0（**不看会话状态、不看 dsh 标识**） | 当成「可复用」返回 `resumed: true` → 调用方随后 `activeLeaseOf` 拿不到租约 → 控制台卡在「已有 intake 会话但租约不可用」 |
+| `bootstrapIntake`（修前） | intake + 范围版本 0 + dsh 标识一致 + **未终结** | 重新绑定（幂等重试的自然路径） |
+
+同一种库状态在两条入口上得到相反结论——这正是「双份状态机」的代价。
+
+### 单点化
+
+抽出 `#stageIntake(spec)`，两个入口只在这三处不同（其余全部共用）：
+
+1. **dsh 标识从哪来**：控制台派生 `dsh-<workerSessionId>`（它要新建会话）；Agent 自建登记**调用方**的真实标识（并据此要求复用一致性）；
+2. **作业名**：`未命名任务 <key12>` vs `normalizeEngagementName(input.name, dshSessionId)`；
+3. **审计载荷的来源标记**：`hidden: true` vs `source: 'session_bootstrap'`（按 `origin` 派生，两种字面形态逐字保留）。
+
+统一后的**复用判定**（单点，三条出路）：
+
+- **可复用**：绑定行是 intake、范围版本 0、会话**未终结**，且（调用方要求时）dsh 标识一致；
+- **拒绝**：绑定行未终结但不匹配（已被别的 dsh 会话占用，或不是 intake 会话）——调用方路由错了；
+- **重新绑定**：绑定行已终结（或不存在）——幂等重试的自然路径，能力边界不变（仍是 `auth_pending` + 范围版本 0）。
+
+顺带：能力解析与 intake 工具表（6 项，含官方提问通道）从两份收敛为一份；
+`openTask` 因此也获得「从死绑定恢复」的能力（此前只有 `bootstrapIntake` 有）。
+
+### 一处契约类型补齐（项目规则）
+
+`caps` 的类型此前只能写成 `Awaited<ReturnType<typeof …>>`——项目规则禁止用 `ReturnType` 表达契约
+（消费者会耦合到实现名）。在 `workflow/model.ts` 新增具名 `ResolvedCapabilities` 并让
+`CapabilityResolver.resolve` 返回它；`session-port` 与 intake staging 共用这个名字。
+
+### 度量与验证
+
+- `intake.ts` **1068 → 1010 行**（净删一份重复流程，新增共享状态机）。
+- `test/open-task.test.ts` **5/5**，其中**新增 C5 回归锁**：把绑定会话置为 `closed` 后再调 `openTask`，
+  必须为同一作业**重新绑定**一个新会话（新会话是活动会话、intake、范围版本 0），旧会话保持终结态。
+- **红/绿验证**：临时把复用判定里的 `!TERMINAL_SESSION_STATUSES.has(row.status)` 去掉，
+  回归锁立刻以「已终结的绑定必须重新绑定一个新会话」失败；还原后 5/5 ✓。
+- `test/worker.test.ts` 16/16；全量套件见本轮门禁结果。
+
+### 残留（明确记录）
+
+两个入口的**事务外尾段**（签发租约；控制台再新建 dsh 会话，Agent 路径只把行推到 `active`）
+仍是各自实现——它们的事务边界本就不同（一个要 `ctx.agents.create`，一个不能），
+强行统一会把「不新建会话」这条安全语义搅浑。行内已写清理由。

@@ -214,4 +214,61 @@ describe('集成：openTask 幂等恢复（真实 PostgreSQL）', {
       await plugin.dispose();
     }
   });
+
+  it('绑定会话已终结：重新绑定而不是复用死会话（C5 回归锁）', async () => {
+    // 修复前的形态：`openTask` 的复用判定不看绑定会话是否已终结，于是把一个**已关闭**
+    // 的 intake 会话当成「可复用」返回（`resumed: true`），调用方随后拿着它去驱动对话；
+    // 而同一个状态在 `bootstrapIntake` 里是「重新绑定」这条恢复路径——两份状态机分叉。
+    //
+    // 现在两条入口共用 `#stageIntake`：终结的绑定一律重新绑定（同一作业、同一能力边界）。
+    const { plugin } = composed();
+    const key = `dead-binding-${randomUUID()}`;
+    try {
+      const first = await openAndTrack(plugin, key);
+      assert.equal(first.resumed, false);
+
+      // 模拟真实收尾：intake 会话被关闭（或被启动对账判为中断），而它的租约仍在有效期内。
+      await client.query(
+        `update pentest.worker_sessions set status = 'closed', ended_at = now() where id = $1::uuid`,
+        [first.workerSessionId],
+      );
+
+      const second = await openAndTrack(plugin, key);
+      assert.equal(second.engagementId, first.engagementId, '同一个客户端键仍然收敛到同一个作业');
+      assert.notEqual(
+        second.workerSessionId,
+        first.workerSessionId,
+        '已终结的绑定必须重新绑定一个新会话，而不是把它当成可复用返回',
+      );
+      assert.equal(second.resumed, false, '重新绑定走 staging 路径（不是「恢复」）');
+
+      // 新会话必须真的**可用**：仍是 intake、范围版本 0（能力边界未变），且被登记为该作业的活动会话。
+      const bound = await client.query<{
+        session_kind: string;
+        scope_version: number;
+        status: string;
+        active_agent_session_id: string | null;
+      }>(
+        `select ws.session_kind, ws.scope_version, ws.status, e.active_agent_session_id
+           from pentest.worker_sessions ws
+           join pentest.engagements e on e.id = ws.engagement_id
+          where ws.id = $1::uuid`,
+        [second.workerSessionId],
+      );
+      const row = bound.rows[0];
+      assert.equal(row?.session_kind, 'intake');
+      assert.equal(row?.scope_version, 0, 'intake 不得带范围版本（确认前没有授权）');
+      assert.notEqual(row?.status, 'closed', '返回的会话不得是终结态');
+      assert.equal(row?.active_agent_session_id, second.workerSessionId, '必须登记为作业的活动会话');
+
+      // 旧会话保持终结态，不会被「复活」。
+      const old = await client.query<{ status: string }>(
+        'select status from pentest.worker_sessions where id = $1::uuid',
+        [first.workerSessionId],
+      );
+      assert.equal(old.rows[0]?.status, 'closed');
+    } finally {
+      await plugin.dispose();
+    }
+  });
 });
