@@ -523,3 +523,37 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 
 - `admit` 的**有副作用尾段**（放行创建/自放行/凭证校验、计划装配、审计落账）仍是顺序代码：它是 effectful 的，无法套用「只读闸门」这一形状。若要继续阶段化，需要另一套契约（`effectful stage`：可写、可短路，且失败语义是「拒绝 + 已写内容如何处理」）——那是一次独立设计，不建议顺手做。
 - 报告 P2 的其余架构项（C3 WorkerSessionContext / C5 intake staging / C6 死码 等）未动。
+
+---
+
+## 附十一：C6 死码清理（2026-10-05，续）
+
+### 删除清单（每个都是「仅声明处出现一次」＝零消费者）
+
+| 符号 | 处置与理由 |
+|---|---|
+| `agents/capability.ts`：`freezeCapabilities`、`checkCapability`、`assertSubset`、`hashSnapshot`、`CapabilityFreezeError`、`CapabilitySnapshot`、`ModelRoute` | **整个文件删除**。能力冻结实际由 `dsh-session-factory` 实现（`pentest:capability-freeze` 段），这个文件是**未接线的重复**——留着它的代价不是几行代码，而是「能力在这里冻结」的错误信号：接线的人会改错地方。文件里唯一有消费者的 `canonicalJson` 移到 `src/canonical.ts`（见下）。 |
+| `client/hooks.ts`：`useToggle`、`usePolling` | 删除。保留一句说明（轮询不是主要机制：主要靠人类操作后的刷新与 Host 推送），防止再引入一个没人挂的「有轮询」钩子。 |
+| `memory/ledger.ts`：`createMemoryLedger` | 删除。装配点直接用 `MemoryLedger` 类；工厂注释自称「装配点只依赖契约接口」，而契约接口是 `MemoryLedgerService`——类本身即实现。 |
+| `tools/guard.ts`：`toToolError` | 删除。守卫只返回**决策**（allow/deny + 码），翻译成模型可见的工具错误在调用方（§16.5 的落点不在守卫里）——留着它会让人以为拒绝路径已经接好。 |
+| `compose.ts`：`describeComposition` | 删除。诊断输出无人调用；它还顺手构造了一个预算实例（调用即产生副作用），而「装配了什么」应当由 `verify:` 脚本与运行时指标回答。 |
+
+### 顺带消除一处**真重复**（复核把它列为 presumptive blocker 的同一类）
+
+`agents/capability.ts` 的 `canonicalJson` 与 `workflow/handoff.ts` 上一轮新增的 `canonicalJsonForHash` 是**同一个函数**（递归按键排序 + 值保真）。合并为 `src/canonical.ts`，两处调用点改为引用它；模块文档里写清三个变体的分工：
+
+| 变体 | 用途 | 差异 |
+|---|---|---|
+| `src/canonical.ts` 的 `canonicalJson` | 内容哈希（技能正文、交接包、草稿） | 容错：`Date`/类实例按普通对象处理，`undefined` 按 `JSON.stringify` 语义 |
+| `memory/hash.ts` 的 `canonicalize` | 账本事件哈希与批次签名（§9.5） | **严格拒绝**异形值——它防的是伪造，静默丢弃等于给哈希开洞 |
+| `console/rpc.ts` 的私有 `canonicalJson(value, path, seen)` | RPC 信封参数校验 | 需要循环引用检测与出错路径诊断 |
+
+### 度量
+
+- 删除 **8 个导出 + 1 个文件**；`src/` 行数净减（capability.ts 141 行 → 0，新增 canonical.ts 55 行）。
+- 零行为变化：**`test/` 零改动**、lint 与 typecheck 零改动通过（删掉的符号连测试都没有引用——这正是「真死导出」的定义）。
+
+### 未动（明确记录）
+
+- `consumeApproval`：复核特别标注**不要删**（契约面且被测试直接引用）。
+- 报告提到的「328 个导出但在自身文件外无引用」的类型/常量：其中一部分是**刻意的词汇表**（契约类型、稳定码表），删它们要逐个判断语义，不属于「零风险」范畴，本轮不动。

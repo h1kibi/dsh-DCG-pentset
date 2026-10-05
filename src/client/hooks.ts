@@ -13,7 +13,7 @@
  * 因此这里可以放心直传。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ConsoleController, ConsoleSnapshot } from './controller.ts';
 
 /** 订阅控制台快照。 */
@@ -55,43 +55,10 @@ export function useInitialLoad(load: () => Promise<void>): { readonly error: str
 }
 
 /**
- * 本地纯展示状态：展开项、跟随开关这类。
+ * 周期刷新（本文件的其它 hook）：
  *
- * 刻意**不放进控制器**（§6.2.3：客户端不持有权威状态）。这类状态只影响渲染，
- * 与 Host 的事实无关，放在组件里最直接。
+ * 控制台需要跟上一个正在工作的 Agent，但**轮询不是主要机制**：主要机制是人类操作后的刷新
+ * （控制器在写操作后自动重读）与 Host 推送。此前这里还有一个 `usePolling` 兜底 hook——
+ * 它没有被任何界面挂上（零调用），只留着一个「有轮询」的印象，2026-10-05 复核 C6 删除。
+ * 真要兜底轮询时再按需引入：那时它必须带上「enabled 为 false 不起定时器」的语义。
  */
-export function useToggle(initial = false): {
-  readonly value: boolean;
-  readonly toggle: () => void;
-  readonly set: (next: boolean) => void;
-} {
-  const [value, set] = useState(initial);
-  const toggle = useCallback(() => { set((v) => !v); }, []);
-  return useMemo(() => ({ value, toggle, set }), [value, toggle]);
-}
-
-/**
- * 周期性刷新。
- *
- * 控制台需要跟上一个正在工作的 Agent——但**不用轮询作为主要机制**：
- * 主要机制是人类操作后的刷新（控制器在写操作后自动重读）。这个 hook 是兜底，
- * 用于「Agent 自己在跑、人类只是在看」的场景。
- *
- * `enabled` 为 false 时不起定时器：等待人工判断的状态不会自己变化，
- * 那时轮询只是白费请求。
- */
-export function usePolling(load: () => Promise<void>, intervalMs: number, enabled: boolean): void {
-  const loadRef = useRef(load);
-  loadRef.current = load;
-
-  useEffect(() => {
-    if (!enabled || intervalMs <= 0) return undefined;
-    const handle = setInterval(() => {
-      // 失败不打断轮询：一次网络抖动不该让界面停止更新
-      void loadRef.current().catch(() => undefined);
-    }, intervalMs);
-    return () => {
-      clearInterval(handle);
-    };
-  }, [intervalMs, enabled]);
-}

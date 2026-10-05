@@ -81,7 +81,7 @@ import {
   reconcileEngagement,
 } from './workflow/reconcile.ts';
 import type { SessionReconciliationInput, EngagementReconciliation } from './workflow/reconcile.ts';
-import { ConsoleRpc, CONSOLE_RPC_METHODS } from './console/rpc.ts';
+import { ConsoleRpc } from './console/rpc.ts';
 import type { ConsoleServices } from './console/rpc.ts';
 import { PgDiagnosticsService } from './console/diagnostics.ts';
 import { PgReportService } from './report/pg-report.ts';
@@ -99,7 +99,6 @@ import type {
   HumanWorkflowService,
   ValidatedApprovalPlan,
 } from './contracts.ts';
-import { EXEC_TOOL_NAME } from './contracts.ts';
 import type { ExecutionService, PolicyService, ToolError } from './contracts.ts';
 import type { WorkerToolDeps } from './tools/worker.ts';
 
@@ -1852,27 +1851,4 @@ function pendingWarningKeys(
       await pool.end();
     },
   };
-}
-
-/**
- * 便于诊断：报告装配了哪些件。
- *
- * 有用的原因是「装配了什么」与「能用什么」容易混：本插件有若干可选依赖
- * （dsh-budget 端口、DNS 裁决钩子、对账探测），缺了它们组件仍在但能力降级。
- * 这条输出让人一眼看出当前实例的真实能力面。
- */
-export function describeComposition(plugin?: ComposedPlugin): string {
-  const parts = [
-    `目标类工具 ${EXEC_TOOL_NAME}`,
-    '写路径独占连接',
-    '读路径连接池',
-  ];
-  if (plugin !== undefined) {
-    // 从方法表取数而不是硬编码：端点数会变，硬编码的描述迟早说谎
-    parts.push(`控制台端点 ${String(CONSOLE_RPC_METHODS.length)}`);
-    parts.push(plugin.createBudget({ dshSessionId: 'diagnostic', limits: { maxTokens: 0, maxSteps: 0, maxSeconds: 0 }, startedAt: new Date() }) === null
-      ? '预算：不可用（未接 dsh-budget）'
-      : '预算：可用');
-  }
-  return `dsh-pentest 组合：${parts.join('；')}`;
 }

@@ -60,7 +60,7 @@
  * 不持有连接池。
  */
 
-import { canonicalJson } from '../agents/capability.ts';
+import { canonicalJson } from '../canonical.ts';
 import type {
   ErrorCode,
   MemoryLedgerService,

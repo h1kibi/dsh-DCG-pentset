@@ -909,8 +909,3 @@ export class MemoryLedger implements MemoryLedgerService, TransactionalLedger {
   }
 }
 
-
-/** 工厂：装配点只依赖契约接口。 */
-export function createMemoryLedger(options: LedgerOptions): MemoryLedger {
-  return new MemoryLedger(options);
-}

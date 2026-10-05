@@ -41,7 +41,7 @@
  * 无法穷举成放行清单——只能按「已知危险」拒绝。
  */
 
-import type { ErrorCode, ToolError } from '../contracts.ts';
+import type { ErrorCode } from '../contracts.ts';
 
 /** 工具的分类，决定它是否可绕过执行服务。 */
 export type ToolKind =
@@ -95,16 +95,6 @@ export type GuardDecision =
 /** 构造拒绝结果，附带稳定错误码。 */
 export function deny(code: ErrorCode, reason: string): GuardDecision {
   return { kind: 'deny', code, reason };
-}
-
-/** 把拒绝决策转成模型可见的工具错误载荷（§16.5）。 */
-export function toToolError(d: Extract<GuardDecision, { kind: 'deny' }>): ToolError {
-  return {
-    status: 'blocked',
-    code: d.code,
-    message: d.reason,
-    next_action: '不要重试相同调用；如需执行该动作，请改用 pentest_exec 并按其流程申请',
-  };
 }
 
 /**
