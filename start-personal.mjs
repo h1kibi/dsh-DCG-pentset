@@ -4,7 +4,7 @@
  * 先验证 Docker 沙箱和个人数据库确实可用，再启动 dsh。启动成功的定义是：
  * dsh 输出带 token 的 URL，且该 URL 返回可读的 HTTP 页面；仅有子进程并不算就绪。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -268,6 +268,57 @@ async function checkDatabaseRole(database) {
   }
 }
 
+/**
+ * 迁移新鲜度检查 + 自动应用。
+ *
+ * **为什么必须在这里**（2026-10-05 实测事故）：profile 刻意设 `migrateOnStartup: false`
+ * （运行进程不承担 DDL），于是「升级插件后忘了跑迁移」的表现是——
+ * 前置检查全过、服务正常起来，直到某个动作读到新列才炸：
+ * `column "skill_freeze" of relation "worker_sessions" does not exist`
+ * （用户视角是「渗透通道被后端 schema 错误堵死」）。
+ *
+ * 本脚本是**管理员工具**（人类显式运行、只做预检与启动），DDL 放这里正合 profile 的立场：
+ * 检测到未应用迁移就按 RUNBOOK §1 的同一条命令应用，并把子进程输出原样打印。
+ */
+async function applyPendingMigrations(database) {
+  let Pool;
+  ({ Pool } = await import('pg'));
+  const files = readdirSync('src/db/migrations')
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  const pool = new Pool({ connectionString: database.url, connectionTimeoutMillis: 3_000, max: 1 });
+  let pending;
+  try {
+    const applied = new Set(
+      (await pool.query('select filename from pentest.schema_migrations')).rows.map((r) => r.filename),
+    );
+    pending = files.filter((f) => !applied.has(f));
+  } finally {
+    await pool.end().catch(() => {});
+  }
+  if (pending.length === 0) {
+    console.log(`数据库迁移已是最新（${files.length} 个）`);
+    return;
+  }
+  console.log(`检测到 ${pending.length} 个未应用迁移：${pending.join('、')}`);
+  console.log('按管理员步骤应用（运行进程不承担 DDL，见 profile 的 migrateOnStartup: false）…');
+  const script = [
+    "const {migrate}=await import('./src/db/migrate.ts');",
+    "const r=await migrate({connectionString:process.env.PENTEST_DATABASE_URL,log:(m)=>console.log('  '+m)});",
+    "console.log('  applied='+r.appliedFiles.length+' databaseVersion='+r.databaseVersion+' codeVersion='+r.codeVersion);",
+  ].join(' ');
+  const result = run(process.execPath, ['--experimental-strip-types', '-e', script], {
+    cwd: process.cwd(),
+    env: { ...process.env, PENTEST_DATABASE_URL: database.url },
+  });
+  if (result.stdout.trim() !== '') console.log(result.stdout.trimEnd());
+  if (!result.ok) {
+    throw new Error(
+      `迁移应用失败（exit ${String(result.status)}）：${(result.stderr || result.error?.message || '').trim().slice(0, 400)}`,
+    );
+  }
+}
+
 async function checkDatabaseSchema(database) {
   let Pool;
   ({ Pool } = await import('pg'));
@@ -419,6 +470,7 @@ if (sandbox && failures.length === 0) {
     const database = await checkDatabase();
     await checkDatabaseRole(database);
     await checkDatabaseSchema(database);
+    await applyPendingMigrations(database);
     console.log(`前置检查通过：Docker、${network}、${proxy}、工具镜像摘要、个人数据库 ${database.name}`);
     process.env.PENTEST_DATABASE_URL = database.url;
   } catch (error) {

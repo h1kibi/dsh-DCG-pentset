@@ -1070,3 +1070,53 @@
 - 六个改进阶段（端口外迁 / 词汇单源 / 类型化包装 / 文档去重 / 导出收窄 / 接线）在**真机**上没有引入可观察回归：
   加载、渲染、读、写（建/归档/清空）与审计留痕全部正常。
 - 留痕：一次性作业 `smoke-live-069717`（已归档 + 已清空，审计 15 行保留）留在个人库中——按设计，purge **不删**账本行与作业行；如需彻底移除需人工处理（不在代码路径内）。
+
+---
+
+## 附录 N：事故与修复（2026-10-05 晚）——「渗透通道被后端 schema 错误堵死」
+
+> 用户报障（原文）：**「渗透通道当前被后端 schema 错误堵死（`worker_sessions.skill_freeze` 列不存在），我无法建立作业、也无法做任何目标动作。」**
+
+### N.1 根因（已定位，非代码缺陷）
+
+- 仓库里**有**迁移 `026_skill_freeze.sql`，代码也如期读写 `worker_sessions.skill_freeze`
+  （读：`memory/pg-worker-tools.ts:392`；写：`workflow/core.ts:1288`）；
+- 但**个人库 `pentest_personal` 落后 2 个迁移**：`025_approval_revocable.sql`、`026_skill_freeze.sql`（实测：`schema_migrations` 24/26）；
+- 个人 profile 刻意设 `migrateOnStartup: false`（「运行进程不承担 DDL」）→ RUNBOOK §1 要求**升级插件后由管理员先跑一次迁移**，这一步被漏掉；
+- 表现即用户看到的那句：前置检查全过、服务正常起来，直到某个动作读到新列才炸。
+
+**放大原因**：`start-personal.mjs` 的 `checkDatabaseSchema` 只检查**表/扩展是否存在**，不检查**迁移新鲜度** → 所以预检说「通过」而运行期报错。
+
+### N.2 修复（当场）
+
+1. 按 RUNBOOK §1 的管理员命令把两个迁移应用到 `pentest_personal`：
+   `appliedFiles: ["025_approval_revocable.sql","026_skill_freeze.sql"]`；`schema_migrations` → **26/26**；
+2. `skill_freeze` 列已存在（`jsonb NOT NULL DEFAULT '[]'`），**用户报错时的那条查询已能跑通**（返回真实会话行）；
+3. 重启 harness。
+
+### N.3 预防（代码改动，`start-personal.mjs`）
+
+新增 `applyPendingMigrations(database)` 并接进预检链（在 `checkDatabaseSchema` 之后）：
+比对 `src/db/migrations/*.sql` 与 `pentest.schema_migrations`，**发现未应用即按 RUNBOOK §1 的同一条命令自动应用**
+（本脚本是管理员工具，DDL 放这里正合 profile 的立场），失败则以明确错误中止启动。
+重启实测输出：**`数据库迁移已是最新（26 个）`** → `前置检查通过` ✓。
+
+> 这条预防直接消灭了「忘记跑迁移」这一整类故障：以后升级插件后直接 `node start-personal.mjs` 即可，
+> 不会再出现「预检通过、运行期 `column ... does not exist`」。
+
+### N.4 真机验证（修复后，只读 + 一条自发的真实写入）
+
+| 检查 | 证据 |
+|---|---|
+| 列/迁移 | `worker_sessions.skill_freeze` 存在 ✓；`schema_migrations` 26/26 ✓；报错时的 select 成功 ✓ |
+| 控制台功能 | 打开渗透作业面板：**无 schema 错误**（`does not exist` 零命中）✓ |
+| **真实写入**（关键） | 打开控制台时插件按「会话即 intake」自动建立草稿作业（`未命名任务 web-17910066`，16:45:52）→ DB 里该作业**有 1 行 `worker_sessions`**（kind=intake、status=active），其 **`skill_freeze = {"model":"deepseek-flash","provider":"deepseek-official","reasoningEffort":"high"}`** ✓✓ ——**正是报错时失败的那条写路径** |
+
+### N.5 两个待用户确认的旁证（不是本次修复的一部分）
+
+1. **归档数变化**：列表现在是「共 25 个 / 显示已归档（24）」，而我两次会话之间归档数由 **21 → 24**。
+   其中 1 个是我的一次性作业（`smoke-live-069717`）；**另外 2 个不是我操作的**（我唯一一次「归档」点击是
+   精确匹配 `smoke-live-` 行的按钮）。请确认是否为你自己的操作。
+2. **profile 配置**：插件启动仍告警 `config.runtime.recovery 不生效：recovery 是插件配置的顶层字段`
+   → 个人环境里的**启动对账（§15.2）被静默关掉**。修法：把 profile 的 `recovery:` 段从 `runtime:` 下提到顶层
+   （属你的部署文件，未擅自改）。
