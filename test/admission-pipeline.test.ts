@@ -28,15 +28,30 @@ import {
   engagementHaltGate,
   leaseGate,
   paramsGate,
+  planHashGate,
+  planPolicyGate,
+  planSessionGate,
+  planTemplateGate,
   purposeGate,
+  REVALIDATION_GATE_ORDER,
+  RevalidationState,
   runAdmissionGates,
+  runRevalidationGates,
   scopeGate,
   authorizationGate,
   templateGate,
   type AdmissionPorts,
+  type RevalidationPorts,
 } from '../src/execution/admission.ts';
 import { defaultRegistry } from '../src/execution/templates.ts';
-import type { ActionIntent, NormalizedTarget, ScopeVerdict, SessionLease } from '../src/contracts.ts';
+import { derivePlanHash } from '../src/execution/idempotency.ts';
+import type {
+  ActionIntent,
+  ExecutionPlan,
+  NormalizedTarget,
+  ScopeVerdict,
+  SessionLease,
+} from '../src/contracts.ts';
 import type { SessionBinding } from '../src/execution/service.ts';
 
 // ───────────────────────────── 夹具 ─────────────────────────────
@@ -323,5 +338,125 @@ describe('闸门可独立测试（每道闸门只依赖状态）', () => {
     assert.equal(st.purpose, '确认目标可达性');
     assert.deepEqual(st.resolvedAddresses, ['10.0.0.5']);
     assert.equal(st.requireBinding().engagementId, 'e1');
+  });
+});
+
+// ───────────────────────────── 执行前复核（plan 形态） ─────────────────────────────
+
+describe('执行前复核闸门（结构）', () => {
+  function plan(over: Partial<ExecutionPlan> = {}): ExecutionPlan {
+    const base: ExecutionPlan = {
+      workerSessionId: 'w1',
+      templateId: TEMPLATE_ID,
+      actionClass: ACTION_CLASS,
+      normalizedTarget: 'ip://10.0.0.5',
+      resolvedAddresses: ['10.0.0.5'],
+      normalizedCommand: 'shell_exec target=10.0.0.5 port=80 command_b64=AAAA',
+      planHash: 'hash-1',
+      idempotencyKey: 'key-1',
+      scopeVersion: 1,
+      policyEpoch: 1,
+      policyVersion: 1,
+      pacing: null,
+      leaseGeneration: 1,
+      approvalId: null,
+      timeoutMs: 30_000,
+      maxOutputBytes: 64 * 1024,
+      ...over,
+    };
+    return base;
+  }
+
+  function ports(over: Partial<RevalidationPorts> = {}): RevalidationPorts {
+    return {
+      registry: defaultRegistry(),
+      policy: {
+        async validateExecution() {
+          return { ok: true } as const;
+        },
+      },
+      sessions: {
+        async binding() {
+          return binding();
+        },
+      },
+      ...over,
+    };
+  }
+
+  function rstate(over: {
+    readonly plan?: Partial<ExecutionPlan>;
+    readonly ports?: RevalidationPorts;
+  } = {}): RevalidationState {
+    return new RevalidationState({
+      plan: plan(over.plan ?? {}),
+      now: new Date('2026-10-05T00:00:00Z'),
+      ports: over.ports ?? ports(),
+    });
+  }
+
+  test('复核顺序：先答「形状」（模板/摘要），再答「策略」，最后答「时序」（会话/租约/版本）', () => {
+    assert.deepEqual(REVALIDATION_GATE_ORDER, [
+      'plan_template_registered',
+      'plan_hash_intact',
+      'plan_policy_valid',
+      'plan_session_bound',
+      'plan_engagement_running',
+      'plan_lease_valid',
+      'plan_scope_version_current',
+      'plan_policy_epoch_current',
+    ]);
+    assert.equal(new Set(REVALIDATION_GATE_ORDER).size, REVALIDATION_GATE_ORDER.length, '名字不得重复');
+  });
+
+  test('受理与复核共用同一个短路运行器（第一个非 pass 胜出）', async () => {
+    const st = rstate({ plan: { templateId: 'gone' } });
+    const verdict = await runRevalidationGates(st);
+    assert.equal(verdict.kind === 'rejected' ? verdict.gate : '', 'plan_template_registered');
+    // 模板不存在 → 后面的闸门（含读 binding 的那些）不得执行：状态访问器会抛错，这里不抛即证明短路。
+  });
+
+  test('plan_hash_intact：计划被改动即使 code=stale_state_version', async () => {
+    const st = rstate();
+    await planTemplateGate.check(st);
+    const verdict = await runRevalidationGates(st);
+    assert.equal(verdict.kind === 'rejected' ? verdict.gate : '', 'plan_hash_intact');
+    assert.equal(verdict.kind === 'rejected' ? verdict.error.code : '', 'stale_state_version');
+  });
+
+  test('plan_session_bound：没有会话绑定即拒绝，且状态记下「已解析为缺失」', async () => {
+    const st = rstate({
+      plan: { planHash: derivePlanHash({ ...plan(), policyVersion: 1, pacing: null }) },
+      ports: ports({
+        sessions: {
+          async binding() {
+            return undefined;
+          },
+        },
+      }),
+    });
+    await planTemplateGate.check(st);
+    await planHashGate.check(st);
+    await planPolicyGate.check(st);
+    const outcome = await planSessionGate.check(st);
+    assert.equal(outcome.kind === 'rejected' ? outcome.error.code : '', 'lease_required');
+    assert.equal(st.bindingOrUndefined, undefined, '已解析为「没有绑定」');
+    assert.throws(() => st.binding, /会话绑定不存在/);
+  });
+
+  test('plan_scope_version_current / plan_policy_epoch_current：都映射到 stale_state_version', async () => {
+    for (const [over, gateName] of [
+      [{ scopeVersion: 2 }, 'plan_scope_version_current'],
+      [{ policyEpoch: 2 }, 'plan_policy_epoch_current'],
+    ] as const) {
+      const st = rstate({
+        plan: { planHash: derivePlanHash({ ...plan(), ...over, policyVersion: 1, pacing: null }), ...over },
+      });
+      const verdict = await runRevalidationGates(st);
+      assert.equal(verdict.kind === 'rejected' ? verdict.gate : '', gateName);
+      assert.equal(verdict.kind === 'rejected' ? verdict.error.code : '', 'stale_state_version');
+      // 复核失败的消息统一带前缀，便于与受理路径的拒绝区分。
+      assert.match(verdict.kind === 'rejected' ? verdict.error.message : '', /执行前复核失败/);
+    }
   });
 });

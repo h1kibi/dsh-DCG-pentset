@@ -29,6 +29,7 @@ import type {
   ActionClass,
   ActionIntent,
   ErrorCode,
+  ExecutionPlan,
   PolicyService,
   ScopeRejectionCode,
   ScopeVerdict,
@@ -39,6 +40,7 @@ import type {
 // `workflow/core.ts` 的数据库对账读的是同一个集合，这里若再 filter 一份就会漂移，
 // 而漂移的后果是「某种终态会话仍能提交动作」这类静默越权。
 import { TERMINAL_SESSION_STATUSES } from '../contracts.ts';
+import { derivePlanHash } from './idempotency.ts';
 import { executionGateForAudit } from '../workflow/reconcile.ts';
 import {
   portForScope,
@@ -188,11 +190,15 @@ export type GateOutcome =
       readonly gateFailure?: AdmissionGateFailure;
     };
 
-export interface AdmissionGate {
+/** 闸门形状（受理与执行前复核共用同一套短路语义）。 */
+export interface Gate<State> {
   /** 具名：审计与测试里用名字指认「是哪一道闸门拒的」。 */
   readonly name: string;
-  readonly check: (state: AdmissionState) => Promise<GateOutcome>;
+  readonly check: (state: State) => Promise<GateOutcome>;
 }
+
+/** 受理闸门：读 {@link AdmissionState}（intent 形态）。 */
+export type AdmissionGate = Gate<AdmissionState>;
 
 /** 闸门读取依赖的最小端口面（只读）。 */
 export interface AdmissionPorts {
@@ -622,10 +628,13 @@ export type PipelineVerdict =
  *
  * 短路是语义的一部分，不是优化：闸门顺序承载 §10.2 的优先级
  * （例如「模板未注册」必须先于「缺租约」报出），因此不允许「全部跑一遍再挑一个」。
+ *
+ * 受理与执行前复核共用这一个运行器——两处的短路语义必须是同一套，否则
+ * 「先报哪个拒绝」会在两条路径上分叉，而拒绝码的顺序本身就是验收判据。
  */
-export async function runAdmissionGates(
-  state: AdmissionState,
-  gates: readonly AdmissionGate[] = ADMISSION_GATES,
+export async function runGates<State>(
+  state: State,
+  gates: readonly Gate<State>[],
 ): Promise<PipelineVerdict> {
   for (const gate of gates) {
     const outcome = await gate.check(state);
@@ -636,4 +645,233 @@ export async function runAdmissionGates(
     }
   }
   return { kind: 'passed' };
+}
+
+/** 受理管线（intent 形态）。 */
+export function runAdmissionGates(
+  state: AdmissionState,
+  gates: readonly AdmissionGate[] = ADMISSION_GATES,
+): Promise<PipelineVerdict> {
+  return runGates(state, gates);
+}
+
+// ───────────────────────────── 执行前复核（plan 形态） ─────────────────────────────
+
+/**
+ * 执行前复核的端口面（只读）。
+ *
+ * 为什么单独一组闸门而不是复用受理那组：受理读的是**意图**（`ActionIntent`：模板 + 参数 +
+ * 目标选择器），复核读的是**计划**（`ExecutionPlan`：已归一化的命令、摘要、冻结的版本号）。
+ * 两者的判据形状不同——把意图形态的端口硬塞进计划形态的上下文里，只会让每道闸门都
+ * 多一层「计划里没有这个字段」的分支。
+ *
+ * 两处**共用**的是：短路语义（{@link runGates}）、会话级校验
+ * （{@link engagementViolation} / {@link leaseViolation}，同一份实现）、拒绝码与措辞风格
+ * （复核路径的错误消息统一以「执行前复核失败：」开头，便于与受理路径区分）。
+ */
+export interface RevalidationPorts {
+  readonly registry: Pick<TemplateRegistry, 'get'>;
+  readonly policy: Pick<PolicyService, 'validateExecution'>;
+  readonly sessions: { binding(workerSessionId: string): Promise<SessionBinding | undefined> };
+}
+
+/** 执行前复核的状态（plan 形态）。 */
+export class RevalidationState {
+  readonly plan: ExecutionPlan;
+  readonly now: Date;
+  readonly ports: RevalidationPorts;
+
+  #binding?: SessionBinding;
+  #bindingResolved = false;
+
+  constructor(input: {
+    readonly plan: ExecutionPlan;
+    readonly now: Date;
+    readonly ports: RevalidationPorts;
+  }) {
+    this.plan = input.plan;
+    this.now = input.now;
+    this.ports = input.ports;
+  }
+
+  /** 会话绑定**可能真的不存在**（这是拒绝路径之一），因此需要「已解析」标记。 */
+  resolveBinding(binding: SessionBinding | undefined): void {
+    this.#binding = binding;
+    this.#bindingResolved = true;
+  }
+
+  /** 已解析的绑定（可能为 undefined）。 */
+  get bindingOrUndefined(): SessionBinding | undefined {
+    if (!this.#bindingResolved) {
+      throw new Error('执行前复核闸门顺序被破坏：binding 尚未解析。顺序见 REVALIDATION_GATES。');
+    }
+    return this.#binding;
+  }
+
+  /** 存在的绑定（`plan_session_bound` 之后可用）。 */
+  get binding(): SessionBinding {
+    const binding = this.bindingOrUndefined;
+    if (binding === undefined) {
+      throw new Error('执行前复核闸门顺序被破坏：会话绑定不存在，后续闸门不得读取它。');
+    }
+    return binding;
+  }
+}
+
+/** 复核闸门（plan 形态）。 */
+export type RevalidationGate = Gate<RevalidationState>;
+
+/**
+ * 1. 模板仍在注册表中。
+ *
+ * 受理与执行之间可能隔很久（人类在放行队列前停留、命令排队），而注册表由人工维护——
+ * 模板被撤下之后，那份已批准的计划不该再执行。
+ */
+export const planTemplateGate: RevalidationGate = {
+  name: 'plan_template_registered',
+  async check(state) {
+    if (state.ports.registry.get(state.plan.templateId) !== undefined) return pass();
+    return reject(
+      blocked(
+        'classification_rejected',
+        `执行前复核失败：动作模板 ${state.plan.templateId} 已不在注册表中`,
+        '重新构造计划',
+      ),
+    );
+  },
+};
+
+/**
+ * 2. 计划摘要仍然成立（计划没被改动过）。
+ *
+ * 复核必须使用计划里**携带的**策略元数据（缺失即视为无策略版本/无 pacing），
+ * 而不是重新读一遍会话策略：复核对的是「人类批准的那份计划有没有被动过」。
+ */
+export const planHashGate: RevalidationGate = {
+  name: 'plan_hash_intact',
+  async check(state) {
+    const plan = state.plan;
+    const recomputed = derivePlanHash({
+      ...plan,
+      policyVersion: plan.policyVersion ?? null,
+      pacing: plan.pacing ?? null,
+    });
+    if (recomputed === plan.planHash) return pass();
+    return reject(
+      blocked(
+        'stale_state_version',
+        '执行前复核失败：计划内容与计划摘要不一致（计划被改动）',
+        '重新走 admit 生成计划',
+      ),
+    );
+  },
+};
+
+/** 3. 策略复核：授权有效期、策略 epoch、范围版本等由策略服务在**执行时刻**再看一遍。 */
+export const planPolicyGate: RevalidationGate = {
+  name: 'plan_policy_valid',
+  async check(state) {
+    const verdict = await state.ports.policy.validateExecution(state.plan);
+    return verdict.ok ? pass() : reject(verdict.error);
+  },
+};
+
+/** 4. 会话绑定存在（复核路径逐项取，因此这里也自己读一次）。 */
+export const planSessionGate: RevalidationGate = {
+  name: 'plan_session_bound',
+  async check(state) {
+    const binding = await state.ports.sessions.binding(state.plan.workerSessionId);
+    state.resolveBinding(binding);
+    if (binding !== undefined) return pass();
+    return reject(
+      blocked(
+        'lease_required',
+        `执行前复核失败：会话 ${state.plan.workerSessionId} 没有会话绑定`,
+        '重新申请会话与放行凭证',
+      ),
+    );
+  },
+};
+
+/** 5. engagement 仍在运行（停机时租约是否有效不是重点——先报「整个作业停了」）。 */
+export const planEngagementGate: RevalidationGate = {
+  name: 'plan_engagement_running',
+  async check(state) {
+    const violation = engagementViolation(state.binding, state.plan.workerSessionId);
+    return violation === undefined ? pass() : reject(violation);
+  },
+};
+
+/** 6. 租约有效且世代未前进（计划里冻结的世代是判据）。 */
+export const planLeaseGate: RevalidationGate = {
+  name: 'plan_lease_valid',
+  async check(state) {
+    const violation = leaseViolation(
+      state.binding,
+      state.plan.leaseGeneration,
+      state.now,
+      state.plan.workerSessionId,
+    );
+    return violation === undefined ? pass() : reject(violation);
+  },
+};
+
+/** 7. 范围版本未变化：范围修订后旧凭证与旧计划失效。 */
+export const planScopeVersionGate: RevalidationGate = {
+  name: 'plan_scope_version_current',
+  async check(state) {
+    const current = state.binding.scopeVersion;
+    if (current === state.plan.scopeVersion) return pass();
+    return reject(
+      blocked(
+        'stale_state_version',
+        `执行前复核失败：会话绑定的范围版本已变化（计划 ${state.plan.scopeVersion}，当前 ${current}）`,
+        '范围修订后旧凭证与旧计划失效，重新申请放行',
+      ),
+    );
+  },
+};
+
+/** 8. 策略 epoch 未前进：策略或范围变更后在途动作必须停止。 */
+export const planPolicyEpochGate: RevalidationGate = {
+  name: 'plan_policy_epoch_current',
+  async check(state) {
+    const current = state.binding.policyEpoch;
+    if (current === state.plan.policyEpoch) return pass();
+    return reject(
+      blocked(
+        'stale_state_version',
+        `执行前复核失败：策略 epoch 已前进（计划 ${state.plan.policyEpoch}，当前 ${current}）`,
+        '策略或范围变更后在途动作必须停止，重新申请放行',
+      ),
+    );
+  },
+};
+
+/**
+ * 执行前复核的闸门顺序（§10.3.1）。
+ *
+ * 顺序承载**诊断价值**：先答「模板还在吗」「计划被改过吗」（形状问题，重构造即可），
+ * 再答「策略还允许吗」「会话/租约还在吗」（时序问题，要重新申请放行）。
+ */
+export const REVALIDATION_GATES: readonly RevalidationGate[] = [
+  planTemplateGate,
+  planHashGate,
+  planPolicyGate,
+  planSessionGate,
+  planEngagementGate,
+  planLeaseGate,
+  planScopeVersionGate,
+  planPolicyEpochGate,
+];
+
+/** 具名顺序表（测试与运维诊断用）。 */
+export const REVALIDATION_GATE_ORDER: readonly string[] = REVALIDATION_GATES.map((gate) => gate.name);
+
+/** 执行前复核管线。 */
+export function runRevalidationGates(
+  state: RevalidationState,
+  gates: readonly RevalidationGate[] = REVALIDATION_GATES,
+): Promise<PipelineVerdict> {
+  return runGates(state, gates);
 }

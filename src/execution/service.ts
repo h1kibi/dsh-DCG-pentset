@@ -56,9 +56,9 @@ import {
 import {
   AdmissionState,
   blocked,
-  engagementViolation,
-  leaseViolation,
+  RevalidationState,
   runAdmissionGates,
+  runRevalidationGates,
 } from './admission.ts';
 import {
   buildDisplayCommand,
@@ -1045,45 +1045,24 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     plan: ExecutionPlan,
     now: Date,
   ): Promise<{ readonly ok: true; readonly binding: SessionBinding } | { readonly ok: false; readonly error: ToolError }> {
-    const policyCheck = await deps.policy.validateExecution(plan);
-    if (!policyCheck.ok) return { ok: false, error: policyCheck.error };
-
-    const binding = await deps.sessions.binding(plan.workerSessionId);
-    if (binding === undefined) {
-      return {
-        ok: false,
-        error: blocked(
-          'lease_required',
-          `执行前复核失败：会话 ${plan.workerSessionId} 没有会话绑定`,
-          '重新申请会话与放行凭证',
-        ),
-      };
-    }
-    const engagementError = engagementViolation(binding, plan.workerSessionId);
-    if (engagementError !== undefined) return { ok: false, error: engagementError };
-    const leaseError = leaseViolation(binding, plan.leaseGeneration, now, plan.workerSessionId);
-    if (leaseError !== undefined) return { ok: false, error: leaseError };
-    if (binding.scopeVersion !== plan.scopeVersion) {
-      return {
-        ok: false,
-        error: blocked(
-          'stale_state_version',
-          `执行前复核失败：会话绑定的范围版本已变化（计划 ${plan.scopeVersion}，当前 ${binding.scopeVersion}）`,
-          '范围修订后旧凭证与旧计划失效，重新申请放行',
-        ),
-      };
-    }
-    if (binding.policyEpoch !== plan.policyEpoch) {
-      return {
-        ok: false,
-        error: blocked(
-          'stale_state_version',
-          `执行前复核失败：策略 epoch 已前进（计划 ${plan.policyEpoch}，当前 ${binding.policyEpoch}）`,
-          '策略或范围变更后在途动作必须停止，重新申请放行',
-        ),
-      };
-    }
-    return { ok: true, binding };
+    // 执行前复核 = 第二组闸门（plan 形态）：模板仍在 → 计划没被改动 → 策略仍允许 →
+    // 会话/租约/版本号仍然一致。顺序与具名见 `admission.ts` 的 `REVALIDATION_GATES`；
+    // 它与受理管线共用短路语义，会话级两项（停机标记、租约）更是**同一份实现**。
+    //
+    // 为什么单独一组而不是复用受理那组：受理读意图（模板 + 参数 + 目标选择器），
+    // 本路径读计划（已归一化命令、摘要、冻结版本号）——判据形状不同。
+    const state = new RevalidationState({
+      plan,
+      now,
+      ports: {
+        registry,
+        policy: deps.policy,
+        sessions: deps.sessions,
+      },
+    });
+    const verdict = await runRevalidationGates(state);
+    if (verdict.kind === 'rejected') return { ok: false, error: verdict.error };
+    return { ok: true, binding: state.binding };
   }
 
   /**
@@ -1108,34 +1087,9 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       return existing.result;
     }
 
-    // B. 执行前重新裁决。
-    if (registry.get(plan.templateId) === undefined) {
-      return {
-        status: 'blocked',
-        error: blocked(
-          'classification_rejected',
-          `执行前复核失败：动作模板 ${plan.templateId} 已不在注册表中`,
-          '重新构造计划',
-        ),
-      };
-    }
-    // 复核必须使用计划里**携带的**策略元数据（缺失即视为无策略版本/无 pacing），
-    // 而不是重新读一遍会话策略：复核对的是「人类批准的那份计划有没有被动过」。
-    const recomputedHash = derivePlanHash({
-      ...plan,
-      policyVersion: plan.policyVersion ?? null,
-      pacing: plan.pacing ?? null,
-    });
-    if (recomputedHash !== plan.planHash) {
-      return {
-        status: 'blocked',
-        error: blocked(
-          'stale_state_version',
-          '执行前复核失败：计划内容与计划摘要不一致（计划被改动）',
-          '重新走 admit 生成计划',
-        ),
-      };
-    }
+    // B. 执行前重新裁决（第二组闸门，plan 形态）：模板仍在注册表中、计划摘要未被改动、
+    // 策略仍允许、会话/租约/范围版本/策略 epoch 仍然一致——全部在
+    // `revalidateBeforeTarget` 里按 `REVALIDATION_GATES` 的顺序判定。
     const preTarget = await revalidateBeforeTarget(plan, now);
     if (!preTarget.ok) return { status: 'blocked', error: preTarget.error };
     const binding = preTarget.binding;

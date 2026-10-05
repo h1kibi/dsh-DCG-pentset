@@ -506,6 +506,20 @@ engagement_running → lease_valid → addresses_adjudicated
 - **`test/execution.test.ts` 零改动、107/107 通过**——这是 C1 的验收判据（闸门语义未变）。
 - 过程记录：两处夹具教训值得留档——① 默认注册表**只剩 `direct_command`**（五个示例模板已随 2026-10-05 清理删除），夹具必须用真实模板与真实 `ActionClass`；② `state({ binding: undefined })` 无法表达「**没有**会话绑定」（`undefined` 是「不覆盖」的默认值），改用 `'binding' in over`。
 
+### 第二组：执行前复核（plan 形态）
+
+同一结构、同一短路运行器（`runGates`），但状态换成 `RevalidationState`（读**计划**而不是意图）：
+
+```
+plan_template_registered → plan_hash_intact → plan_policy_valid → plan_session_bound →
+plan_engagement_running → plan_lease_valid → plan_scope_version_current → plan_policy_epoch_current
+```
+
+- 顺序承载**诊断价值**：先答「形状」（模板还在吗、计划被改过吗——重构造即可），再答「策略还允许吗」，最后答「时序」（会话/租约/版本号——要重新申请放行）。
+- `execute` 里原先内联的两项（模板仍在、计划摘要复算）与 `revalidateBeforeTarget` 的六项合并进这一组；`service.ts` 因此不再直接引用 `engagementViolation` / `leaseViolation`（会话级两项现在**只**经由闸门进入），`blocked` 也只剩装配路径在用。
+- 复核路径的消息统一以「执行前复核失败：」开头，与受理路径的拒绝可区分（测试钉住这一点）。
+
 ### 残留（明确记录）
 
-`execute` 的**计划形态**复核仍是内联代码：计划摘要复算、`policy.validateExecution`、`scopeVersion`/`policyEpoch` 比对——它们读的是 **plan** 而不是 intent，与 intent 形态的闸门不共用状态。已共用的只有会话级两项（停机标记与租约）。要继续阶段化，应引入第二组 plan 形态的复核闸门（`RevalidationGate`），并把「受理时算出的计划」与「执行前复核的计划」的字段对应关系显式写出来。
+- `admit` 的**有副作用尾段**（放行创建/自放行/凭证校验、计划装配、审计落账）仍是顺序代码：它是 effectful 的，无法套用「只读闸门」这一形状。若要继续阶段化，需要另一套契约（`effectful stage`：可写、可短路，且失败语义是「拒绝 + 已写内容如何处理」）——那是一次独立设计，不建议顺手做。
+- 报告 P2 的其余架构项（C3 WorkerSessionContext / C5 intake staging / C6 死码 等）未动。
