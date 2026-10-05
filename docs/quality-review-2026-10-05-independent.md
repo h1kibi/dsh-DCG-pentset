@@ -476,3 +476,36 @@ recomputed = 452a422db96206d98ad598f51938d03605995247ec27bc2e5a968f73ca8cb149
 ### 度量
 
 `test/` 下的 `.catch(() =>` 从 **77+ 处（仅报告点名的 5 个文件）降到 1 处**——那一处就是具名 `detach()`，它描述的是「有意的脱离」，不是吞失败。
+
+---
+
+## 附十：C1 受理闸门阶段化（2026-10-05，续）
+
+### 结构
+
+新增 `src/execution/admission.ts`（639 行，含文档）：**具名、有序、只读**的闸门数组 + 状态 + 运行器。
+
+```
+audit_available → template_registered → params_whitelisted → purpose_present →
+action_class_recomputed → session_bound → authorization_valid → scope_adjudicated →
+engagement_running → lease_valid → addresses_adjudicated
+```
+
+| 设计点 | 落地 |
+|---|---|
+| 顺序即语义 | `ADMISSION_GATES` 的数组顺序；`runAdmissionGates` **短路**（第一个非 pass 胜出）——顺序承载 §10.2 的优先级（「模板未注册」必须早于「缺租约」报出），测试直接断言名字序列 |
+| 只读 | 闸门把「该记什么事件」当**数据**返回（`gateFailure`），写事件留在 `admit`：闸门因此不依赖账本/门铃/控制台是否存在 |
+| 状态传递 | `AdmissionState`：解析器（`resolveSpec`/`resolveScope`…）+ **非可选访问器**；访问器在事实缺失时抛错＝**闸门顺序被破坏**（编程错误），与「输入不合规 → `reject`」严格区分 |
+| 共用 | `engagementViolation` / `leaseViolation` 从 `service.ts` 迁到本模块：受理闸门与 `execute` 的 `revalidateBeforeTarget` 读**同一份实现**（此前是两处各写一遍）。`blocked` / `mapScopeRejection` 一并集中——后者此前虽 `export` 但全仓无消费者，顺手从公开面去掉 |
+
+新增 `test/admission-pipeline.test.ts`（14 用例，无数据库）：顺序与唯一性、短路（拒绝后后续闸门不执行）、访问器守卫，以及**每道闸门单独测**（结论码 + `gateFailure` 数据）。
+
+### 度量与验证
+
+- `src/execution/service.ts` **1724 → 1438 行**；`admit` **~482 → 317 行**（余下部分是**有副作用**的尾段：放行创建/自放行/凭证校验、计划装配、审计落账）。
+- **`test/execution.test.ts` 零改动、107/107 通过**——这是 C1 的验收判据（闸门语义未变）。
+- 过程记录：两处夹具教训值得留档——① 默认注册表**只剩 `direct_command`**（五个示例模板已随 2026-10-05 清理删除），夹具必须用真实模板与真实 `ActionClass`；② `state({ binding: undefined })` 无法表达「**没有**会话绑定」（`undefined` 是「不覆盖」的默认值），改用 `'binding' in over`。
+
+### 残留（明确记录）
+
+`execute` 的**计划形态**复核仍是内联代码：计划摘要复算、`policy.validateExecution`、`scopeVersion`/`policyEpoch` 比对——它们读的是 **plan** 而不是 intent，与 intent 形态的闸门不共用状态。已共用的只有会话级两项（停机标记与租约）。要继续阶段化，应引入第二组 plan 形态的复核闸门（`RevalidationGate`），并把「受理时算出的计划」与「执行前复核的计划」的字段对应关系显式写出来。

@@ -30,13 +30,11 @@ import type {
   AdmissionDecision,
   ApprovalMode,
   ApprovalRecord,
-  ErrorCode,
   ExecutionPlan,
   ExecutionService,
   PolicyService,
-  ScopeRejectionCode,
-  SessionLease,
   RunMarker,
+  SessionLease,
   SessionStatus,
   ToolError,
   ToolRunResult,
@@ -46,35 +44,28 @@ import {
   DEFAULTS,
   DEFAULT_DISABLED_CLASSES,
   EXEC_TOOL_NAME,
-  LIVE_SESSION_STATUSES,
   PER_ACTION_APPROVAL_CLASSES,
-  SESSION_STATUSES,
 } from '../contracts.ts';
 import {
   canonicalTargetString,
   deriveIdempotencyKey,
   derivePlanHash,
 } from './idempotency.ts';
-// 审计闸门的判据只有一份实现（`reconcile.ts` 的 §15.1 判定），执行侧引用它而不是重写。
-import { executionGateForAudit } from '../workflow/reconcile.ts';
+// 受理闸门管线（C1）：具名、有序、只读的阶段数组；会话级校验与错误构造也在那里，
+// 由受理与执行前复核共用（不再各写一份）。
+import {
+  AdmissionState,
+  blocked,
+  engagementViolation,
+  leaseViolation,
+  runAdmissionGates,
+} from './admission.ts';
 import {
   buildDisplayCommand,
   buildNormalizedCommand,
   defaultRegistry,
-  portForScope,
-  validateParams,
-  type ParamBag,
   type TemplateRegistry,
 } from './templates.ts';
-
-/**
- * 终态会话（closed / superseded / failed）不可执行任何动作；与数据库存活索引同源。
- * 契约常量是字面量元组，这里显式拓宽为 `SessionStatus` 以便做成员判定。
- */
-const LIVE_STATUSES: readonly SessionStatus[] = LIVE_SESSION_STATUSES;
-const TERMINAL_SESSION_STATUSES: readonly SessionStatus[] = SESSION_STATUSES.filter(
-  (s) => !LIVE_STATUSES.includes(s),
-);
 
 /** 默认禁用类别（§10.3）：需在 engagement 策略中显式开启并双人确认。 */
 const DISABLED_BY_DEFAULT: readonly ActionClass[] = DEFAULT_DISABLED_CLASSES;
@@ -512,39 +503,6 @@ function detectionSignalOf(result: ToolRunResult): string | null {
   return null;
 }
 
-// ───────────────────────────── 错误构造 ─────────────────────────────
-
-function blocked(
-  code: ErrorCode,
-  message: string,
-  nextAction: string,
-  approvalId?: string,
-): ToolError {
-  return {
-    status: 'blocked',
-    code,
-    message,
-    next_action: nextAction,
-    ...(approvalId === undefined ? {} : { approval_id: approvalId }),
-  };
-}
-
-/** 范围判定拒绝码 → 稳定错误码（模型据码分支，不解析文本）。 */
-export function mapScopeRejection(code: ScopeRejectionCode): ErrorCode {
-  switch (code) {
-    case 'protocol_undetermined':
-      return 'protocol_undetermined';
-    case 'dns_unresolved':
-    case 'address_not_adjudicated':
-      return 'target_not_adjudicated';
-    default:
-      // 其余形态（malformed_target、userinfo_present、encoded_authority、control_chars、
-      // noncanonical_ip、wildcard_illegal、port_not_allowed、
-      // protocol_not_allowed、out_of_scope、excluded、pending）都是范围校验失败。
-      return 'scope_violation';
-  }
-}
-
 // ───────────────────────────── 服务实现 ─────────────────────────────
 
 export function createExecutionService(deps: ExecutionServiceDeps): ExecutionService {
@@ -565,89 +523,10 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
   /** 服务端 pacing 闸门（§6.2.0.5）：把冻结策略里的速率/并发/抖动真正施加到执行上。 */
   const pacingGate = new PacingGate();
 
-  /**
-   * engagement 运行标记校验（§5.1、§15.1、§15.2）。
-   *
-   * **只有 `running` 允许触及目标的动作**。其余四个标记都意味着「现在不该有动作」：
-   *
-   *   | 标记 | 含义 | 依据 |
-   *   |---|---|---|
-   *   | `paused` | 人类暂停 | §5.1 两层状态表 |
-   *   | `blocked` | 等人类处置（含恢复对账发现的未知副作用） | §15.2 |
-   *   | `aborted` | 人类终止测试 | §5.1 |
-   *   | `failed` | engagement 失败 | §5.1 |
-   *
-   * **为什么必须在执行闸门校验**：运行标记只落库而不拦动作时，`pause` 与恢复
-   * 对账的 `blocked` 对目标动作毫无约束力——「人类闸门」就成了装饰。
-   * 这与 §15.1「审计不可用时所有触及目标的动作一律停止」是同一类要求：
-   * 降级状态下不产生新的目标副作用。
-   *
-   * 用词是「停止」而不是「拒绝重试」：模型收到这个码后**不该换个动作继续试**，
-   * 而应停下等人类。因此 `next_action` 与其它拒绝不同。
-   */
-  function engagementViolation(binding: SessionBinding, session: string): ToolError | undefined {
-    if (binding.engagementStatus === 'running') return undefined;
-    const reason: Readonly<Record<RunMarker, string>> = {
-      // 不会走到（上面已返回），但保持映射完整：缺项会让将来加标记时静默放行
-      running: '',
-      // 别把责任推给人类：`paused` 也可能是**系统自动暂停**（预算耗尽，compose 的
-      // `pauseForSystem`）。人类看到「人类已暂停」会以为自己点错了什么（2026-10-05 实测报障）。
-      paused: '该 engagement 已被暂停（人工暂停，或预算耗尽触发的自动暂停）；在控制台「运行控制 → 恢复」后动作才会执行',
-      blocked: '该 engagement 处于阻塞状态，等待人类处置（可能是恢复对账发现的未知副作用）',
-      aborted: '人类已终止该 engagement',
-      failed: '该 engagement 已失败',
-    };
-    return blocked(
-      'engagement_halted',
-      `engagement ${binding.engagementId} 不在运行状态（${binding.engagementStatus}）：${reason[binding.engagementStatus]}。会话 ${session} 的动作不执行`,
-      '不要换个动作重试；等待人类在控制台恢复或结束该 engagement',
-    );
-  }
-
-  /**
-   * 租约校验（§10.6）：会话存在不等于有权提交。
-   * `expectedGeneration` 为 null 时只校验有效性，不比对世代。
-   */
-  function leaseViolation(
-    binding: SessionBinding,
-    expectedGeneration: number | null,
-    now: Date,
-    session: string,
-  ): ToolError | undefined {
-    if (TERMINAL_SESSION_STATUSES.includes(binding.status)) {
-      return blocked(
-        'lease_revoked',
-        `会话 ${session} 已处于终态 ${binding.status}，其放行凭证与租约立即失效`,
-        '重新申请会话与放行凭证',
-      );
-    }
-    const lease = binding.lease;
-    if (lease === null) {
-      return blocked('lease_required', `会话 ${session} 当前不持有租约`, '由控制台重新签发租约');
-    }
-    if (lease.revokedAt !== null) {
-      return blocked(
-        'lease_revoked',
-        `会话 ${session} 的租约已被撤销：${lease.revokedReason ?? 'unknown'}`,
-        '重新申请会话与租约',
-      );
-    }
-    if (lease.expiresAt.getTime() <= now.getTime()) {
-      return blocked(
-        'lease_expired',
-        `会话 ${session} 的租约已过期（${lease.expiresAt.toISOString()}）`,
-        '由控制台续租后重试',
-      );
-    }
-    if (expectedGeneration !== null && lease.generation !== expectedGeneration) {
-      return blocked(
-        'lease_generation_stale',
-        `会话 ${session} 的租约世代已前进（计划 ${expectedGeneration}，当前 ${lease.generation}）`,
-        '重新构造计划后再执行',
-      );
-    }
-    return undefined;
-  }
+  // `engagementViolation` / `leaseViolation` 已移到 `admission.ts`：受理闸门
+  // （`engagement_running` / `lease_valid`）与执行前复核（`revalidateBeforeTarget`）
+  // 现在读的是**同一份实现**——两处各写一遍必然漂移，而漂移的后果是某条拒绝路径
+  // 悄悄放宽（2026-10-05 复核 C1 顺手收掉这处重复）。
 
   /** 凭证校验：绑定关系（会话、类别、计划摘要）与状态（一次性、时效）任一不符即拒绝。 */
   function approvalViolation(
@@ -746,23 +625,6 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
   async function admit(input: ActionIntent): Promise<AdmissionDecision> {
     const now = clock();
 
-    // 0. 审计闸门（§15.1 的硬约束）：审计写不进去时**所有**触及目标的动作一律停止。
-    //
-    // 放在最前面，而不是靠「写 tool_runs 会失败」间接兜底：那种保护只在**执行之后**
-    // 才生效，而这里要的是「根本不受理」。两者的差别是动作会不会真的跑起来。
-    //
-    // 不看动作类别是有意的：§15.1 明确反对「只停高风险」的降级——分类准确度
-    // 不足以支撑那种挑拣。
-    if (deps.audit !== undefined) {
-      const gate = executionGateForAudit(await deps.audit.available());
-      if (!gate.allowed) {
-        return {
-          kind: 'rejected',
-          error: blocked('audit_unavailable', gate.reason, '恢复审计写入后重新提交；在此之前不要重试'),
-        };
-      }
-    }
-
     // 提前取一次会话绑定：闸门失败的记录要 engagementId（账本是 engagement 级的），
     // 而**分类失败发生在会话准入之前**（§10.2 的顺序：类别判定 → 会话能力校验）。
     //
@@ -817,186 +679,38 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       }
     };
 
-    // 1. 模板解析：未注册模板一律拒绝，绝不降级。
-    const spec = registry.get(input.templateId);
-    if (spec === undefined) {
-      await recordGateFailure({
-        eventType: 'classification.rejected',
-        rule: 'template_unregistered',
-        detail: `动作模板 ${input.templateId} 未注册`,
-        normalized: null,
-      });
-      return {
-        kind: 'rejected',
-        error: blocked(
-          'classification_rejected',
-          `动作模板 ${input.templateId} 未注册：可执行的动作集合本身是封闭的`,
-          '改用已注册模板，或由人类显式注册受信模板后重试',
-        ),
-      };
-    }
-
-    // 2. 参数白名单校验：未声明的参数一律拒绝，声明即必填。
-    const validated = validateParams(spec.template, input.params, { allowFreeForm: spec.allowFreeForm === true });
-    if (!validated.ok) return { kind: 'rejected', error: validated.error };
-    // 用**归一化后**的参数：整数字段可能是以字符串形式到达的（宿主链路会做这种转换），
-    // 直接沿用原始输入会让范围判定、命令拼装与计划摘要都按字符串处理。
-    const params: ParamBag = validated.params;
-
-    // 3. 目的必填：动作必须说明为什么执行（审计与放行界面依赖它）。
-    const purpose = input.purpose.trim();
-    if (purpose.length === 0 || purpose.length > 500) {
-      await recordGateFailure({
-        eventType: 'classification.rejected',
-        rule: 'purpose_invalid',
-        detail: '缺少有效的目的说明（1-500 字符）',
-        normalized: null,
-      });
-      return {
-        kind: 'rejected',
-        error: blocked(
-          'classification_rejected',
-          '缺少有效的目的说明（1-500 字符）',
-          '在动作意图中填写目的后重试',
-        ),
-      };
-    }
-
-    // 4. 动作类别判定与复算：策略给出的类别必须与注册模板一致，漂移即拒绝。
-    const classified = await deps.policy.classifyAction({ templateId: input.templateId, params });
-    if (!classified.ok) {
-      await recordGateFailure({
-        eventType: 'classification.rejected',
-        rule: classified.code,
-        detail: `动作类别无法确定：${classified.detail}`,
-        normalized: null,
-      });
-      return {
-        kind: 'rejected',
-        error: blocked(
-          classified.code,
-          `动作类别无法确定：${classified.detail}`,
-          '改用可归类的已注册模板；无法归类时不降级为低风险放行',
-        ),
-      };
-    }
-    if (classified.actionClass !== spec.template.actionClass) {
-      await recordGateFailure({
-        eventType: 'classification.rejected',
-        rule: 'classification_mismatch',
-        detail: `类别复算不一致：模板注册为 ${spec.template.actionClass}，策略判定为 ${classified.actionClass}`,
-        normalized: null,
-      });
-      return {
-        kind: 'rejected',
-        error: blocked(
-          'classification_rejected',
-          `类别复算不一致：模板注册为 ${spec.template.actionClass}，策略判定为 ${classified.actionClass}`,
-          '检查模板注册与策略配置的一致性，二者不一致时拒绝执行',
-        ),
-      };
-    }
-    const actionClass = spec.template.actionClass;
-
-    // 5. 会话绑定：范围版本与策略 epoch 来自会话冻结的绑定，而非 Agent 传值。
-    // 这里复用顶部那次读取（它只为记账而提前，判定顺序不变）。
-    const binding = earlyBinding;
-    if (binding === undefined) {
-      return {
-        kind: 'rejected',
-        error: blocked(
-          'lease_required',
-          `会话 ${input.workerSessionId} 没有会话绑定，无法确认其授权`,
-          '由控制台创建 Worker 会话并签发租约后再执行',
-        ),
-      };
-    }
-
-    // 5.5 授权有效期（§11.1 的硬边）：过期即**不受理**。
+    // 1–7. 受理闸门（§10.2）：**具名、有序、只读**的阶段数组，顺序即 `ADMISSION_GATES`
+    // 的数组顺序（见 `admission.ts`）。此前这些判定顺序写在本函数里、顺序藏进行号，
+    // 新增一道闸门要在两千行文件的中段插代码——2026-10-05 复核 C1 把它结构化为管线：
     //
-    // 放在受理路径里而不是只等放行之后：让人类在放行队列中看到一条自己已无权批准的动作，
-    // 等于把「授权过期」推给人去兜底。没有授权，就没有「待批准的动作」。
+    //   audit_available → template_registered → params_whitelisted → purpose_present →
+    //   action_class_recomputed → session_bound → authorization_valid → scope_adjudicated →
+    //   engagement_running → lease_valid → addresses_adjudicated
     //
-    // 执行前还会再查一次（`policy.validateExecution`）：受理与执行之间可能隔很久
-    // （人在队列前停留、命令排队），而授权恰好在那个窗口里到期；那时按旧判断继续执行就是越权。
-    // 两处都查不是重复——它们防的是不同的时间点。
-    const validity = await deps.policy.authorizationValidity(binding.engagementId);
-    if (!validity.ok) {
-      // 授权依据读不懂（非空但不可解析的到期值）：不等于「未声明到期」，
-      // 因此不跳过判定，而是以同一处置拒绝——取得新的授权或修订授权依据。
-      return { kind: 'rejected', error: validity.error };
-    }
-    const authorizationExpiry = validity.expiresAt;
-    if (authorizationExpiry !== null && authorizationExpiry.getTime() <= now.getTime()) {
-      return {
-        kind: 'rejected',
-        error: blocked(
-          'authorization_expired',
-          `授权已于 ${authorizationExpiry.toISOString()} 过期（§11.1）：不再受理任何触及目标的动作`,
-          '取得新的授权或修订授权依据；重新申请放行无法绕过过期的授权',
-        ),
-      };
-    }
-
-    // 6. 范围校验：协议与端口由模板注册信息决定，Agent 无法在调用里更改。
-    const port = portForScope(spec, params);
-    const scope = await deps.policy.evaluateScope({
-      engagementId: binding.engagementId,
-      scopeVersion: binding.scopeVersion,
-      target: input.targetSelector,
-      protocol: spec.protocol,
-      ...(port === undefined ? {} : { port }),
+    // 短路是语义的一部分（`runAdmissionGates` 第一个非 pass 即返回）：顺序承载 §10.2 的
+    // 优先级——模板未注册必须报 `classification_rejected`，而不是「你缺租约」。
+    const state = new AdmissionState({
+      intent: input,
+      now,
+      binding: earlyBinding,
+      ports: {
+        registry,
+        policy: deps.policy,
+        ...(deps.audit === undefined ? {} : { audit: deps.audit }),
+      },
     });
-    if (!scope.ok) {
-      // §10.2.2：任何范围校验失败都记录 `scope_violation` 事件（含原始目标、规范化结果、
-      // 命中的规则、发起会话）；同一会话连续三次时自动暂停——**这通常意味着任务描述
-      // 有歧义，而不是偶发失误**，所以处置是交人类而不是让它重试。
-      await recordGateFailure({
-        eventType: 'scope.violation',
-        rule: scope.code,
-        detail: scope.detail,
-        normalized: scope.normalized ?? null,
-      });
-      return {
-        kind: 'rejected',
-        error: blocked(
-          mapScopeRejection(scope.code),
-          `目标未被裁决为在范围内（${scope.code}）：${scope.detail}`,
-          '改用当前范围版本内的目标；范围违规会记录 scope_violation 事件',
-        ),
-      };
+    const verdict = await runAdmissionGates(state);
+    if (verdict.kind === 'rejected') {
+      // 闸门只返回「该记一条什么事件」，写事件是**这里**的事：管线因此保持只读，
+      // 单道闸门也不依赖账本/门铃/控制台是否存在。
+      if (verdict.gateFailure !== undefined) await recordGateFailure(verdict.gateFailure);
+      return { kind: 'rejected', error: verdict.error };
     }
+    // 闸门通过后，装配阶段从状态里取事实。访问器在事实缺失时抛错——那表示闸门顺序
+    // 被破坏（编程错误，测试会当场发现），而不是输入问题：后者已经在上面变成了拒绝。
+    const { spec, params, purpose, actionClass, scope, resolvedAddresses } = state;
+    const binding = state.requireBinding();
 
-    // 7. 会话准入：先看 engagement 运行标记（更粗的一层），再看租约（§10.6）。
-    //
-    // 顺序是刻意的：engagement 已停时，租约是否有效已不是重点——此时应当告诉
-    // 调用方「整个 engagement 停了」，而不是「你缺租约」。后者的下一动作是
-    // 去续租，而续租在这个状态下毫无意义。
-    const halted = engagementViolation(binding, input.workerSessionId);
-    if (halted !== undefined) return { kind: 'rejected', error: halted };
-
-    const leaseError = leaseViolation(binding, null, now, input.workerSessionId);
-    if (leaseError !== undefined) return { kind: 'rejected', error: leaseError };
-
-    // 地址集合是执行计划的受信上下文：域名没有范围裁决地址时绝不退化为容器内 DNS。
-    const resolvedAddresses = scope.normalized.resolvedAddresses ??
-      (scope.normalized.kind === 'ip' ? [scope.normalized.host] : []);
-    if (resolvedAddresses.length === 0) {
-      await recordGateFailure({
-        eventType: 'scope.violation',
-        rule: 'dns_unresolved',
-        detail: `目标 ${scope.normalized.host} 没有已裁决地址集合，拒绝构造执行计划`,
-        normalized: scope.normalized,
-      });
-      return {
-        kind: 'rejected',
-        error: blocked(
-          'target_not_adjudicated',
-          `目标 ${scope.normalized.host} 没有已裁决地址集合，拒绝按域名拨号`,
-          '让范围服务提供已裁决地址后重新提交',
-        ),
-      };
-    }
 
     // 8. 幂等键与计划摘要：服务端派生，不采信 Agent 传值。
     //
