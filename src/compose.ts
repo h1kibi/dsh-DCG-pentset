@@ -1269,29 +1269,59 @@ export function installExecution(input: {
   return { policy, approvalPlanValidator, auditProbe, execution };
 }
 
-/** 装配全部服务。 */
-export function compose(config: ComposeConfig): ComposedPlugin {
-  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
-  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
-  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
-    throw new Error(
-      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
-    );
-  }
-  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
-  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+/**
+ * 会话 → 租户上下文（租约事务与控制台 RPC 都要用）。
+ *
+ * 具名：它是**跨层**的解析口（租约层内部用它，控制台建作用域也用它），
+ * 内联函数类型会让两边各写一遍形状。
+ */
+export type LeaseRlsResolver = (workerSessionId: string) => Promise<{
+  readonly tenantId: string;
+  readonly engagementId: string;
+} | null>;
 
-  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
-  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
-  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
-  let workflowRef: PgWorkflowService | null = null;
-  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
-    config,
-    readDb,
-    txDb,
-    ledger,
-    workflow: () => workflowRef,
-  });
+/** `installWorkflow` 的产物。 */
+export interface WorkflowInstallation {
+  readonly leases: PgLeaseStore;
+  readonly workflow: PgWorkflowService;
+  readonly workerTools: WorkerToolDeps;
+  /** 报告面：工作流（签字与取代）与控制台共用同一个实例，不重复构造。 */
+  readonly reportFace: PgReportService;
+  /** 控制台 RPC 建作用域时要用同一条反查（否则两条路径会给出不同的归属）。 */
+  readonly leaseRlsContextForSession: LeaseRlsResolver | undefined;
+}
+
+/**
+ * 安装人类工作流层（§5.4）：租约、Worker 工具面、工作流服务（含报告面）。
+ *
+ * ── 边界为什么这样切 ──
+ *
+ * * 租约与工具面在工作流之前：租约是它的事务依赖，工具面的
+ *   `bootstrapIntake` 又要晚绑定工作流（`input.workflow`）——两者互为引用，
+ *   这里用 getter 显式表达「晚绑定」，而不是靠构造顺序的巧合。
+ * * 报告面（`PgReportService`）在本层构造并**作为产物给出**：工作流的签字/取代要用它，
+ *   控制台也要用它。再建一个实例不是错误（它是无状态的库门面），但会让「同一个通道」
+ *   变成两个对象——那正是接线改动容易漏掉的地方。
+ * * 记忆面与诊断面**不在这里**：它们只服务控制台（见 `installConsole`），
+ *   工作流不依赖它们。
+ */
+export function installWorkflow(input: {
+  readonly config: ComposeConfig;
+  readonly pool: Pool;
+  readonly readDb: DbClient;
+  readonly txDb: DbClient;
+  readonly rlsContext: RuntimeRlsContext | undefined;
+  readonly rlsScopePort: RlsScopePort;
+  readonly ledger: MemoryLedger;
+  readonly execution: ExecutionService;
+  readonly policy: PgPolicyService;
+  readonly approvalPlanValidator: ApprovalPlanValidator;
+  /** 晚绑定的工作流出口（工具面的 `bootstrapIntake` 用它）。 */
+  readonly workflow: () => PgWorkflowService | null;
+}): WorkflowInstallation {
+  const { config, pool, readDb, txDb, rlsContext, rlsScopePort, ledger, execution, policy, approvalPlanValidator } = input;
+  // 工作流的晚绑定出口：先起个别名，免得被 `bootstrapIntake(input)` 的参数遮蔽。
+  const workflowPort = input.workflow;
 
   // ── 租约 ──
   //
@@ -1301,9 +1331,9 @@ export function compose(config: ComposeConfig): ComposedPlugin {
   // 不能直接 `select engagement_id from worker_sessions`：015 之后那张表没有任何租户级放行，
   // 而此刻上下文里还没有 engagement——直查在 FORCE RLS 下恒为零行，于是这里静默返回 null，
   // 调用方表现为「会话不存在」。用函数反查是**唯一**既保持租户边界、又能先有鸡的形态。
-  const leaseRlsContextForSession = rlsContext === undefined
+  const leaseRlsContextForSession: LeaseRlsResolver | undefined = rlsContext === undefined
     ? undefined
-    : async (workerSessionId: string): Promise<{ readonly tenantId: string; readonly engagementId: string } | null> => {
+    : async (workerSessionId: string) => {
         const result = await readDb.query<{ engagement_id: string | null }>(
           `select pentest.engagement_for_worker_session($1::uuid) as engagement_id`,
           [workerSessionId],
@@ -1365,8 +1395,9 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     // 晚绑定 `workflowRef`：工作流服务在本对象之后构造（见下面 `workflowRef` 的说明），
     // 而它必须存在——缺了就只能报错，不能静默让工具消失（工具面对模型是固定清单）。
     bootstrapIntake: async (input) => {
-      if (workflowRef === null) throw new Error('工作流服务尚未装配，无法建立 intake');
-      return workflowRef.bootstrapIntake({
+      const late = workflowPort();
+      if (late === null) throw new Error('工作流服务尚未装配，无法建立 intake');
+      return late.bootstrapIntake({
         dshSessionId: input.dshSessionId,
         operatorId: config.operatorId ?? SYSTEM_OPERATOR_ID,
         ...(input.name === undefined ? {} : { name: input.name }),
@@ -1397,30 +1428,8 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     },
   );
 
-  // ── 人类工作流服务（§5.4 的状态机写入路径）──
-  //
-  // `sessions` 是**写**侧端口（创建/驱动 dsh 会话），与上面的 `PgSessionDirectory`
-  // （读侧：按会话取绑定信息）是两回事。缺写侧端口时工作流仍可用，只是创建会话
-  // 会以明确错误失败——比静默空转好。
   const sessionFactory: SessionFactory = config.sessions ?? missingSessionFactory;
   const reportFace = new PgReportService(readDb, { txDb });
-  const memoryFace = new PgMemoryQueryService(readDb, {
-    ledger,
-    // 账本校验端口（§8.4 链校验 + 锚点核对）：控制台「校验账本完整性」用它。
-    ledgerVerifier: ledger,
-    ...(config.embedQuery === undefined ? {} : { embedQuery: config.embedQuery }),
-  });
-  // 诊断面：实例级事实（连接池、审计探针）+ 作业级事实（索引队列、水位）。
-  const diagnosticsFace = new PgDiagnosticsService({
-    poolStats: () => ({
-      totalCount: pool.totalCount,
-      idleCount: pool.idleCount,
-      waitingCount: pool.waitingCount,
-    }),
-    audit: auditProbe,
-    outbox: { stats: (engagementId) => outbox.stats(engagementId) },
-    watermark: (engagementId) => memoryFace.memoryWatermark(engagementId),
-  });
   const workflow = new PgWorkflowService({
     db: readDb,
     // 有嵌入端点才有语义通道；没有就如实声明 lexical+trigram（会话提示词里会写清，见 renderRetrievalChannels）。
@@ -1479,8 +1488,66 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     },
   });
   // 系统暂停的出口（见上面 `workflowRef` 的说明）。
+
+  return { leases, workflow, workerTools, reportFace, leaseRlsContextForSession };
+}
+
+/** 装配全部服务。 */
+export function compose(config: ComposeConfig): ComposedPlugin {
+  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
+  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
+  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
+    throw new Error(
+      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
+    );
+  }
+  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
+  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+
+  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
+  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
+  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
+  let workflowRef: PgWorkflowService | null = null;
+  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
+    config,
+    readDb,
+    txDb,
+    ledger,
+    workflow: () => workflowRef,
+  });
+
+  const { leases, workflow, workerTools, reportFace, leaseRlsContextForSession } = installWorkflow({
+    config,
+    pool,
+    readDb,
+    txDb,
+    rlsContext,
+    rlsScopePort,
+    ledger,
+    execution,
+    policy,
+    approvalPlanValidator,
+    workflow: () => workflowRef,
+  });
   workflowRef = workflow;
 
+  const memoryFace = new PgMemoryQueryService(readDb, {
+    ledger,
+    // 账本校验端口（§8.4 链校验 + 锚点核对）：控制台「校验账本完整性」用它。
+    ledgerVerifier: ledger,
+    ...(config.embedQuery === undefined ? {} : { embedQuery: config.embedQuery }),
+  });
+  // 诊断面：实例级事实（连接池、审计探针）+ 作业级事实（索引队列、水位）。
+  const diagnosticsFace = new PgDiagnosticsService({
+    poolStats: () => ({
+      totalCount: pool.totalCount,
+      idleCount: pool.idleCount,
+      waitingCount: pool.waitingCount,
+    }),
+    audit: auditProbe,
+    outbox: { stats: (engagementId) => outbox.stats(engagementId) },
+    watermark: (engagementId) => memoryFace.memoryWatermark(engagementId),
+  });
   // ── 控制台 RPC（§6）：人类操作的唯一出口 ──
   //
   // 操作者身份由调用方在 `CallContext` 注入。适配器（HTTP/CLI/Web）负责

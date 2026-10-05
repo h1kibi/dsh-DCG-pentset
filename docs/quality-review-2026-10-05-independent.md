@@ -680,6 +680,7 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 | `installDatabase(config)` | `DatabaseInstallation` = `{pool, readDb, txDb, txPort: TxDbPort, rlsContext, rlsScopePort, backgroundScopes: BackgroundScopes}` | 连接池与错误钩子、RLS 作用域（`AsyncLocalStorage`）、惰性写连接、租户级作业列举 |
 | `installIndexing({config, readDb, txDb})` | `IndexingInstallation` = `{outbox, ledger, indexer}` | 队列与写连接同源的理由、锚点与账本共用写连接（避免死锁）、版本登记器与索引器的接线 |
 | `installExecution({config, readDb, txDb, ledger, workflow})` | `ExecutionInstallation` = `{policy, approvalPlanValidator, auditProbe, execution}` | 策略/会话目录/动作策略、沙箱与执行存储、审计探针、闸门失败 sink（见下） |
+| `installWorkflow({config, pool, readDb, txDb, rlsContext, rlsScopePort, ledger, execution, policy, approvalPlanValidator, workflow})` | `WorkflowInstallation` = `{leases, workflow, workerTools, reportFace, leaseRlsContextForSession}` | 租约（含逐会话的作业反查）、Worker 工具面、工作流服务；报告面因被工作流与控制台**共用**而作为产物给出 |
 
 **闸门失败 sink 先独立成模块**（`src/execution/gate-failures.ts`）：它不是接线而是**服务**
 （写账本事件 + 数范围违规 + 达阈值请求系统暂停，约 100 行）。抽出后：
@@ -698,15 +699,15 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 顺带具名化三处此前只能靠内联形状表达的类型：`TxDbPort`（`createTxDb` 的产物）、
 `BackgroundScopes`（后台循环的作用域端口）、`GateFailureLedger`（闸门 sink 的账本端口）。
 
-**度量**：`compose()` **880 → 605 行**；`compose.test.ts` **48/48**
+**度量**：`compose()` **880 → 449 行**（4/5 安装器）；`compose.test.ts` **48/48**
 （其中一条覆盖本次搬动的暂停路径：`system_auto_pause:scope_violation_threshold`）；
 全量套件通过。
 
 ### 未完成（明确记录，不冒充完成）
 
-| 剩余安装器 | 为什么本轮没做 |
+| 剩余 | 状态 |
 |---|---|
-| `installWorkflow`（会话工厂 + 报告/记忆/诊断面 + `PgWorkflowService`，含 leases/workerTools 的双向引用 `workflowRef`） | 边界要先想清：workflow 与 leases/workerTools 相互引用，拆之前得决定 `workflowRef` 是「getter 注入」还是「两段安装 + 显式回填」 |
-| `installConsole`（控制台方法表 + 客户端面） | 依赖上面那项的产物，最后做 |
+| `installConsole`（记忆/诊断/skill 四个服务面 + 控制台 RPC） | **边界已定**：输入 `{config, pool, readDb, txDb, ledger, outbox, auditProbe, workflow, reportFace, leaseRlsContextForSession, rlsContext, rlsScopePort}`，产物 `{consoleRpc, memoryFace, diagnosticsFace, skillFace}`（`consoleServices` 只在内部用）。~116 行，纯机械延展 |
+| 预算与活性块（§10.5，~228 行） | 复核的安装器清单里**没有**它，但它是 `compose()` 剩余长度的主体——真正到「≈200 行编排」还需要第 6 个安装器（`installBudget`），边界要单独设计 |
 
-模式已经立住（具名产物 + 单点装配 + 服务先独立成模块），`compose()` 已从 880 行降到 605 行。
+模式已立住（具名产物 + 单点装配 + 服务先独立成模块）：`compose()` 880 → **449** 行，4/5 安装器落地。
