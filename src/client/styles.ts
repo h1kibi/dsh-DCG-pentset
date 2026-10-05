@@ -1,7 +1,9 @@
 /**
  * 控制台样式表：**入口、令牌层、装配与注入**。
  *
- * 样式按域拆在 `styles/` 下（基座 / 外壳 / 面板 / 会话）；本文件承担四件事：
+ * 样式按域拆在 `styles/` 下（基座 / 外壳 / 面板 / 会话）——拆分的理由是**变更半径**：
+ * 改放行队列的排版不该碰到阶段轨道，也不该让两个人同时编辑同一份 700 行的字符串。
+ * 本文件承担四件事：
  *   1. **令牌层**：`@font-face`（随包发的 Cascadia Mono，base64 内联见 `./fontAssets.ts`）
  *      与令牌块（挂在插件每个根元素上，选择器清单出自 `./design.ts`）——本目录下
  *      **唯一**注入字面颜色的地方；
@@ -32,13 +34,13 @@ import { CHAT_CSS } from './styles/chat.ts';
  * `font-display:swap`：字体没就绪时先用等宽回退栈渲染，不做不可见文本占位——
  * 这是本地面板，字节已经到了，swap 只会让首帧更快。
  */
-export const FONT_FACE_CSS =
+const FONT_FACE_CSS =
   `@font-face{font-family:"${FONT_FAMILY}";` +
   `src:url(${FONT_SRC}) format("truetype");` +
   `font-weight:400;font-style:normal;font-display:swap}`;
 
 /** 令牌块。 */
-export const TOKENS_CSS = tokenCss();
+const TOKENS_CSS = tokenCss();
 
 /** 注入到页面的完整样式表。 */
 export const PENTEST_CSS = [FONT_FACE_CSS, TOKENS_CSS, BASE_CSS, SHELL_CSS, PANELS_CSS, CHAT_CSS]
