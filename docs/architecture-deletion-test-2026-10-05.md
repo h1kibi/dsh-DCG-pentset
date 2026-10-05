@@ -842,3 +842,52 @@
 - **`verify:client` 的行为级证明**：在 Node VM 里 materialize 新 bundle 并渲染出真实 HTML（`<section class="pentest-card">…`）→ styles 链合并未破坏类名/装配；
 - **陈旧产物**：`lib/agents/` 只剩 `dsh-session-factory.js`；`npm pack` 中 `capability` 命中 0；
 - **登记质量**：6 条 `pending` 的 note 均带出处（doc 行号 / 符号 / 文件行）与接线形态，门禁输出与预期一致（9 项 / 8 告警 / 0 失败）。
+
+---
+
+## 附录 I：第六轮复核（产物面与契约路径的质检）
+
+> 主题：**执行之后的产物面**——干净构建是否完整、`clean` 是否安全、包契约的每条路径是否都指向真实存在的文件、以及撤回项是否真的没动。
+
+### I.1 `clean` 的安全性与完整性（实测）
+
+| 检验 | 结果 |
+|---|---|
+| 干净构建后的产物集合 | `lib/` 共 **155** 个 js/d.ts/sql 文件，**陈旧 0**（按 toSrc 映射逐一核对，含 `lib/client.js` 与 `lib/db/migrations/*.sql` 两个特例映射） |
+| 有无「被 clean 掉但不再生成」的东西 | **没有**：`npm pack` 由 clean 前 **159** → 现 **157 = 159 − 2**，差额恰是两个 capability 陈旧产物（若丢了别的文件，数目对不上） |
+| 关键产物 | `lib/index.js` ✓ `lib/client.js` ✓ `lib/types/index.d.ts` ✓ `lib/db/migrations/`（26 个 SQL）✓ |
+| 与 tsdown 的交互 | `tsdown.config.ts` 明写 `clean: false`（理由：tsdown 默认清理会擦掉 tsc 产出的 43 个 JS 与迁移 SQL）——新的 `npm run clean` 在两个构建器**之前**运行，与它不冲突 ✓ |
+
+### I.2 新发现（**既有缺陷**，被 clean 暴露）：`exports["./client"].types` 指向不存在的文件
+
+- `package.json`：`"./client": { "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" }`；
+- 实测：该文件**不存在**，且 `tsdown.config.ts` 写死 **`dts: false`** → 构建**永远不会**生成它；
+- **排除「我引入的回归」**：`npm pack` 现为 157 = clean 前 159 − 2（陈旧产物），说明该文件在 clean **之前**就不存在 ✓；旁证：`.dockerignore` 的注释宣称「package.json 的 exports 里**三个** types 路径指向 lib/types」，而实际只有两个 `types` 条件、其中这个悬空——注释与事实都需要修；
+- 影响：`import … from 'dsh-pentest/client'` 的**类型解析**会失败；运行期不受影响（宿主按 `lib/client.js` 的模块加载器加载，不走 Node 解析）。它与 `exports["./src/*"]` 同属「死契约路径」家族；
+- 修法（二选一，待授权）：**(a)** `tsdown` 开 `dts: true` 并确认落点是 `lib/types/client/index.d.ts`；**(b)** 删掉 `./client` 的 `types` 条件让契约诚实，同时修正 `.dockerignore` 注释。
+
+### I.3 包契约路径全量核对
+
+`main`、`exports["."]`（types + default）、`exports["./cordis.patch.yml"]`、`exports["./package.json"]`、`dsh.bundle.patch`、`files[]` —— **全部指向存在的文件** ✓。悬空的只有：`exports["./client"].types`（I.2）与 `exports["./src/*"]`（刻意保留的 dev 口子，但 `files` 不含 `src` → 对**已发布包**是悬空的；建议在那行附近注明「仅源码检出处可用」）。
+
+### I.4 其它面
+
+- **`docker/tools/Dockerfile`（沙箱工具镜像）不依赖 `lib/`**（只 `COPY pentest-tool`）✓；`docker/Dockerfile` 依赖宿主构建的 `lib/` ✓ 行为不变；
+- **`presets/` 不在发布面**（`files: ["lib","cordis.patch.yml"]`），而预设是「会话能看见 `ask_user_question`」的必要条件（`presets/pentest/agent.cordis.yml` 的注释）→ 发布包用户需在 profile 里自行配置 `agent-presets` 的 roots；`src/index.ts:596-649` 已有运行时告警、RUNBOOK 有指引 → **已知且已处理的产品约束**，此处仅登记；
+- **`LedgerError` 删再导出后公开声明面未变**：它只出现在 `throw new LedgerError(…)` 的语句体（无导出签名引用）✓；
+- **B1 撤回的完整性**：`git diff 22da7d7..HEAD -- src/workflow/lease.ts` = **空**（lease.ts 一字未动）✓；同期只有 `contracts.ts`（±1 行 jsdoc）与 `db/migrate.ts`（−4 行 `CountRow`）。
+
+### I.5 本轮引入的**流程教训**（建议写进 RUNBOOK）
+
+验证链的环境变量**不能共用同一个 `PENTEST_DATABASE_URL`**：
+- `npm test` 需要 **`.../pentest`**（库里有 schema）；
+- `verify:forward-migration` 需要**可建库的角色**（RUNBOOK 用 `.../postgres`）。
+
+本轮我把 `.../postgres` 一次性 export 给整条链，得到「build ✓ verify 五道 ✓ 但 **70 个测试文件全失败**」的假警报——看上去像全线崩，实际只是库不对。RUNBOOK 第 36 / 41 行已有两处正确用法，建议追加一句显式警告：**「测试与迁移演练用不同的库，勿复用同一个 export」**。
+（旁证：整套测试在库不对时会**响亮失败**而不是静默跳过——这正是想要的行为。）
+
+### I.6 复核结论
+
+- **执行面**：干净构建完整、`clean` 无损、撤回项未动、公开声明面未变 → **本次执行无回归**；
+- **新发现**：1 条既有契约缺陷（`./client` 的 types 悬空）+ 2 处注释与事实不符（`.dockerignore` 的「三个 types 路径」、`exports["./src/*"]` 的发布语义）；
+- **未做**（待授权）：I.2 的修法选择、RUNBOOK 的 URL 警告、`exports["./src/*"]` 的注释澄清。
