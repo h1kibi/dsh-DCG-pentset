@@ -92,13 +92,13 @@ const CLASSIFICATION_SET: ReadonlySet<string> = new Set<string>([
 ]);
 
 /** 处置记录的 `decision_type`（A 类只追加表 `human_decisions`，§9.5）。 */
-export const DISPOSITION_DECISION_TYPE = 'finding_disposition';
+const DISPOSITION_DECISION_TYPE = 'finding_disposition';
 
 /**
  * 报告编辑记录的 `decision_type`。`ReportEdit` 带 `operatorId`，而 `reports` 表没有编辑者列——
  * 人类编辑是人工操作，必须可归因（§15.3 控制台操作带操作者），因此每次保存写一条只追加决策行。
  */
-export const REPORT_EDIT_DECISION_TYPE = 'report_edit';
+const REPORT_EDIT_DECISION_TYPE = 'report_edit';
 
 const DISPOSITION_ACTIONS = ['accept', 'reject', 'defer'] as const;
 type DispositionAction = (typeof DISPOSITION_ACTIONS)[number];
@@ -108,7 +108,7 @@ const DISPOSITION_ACTION_SET: ReadonlySet<string> = new Set<string>(DISPOSITION_
  * 导出时的默认脱敏分类：§11.3「报告导出按字段分类脱敏，不复制密钥、会话令牌或靶场内的真实凭据」。
  * 契约的 `ExportRequest` 没有 classifications 字段，所以默认集合只能从构造参数注入。
  */
-export const DEFAULT_EXPORT_REDACTIONS: readonly Classification[] = ['credential-like', 'secret-like'];
+const DEFAULT_EXPORT_REDACTIONS: readonly Classification[] = ['credential-like', 'secret-like'];
 
 /** 严重度排序权重：critical 在前，未定级最后（严重度由人确认，可能为空）。 */
 const SEVERITY_RANK: Record<string, number> = Object.fromEntries(
@@ -187,7 +187,7 @@ interface ReportRow {
  * `available = false` 表示引用指向的 artifacts 行已不存在（§11.5 保留人工发起的删除通道，
  * 因此这不是异常，但必须显式标注）。
  */
-export interface EvidenceProjection {
+interface EvidenceProjection {
   readonly ref: string;
   readonly available: boolean;
   readonly kind: string | null;
@@ -222,12 +222,12 @@ export interface FindingProjection {
   readonly dispositionAt: string | null;
 }
 
-export interface ReportSectionProjection {
+interface ReportSectionProjection {
   readonly section: ReportSection;
   readonly findings: readonly FindingProjection[];
 }
 
-export interface PhaseTimelineEntry {
+interface PhaseTimelineEntry {
   readonly resultingVersion: number;
   readonly fromPhase: string | null;
   readonly toPhase: string | null;
@@ -787,7 +787,7 @@ export function parseReportProjection(raw: unknown): ReportProjection {
 
 // ───────────────────────────── 服务 ─────────────────────────────
 
-export interface PgReportOptions {
+interface PgReportOptions {
   /**
    * 事务内客户端。结论处置「写决策 + 推进状态」与报告版本号分配必须在同一事务、
    * 且事务必须落在**同一条连接**上（`begin`/`commit` 落到不同连接会静默失效）。

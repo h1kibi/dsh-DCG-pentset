@@ -571,7 +571,7 @@ function blocked(code: ErrorCode, message: string, nextAction: string): ToolErro
 
 // ───────────────────────────── PgPolicyService ─────────────────────────────
 
-export interface PgPolicyServiceOptions {
+interface PgPolicyServiceOptions {
   /**
    * 服务端受信模板集（§10.2.1）。默认使用 `DEFAULT_TEMPLATES`；扩展必须由人类显式传入，
    * 这也意味着「模板集合」在任何部署里都是可枚举的封闭集合。

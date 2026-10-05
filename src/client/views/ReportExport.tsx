@@ -117,10 +117,10 @@ const FORMAT_LABELS: Readonly<Record<ExportFormat, string>> = {
  * 形状与共享组件同源（见 `GateList.tsx`）；别名保留是因为这个面**导出**了它
  * （`signBlockers` / `exportBlockers` 的返回类型），调用方按这个面取类型。
  */
-export type ExportGateBlocker = GateBlocker;
+type ExportGateBlocker = GateBlocker;
 
 /** 签字按钮的前置条件。 */
-export interface SignGateInput {
+interface SignGateInput {
   readonly engagementId: string | null;
   /** 当前主状态；`null` 表示尚未读到工作流状态。 */
   readonly mainStatus: MainStatus | null;
@@ -173,7 +173,7 @@ export function signBlockers(input: SignGateInput): readonly ExportGateBlocker[]
 }
 
 /** 导出按钮的前置条件。**不含签字状态**：§8.9 允许签字前导出供人工审阅。 */
-export interface ExportGateInput {
+interface ExportGateInput {
   readonly engagementId: string | null;
   readonly endpointExported: boolean;
   readonly wired: boolean;
@@ -207,11 +207,11 @@ export type ExportOutcome =
   | { readonly ok: false; readonly code: string; readonly message: string };
 
 /** 签字结果。与处置同一形状：成功、失败、或调用方只想知道「发出去了」。 */
-export type SignOutcome =
+type SignOutcome =
   | { readonly ok: true; readonly replay: boolean }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
-export interface ReportExportProps {
+interface ReportExportProps {
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;
   /** 报告草稿；`null` 表示 Host 还没生成（`getDraft` 无版本时导出会落一版草稿）。 */

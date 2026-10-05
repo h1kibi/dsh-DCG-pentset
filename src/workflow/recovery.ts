@@ -64,7 +64,7 @@ export const STALE_CREATION_SECONDS = 120;
  */
 export const STALE_TOOL_RUN_SECONDS = 16 * 60;
 
-export interface RecoveryDeps {
+interface RecoveryDeps {
   readonly db: DbClient;
   readonly txDb?: DbClient;
   readonly leases: LeaseStore;
@@ -94,14 +94,14 @@ export interface RecoveryDeps {
   };
 }
 
-export interface RecoveryEvent {
+interface RecoveryEvent {
   readonly engagementId: string;
   readonly workerSessionId: string;
   readonly action: SessionReconciliation['action']['kind'];
   readonly detail: string;
 }
 
-export interface RecoveryReport {
+interface RecoveryReport {
   readonly engagements: readonly string[];
   readonly sessionsMarkedInterrupted: readonly string[];
   readonly sessionsSuperseded: readonly string[];

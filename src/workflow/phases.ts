@@ -26,14 +26,14 @@ import type { ErrorCode, MainStatus, Phase, RunMarker, TransitionType } from '..
 // ───────────────────────────── 阶段定义（§1.2） ─────────────────────────────
 
 /** 阶段结束条件（§5.6）：Agent 报告什么、人类判断什么。 */
-export interface PhaseExitCriteria {
+interface PhaseExitCriteria {
   /** Agent 需要报告的内容（§5.6 左列）。 */
   readonly reports: readonly string[];
   /** 人类判断重点（§5.6 右列）。 */
   readonly humanJudgment: readonly string[];
 }
 
-export interface PhaseDefinition {
+interface PhaseDefinition {
   readonly id: Phase;
   /** 阶段轨道序号，1..5（§6.2 阶段轨道）。 */
   readonly ordinal: number;
@@ -130,9 +130,9 @@ export const PHASE_DEFINITIONS: Readonly<Record<Phase, PhaseDefinition>> = {
 // ───────────────────────────── 合法转移图（§5.3） ─────────────────────────────
 
 /** 阶段间移动的语义类别：与 §5.4 的进度类取值同构。 */
-export type PhaseMoveKind = 'retry' | 'advance' | 'rollback' | 'loop';
+type PhaseMoveKind = 'retry' | 'advance' | 'rollback' | 'loop';
 
-export interface RecommendedMove {
+interface RecommendedMove {
   /** null = 「结束技术测试」：不产生新阶段，进入控制台报告产出（§1.3、§13.8）。 */
   readonly toPhase: Phase | null;
   readonly kind: PhaseMoveKind | 'end_testing';
@@ -220,19 +220,19 @@ export function skippedPhasesBetween(from: Phase, to: Phase): readonly Phase[] {
 // ───────────────────────────── 阶段移动计划（§5.3 + §5.4） ─────────────────────────────
 
 /** 回环前置：范围修订的完成状态（§5.4 步骤 4、§13.7）。 */
-export interface ScopeAmendmentState {
+interface ScopeAmendmentState {
   readonly completed: boolean;
   /** 新范围版本号；未生成时为 null。 */
   readonly newVersion: number | null;
 }
 
-export interface MissingEvidence {
+interface MissingEvidence {
   readonly phase: Phase;
   /** 被跳过阶段本应产出的交付物（§1.2）——也就是强制跳转后缺失的证据基础。 */
   readonly deliverables: readonly string[];
 }
 
-export interface PhaseMoveRequest {
+interface PhaseMoveRequest {
   readonly from: Phase;
   readonly to: Phase;
   /** 在弹窗中显式选择强制跳转，而不是误点默认项（§5.3 条件 1）。 */
@@ -245,7 +245,7 @@ export interface PhaseMoveRequest {
   readonly scopeAmendment?: ScopeAmendmentState;
 }
 
-export interface PhaseMovePlan {
+interface PhaseMovePlan {
   readonly from: Phase;
   readonly to: Phase;
   readonly transitionType: TransitionType;
@@ -259,7 +259,7 @@ export interface PhaseMovePlan {
   readonly scopeVersion: number | null;
 }
 
-export type PhaseMoveOutcome =
+type PhaseMoveOutcome =
   | { readonly ok: true; readonly plan: PhaseMovePlan }
   | { readonly ok: false; readonly code: ErrorCode; readonly message: string };
 
@@ -341,7 +341,7 @@ export function planPhaseMove(request: PhaseMoveRequest): PhaseMoveOutcome {
 // ───────────────────────────── 主状态图（§5.2） ─────────────────────────────
 
 /** 边由谁触发：人类操作（走 §5.4 转移事务）或 Agent 侧动作。 */
-export type EdgeCause = 'human' | 'agent';
+type EdgeCause = 'human' | 'agent';
 
 export interface StateEdge {
   readonly from: MainStatus;
@@ -561,7 +561,7 @@ export const REQUIRED_ACCOUNTED_EDGES = [
   readonly label: string;
 }[];
 
-export interface StatusEdgeRef {
+interface StatusEdgeRef {
   readonly from: MainStatus;
   readonly to: MainStatus;
 }
@@ -601,7 +601,7 @@ export function legalTransitionTypes(
 
 // ───────────────────────────── 状态可达性校验（§5.2 边 ↔ §5.4 取值） ─────────────────────────────
 
-export type GraphProblemKind =
+type GraphProblemKind =
   | 'unknown_main_status'
   | 'unknown_transition_type'
   | 'duplicate_edge'
@@ -611,14 +611,14 @@ export type GraphProblemKind =
   | 'unreachable_status'
   | 'unexpected_type_without_edge';
 
-export interface GraphProblem {
+interface GraphProblem {
   readonly kind: GraphProblemKind;
   readonly from: MainStatus | null;
   readonly to: MainStatus | null;
   readonly detail: string;
 }
 
-export interface GraphReport {
+interface GraphReport {
   readonly edgeCount: number;
   readonly recordedEdgeCount: number;
   /** §5.4 未指定取值、因此不写 `state_transitions` 的边：列出而不是静默。 */
@@ -631,7 +631,7 @@ export interface GraphReport {
   readonly typesWithoutEdge: readonly TransitionType[];
 }
 
-export type GraphValidation =
+type GraphValidation =
   | { readonly ok: true; readonly report: GraphReport }
   | { readonly ok: false; readonly code: ErrorCode; readonly problems: readonly GraphProblem[] };
 
@@ -772,7 +772,7 @@ function reachableStatuses(edges: readonly StateEdge[]): ReadonlySet<MainStatus>
 }
 
 /** 校验失败（图被改坏）时抛出：这是启动自检，不是工具可见的拒绝路径。 */
-export class WorkflowGraphError extends Error {
+class WorkflowGraphError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WorkflowGraphError';
@@ -792,13 +792,13 @@ export function assertGraph(edges: readonly StateEdge[] = STATE_EDGES): GraphRep
 // ───────────────────────────── 两层状态（§5.1） ─────────────────────────────
 
 /** 主状态与运行标记并存的最小结构；`WorkflowSnapshot` 结构上满足它。 */
-export interface TwoLayerState {
+interface TwoLayerState {
   readonly mainStatus: MainStatus;
   readonly runMarker: RunMarker;
 }
 
 /** 恢复后运行标记回到 running；主状态从未改变。 */
-export const RUNNING_MARKER: RunMarker = 'running';
+const RUNNING_MARKER: RunMarker = 'running';
 
 /**
  * 写运行标记。§5.1：`status` 只在暂停、恢复、阻塞、终止、失败时改写，

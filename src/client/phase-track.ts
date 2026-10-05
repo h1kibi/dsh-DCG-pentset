@@ -43,7 +43,7 @@ export interface PhaseNode {
 }
 
 /** 边的种类。视觉上必须能区分——这是「只画有证据的边」的落点。 */
-export type EdgeKind =
+type EdgeKind =
   /** 阶段推进的时间顺序。总是画。 */
   | 'sequence'
   /** 交接血缘：下一阶段的会话带 `previousAgentSessionId` 指向上一阶段的会话。 */

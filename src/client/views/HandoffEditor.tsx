@@ -55,7 +55,7 @@ const TRANSCRIPT_NOTICE =
  * 契约里没有 skill 摘要类型，skill 端点也不在控制台方法表内，因此**由调用方喂进来**：
  * 本组件不猜端点、不发请求。
  */
-export interface SkillOption {
+interface SkillOption {
   readonly id: string;
   readonly label: string;
   /** 建议装载的阶段；`null` 表示不限阶段。 */
@@ -63,12 +63,12 @@ export interface SkillOption {
 }
 
 /** 工具允许列表的可选项（同样由调用方喂入，见报告里的缺失端点）。 */
-export interface ToolOption {
+interface ToolOption {
   readonly id: string;
   readonly label: string;
 }
 
-export interface HandoffEditorProps {
+interface HandoffEditorProps {
   /** 确认与取消走控制器封装（§16.1 的人类专属操作）。 */
   readonly controller: ConsoleController;
   /** 当前 engagement；交接包属于它，控制器不从快照里猜。 */

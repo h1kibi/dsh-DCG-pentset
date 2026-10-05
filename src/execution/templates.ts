@@ -29,10 +29,10 @@ import type {
 import { targetLiteral } from './idempotency.ts';
 
 /** 参数取值：模板声明的取值范围只允许标量（字符串或整数）。 */
-export type ParamValue = string | number;
+type ParamValue = string | number;
 export type ParamBag = Readonly<Record<string, ParamValue>>;
 
-export type TemplateValidation =
+type TemplateValidation =
   /**
    * 通过。`params` 是**归一化后**的参数（目前只有一种归一化：整数字段接受规范数字串，
    * 统一转成数字）。调用方必须用它，而不是自己手里那份原始输入——否则下游看到的是字符串，
@@ -45,7 +45,7 @@ export type TemplateValidation =
  * 端口来源：范围判定必须明确端口从何处来（§10.2.2）。
  * ICMP 没有端口维度，因此用 `none` 显式表达，而不是缺省成 0 或跳过校验。
  */
-export type PortSource =
+type PortSource =
   | { readonly kind: 'target' }
   | { readonly kind: 'param'; readonly param: string }
   | { readonly kind: 'fixed'; readonly port: number }
@@ -82,7 +82,7 @@ export interface TemplateRegistry {
 
 // ───────────────────────────── 自由形式载荷黑名单 ─────────────────────────────
 
-export interface ForbiddenPayloadRule {
+interface ForbiddenPayloadRule {
   readonly id: string;
   readonly detail: string;
   readonly test: RegExp;
@@ -92,7 +92,7 @@ export interface ForbiddenPayloadRule {
  * §10.2.1「解释器与外部模板受限」：这些形态一律拒绝，不区分「看起来是否有害」。
  * 规则作用于 **string 类型参数**（enum / integer 由取值范围保证，不受此影响）。
  */
-export const FORBIDDEN_PAYLOAD_RULES: readonly ForbiddenPayloadRule[] = Object.freeze([
+const FORBIDDEN_PAYLOAD_RULES: readonly ForbiddenPayloadRule[] = Object.freeze([
   {
     id: 'free_form_shell_interpreter',
     detail: '自由形式解释器调用（sh/bash/cmd/powershell -c）',

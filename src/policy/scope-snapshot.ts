@@ -22,7 +22,7 @@ import { canonicalPolicyJson } from './behavior-profile.ts';
 import { normalizeScopeEntry } from './scope.ts';
 import type { NormalizedScopeEntry, Result } from './scope.ts';
 
-export type ScopeContentHash = `sha256:${string}`;
+type ScopeContentHash = `sha256:${string}`;
 
 function sortPorts(ports: readonly PortRange[]): readonly PortRange[] {
   return [...ports].sort((a, b) => (a.from - b.from) || (a.to - b.to));
@@ -40,7 +40,7 @@ function sortProtocols(protocols: readonly Protocol[]): readonly Protocol[] {
  * `wildcardSubdomain`。原始书写形态（大小写、尾点、IDN 原文）不进入规范形式——
  * 它们可以由规范化结果重建，而保留它们会让「同一个目标写两遍」得到两个哈希。
  */
-export function canonicalScopeTarget(entry: NormalizedScopeEntry): ScopeTarget {
+function canonicalScopeTarget(entry: NormalizedScopeEntry): ScopeTarget {
   const protocols = sortProtocols(entry.protocols);
   const ports = sortPorts(entry.ports);
   switch (entry.kind) {

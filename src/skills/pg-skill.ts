@@ -100,7 +100,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const UNIQUE_VIOLATION = '23505';
 
 /** 审计事件的来源系统名（全局库有自己的来源，不借用 engagement 局部的名字）。 */
-export const SKILL_AUDIT_SOURCE_SYSTEM = 'pentest-skill-library';
+const SKILL_AUDIT_SOURCE_SYSTEM = 'pentest-skill-library';
 
 /** 新增时的初始修订号，与迁移 001 的列默认值一致。 */
 const FIRST_REVISION = 1;
@@ -336,7 +336,7 @@ function duplicateNameError(name: string, id: string | null): SkillServiceError 
 
 // ───────────────────────────── 服务 ─────────────────────────────
 
-export interface PgSkillServiceOptions {
+interface PgSkillServiceOptions {
   /**
    * 审计账本（§2.2 要求技能改动留痕）。省略即**明确降级**：不写审计。
    * 提供它时必须同时给出 {@link auditEngagementId}。

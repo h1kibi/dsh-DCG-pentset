@@ -949,3 +949,72 @@
 - `taskRef` **跨任务提权检查**的接线：生产三条路径都不比对任务绑定（doc:3607/4374 的验收标准），登记在 `verify-promises` 的 `pending` 里；接线前提是**先定义「提交所属任务」的来源**（`ExecutionPlan` 与审批都不携带任务标识）——属产品决策，未擅自改工具面；
 - `LivenessMonitor`（§10.5）与 `planCompaction`（§8.10）：阻塞在宿主能力（回合边界 effect 点、模型客户端、`SessionPort` 的 `replace` 追加写），已登记并指向设计文档 §8.10.0；
 - `enrichContextRefs`（交接视图的引用来源/可信度）：待确认控制台是否显示该信息后再定接线或删除。
+
+---
+
+## 附录 L：持续改进（Stage 3–6：接缝外迁 · 词汇单源 · 类型化写入 · 接口收窄）
+
+> 依据「持续进行项目的改进，完成后自行推进到下一阶段」。四个阶段都遵守同一纪律：
+> **先量化、再改、由编译期与测试判定**。全量验证（lint / typecheck / 1663 用例 / build / verify 五道）见 L.5。
+
+### L.1 Stage 3：`DbClient` 端口外迁（seam 归位）
+
+- **问题**（第六轮报告的最强接缝建议）：通用端口 `DbClient` / `RlsAwareDbClient` / `DbRlsContext` / `DbResult`
+  长在 `memory/ledger.ts` 里，13 个模块 import 账本只为拿一个类型（其中 11 个是纯类型依赖）。
+- **改动**：新建 **`src/db/port.ts`**（逐字搬迁，不 import 任何东西）；事务调度器
+  （`DbTransactionRunner` / `transactionRunnerFor`）**留在账本**——它编码的是「共享独占写连接 + RLS + 审计」的账本语义。
+  39 个文件改指新模块（13 src + 26 test/scripts），混合导入拆成两条语句。
+- **过程自纠**：脚本 v1 有两处判断错误——① 只认「带 `memory/` 的路径」，漏掉同目录的 `'./ledger.ts'`
+  （`dispatcher.ts` / `embedding.ts` 因此残留成 TS2459）；② 语句级 `type` 关键字的判断漏了空格，
+  把 34 处写成值导入（触发 `verbatimModuleSyntax` 的 TS1484）。v2 改为「解析后是否等于 ledger.ts」判定
+  并统一输出 `import type`（端口四个符号全是 interface）→ typecheck 归零。
+- **验证**：typecheck 0 错（纯类型层迁移，运行时行为不变）。
+
+### L.2 Stage 2：format 词汇表去漂移（修的是**已发生的**缺陷）
+
+- **问题（实测证据）**：同一会话状态在不同页面显示成不同词——
+  `active`：时间轴 '工作中' vs AgentTrace '运行中'；`blocked`：'阻塞' vs '已阻塞'；
+  `transition_confirmation`：'等待确认交接' vs '等待阶段确认'；`handoff_drafting`：'准备交接中' vs '准备交接'；
+  `trustTone` 在 `MemoryExplorer` 自建；`phaseLabel` 在 `phase-track` 内联（注释声称「避免循环依赖」，
+  但 `format.ts` 只依赖契约层，循环并不存在）。
+- **改动**：`format.ts` 新增 **`sessionStatusLabel`** 与会话状态表、迁入 **`trustTone`**（与 `trustLabel` 同处）；
+  五处副本删除（timeline ×2、AgentTrace、phase-track、MemoryExplorer）；`MinimapBlock.tone` 由手抄联合类型改为 `Tone`。
+- **文案怎么定的（不是口味问题）**：以设计文档用词为准（doc 里「运行中」出现 **24 次**、「工作中」**0 次**），
+  并与 `runMarkerLabel` 的 house style 对齐（存活态「…中/准备…」、终态「已…」）。
+- **验证**：typecheck 0、lint 0、受影响测试 196/196。
+
+### L.3 Stage 5：类型化写入包装（补上「类型化表面的缺口」）
+
+- **问题**：`mutate(method, params: Record<string, unknown>, …)` 是公开的通用入口，
+  4 处视图直接调它（`setApprovalMode` ×2、`archiveEngagement`、`purgeEngagement`）——
+  字段名写错只会在运行时被服务端以「信封不允许键」含糊拒绝。
+- **改动**：补 **`setApprovalMode` / `archiveEngagement` / `purgeEngagement`** 三个类型化包装
+  （用契约输入类型 + `Omit<…, 'operatorId' | 'expectedStateVersion'>`，与既有包装同形）；
+  四处视图迁移；`mutate` 的文档明确「**视图不得直接调用**——每个端点都应有类型化动作」。
+- **行为等价**：原调用传 `reason=''`、不传 `expectedStateVersion`（由控制器取快照版本）；
+  包装内部 `reason ?? ''` 且不传 options → 与原先**逐字等价**。
+- **验证**：视图层 `mutate` 调用 **0 处**；typecheck 0、lint 0。
+
+### L.4 Stage 4：装配壳文档去重
+
+- **量化**：`pg-workflow.ts` 的 110 行 JSDoc 中 **102 行与流程文件逐字重复**（21 个块完全重复、1 个部分、1 个独有）。
+- **改动**：按「块内所有有效行都能在流程文件里找到」的判据删除 21 个块，保留 2 个；
+  头部说明「**方法级文档在流程文件里**」并写明此前两处各一份会漂移。**423 → 261 行**。
+- **验证**：typecheck 0、lint 0（含 `pg-workflow` 相关测试）。
+
+### L.5 Stage 6：零引用导出收窄（本批最大的量化改进）
+
+- **规则（保守）**：只处理 `export <decl>` 声明形式；符号名在**其它文件**（src/test/scripts 全部）零出现；
+  且在本文件内至少出现 2 次（声明 + 使用）→ 去掉 `export` 不会有 lint 未使用错误、也不删任何东西。
+  **排除插件入口**（`src/index.ts`、`src/client/index.ts`：它们的导出是宿主运行期契约，静态扫描看不见）。
+- **结果**：**收窄 349 个导出（72 个文件）**；另删除报告已决定删除的两个符号
+  （`ReconciliationSource`——零实现零引用的假想 seam；`phaseOrder`）。
+- **lint 抓到的边界情况（值得记）**：9 个常量形如 `const X = [...] as const; type Y = (typeof X)[number]`——
+  值只被**自身的 `typeof` 类型**引用，去掉 `export` 后按 eslint 语义算「未使用」。
+  它们是**取值域词汇表**（`CONSOLE_ERROR_CODES` / `SESSION_KINDS` / `SCOPE_REJECTION_CODES` / `CHUNK_PARTS` /
+  `HISTORY_ENTRY_KINDS` / `PINNED_ENTRY_KINDS` / `TOOL_OUTPUT_ENTRY_KINDS` / `COMPACTION_VIOLATION_CODES` /
+  `BUDGET_DIMENSIONS`），删常量会破坏「改数组即改类型」的单源关系 → **回补导出**（脚本化）。
+- **量化结果**：导出面 **1277 → 925（−27.6%）**；**零引用导出 380 → 34（−91%）**；
+  剩余 34 个是**刻意保留**的：入口导出（3）、领域词汇常量（12，见报告 §5-E）、
+  以及「仅在别处注释里被提到」的保守保留项（脚本把注释出现也算引用）。
+- **验证**：typecheck 0、lint 0、全量测试与门禁见下。

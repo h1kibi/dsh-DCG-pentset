@@ -27,7 +27,7 @@ import type { ProcessRunner } from './docker-sandbox.ts';
 import { DOCKER_BIN } from './docker-sandbox.ts';
 
 /** 白名单条目：主机名或 IP 字面量（代理按字符串比对）。 */
-export type EgressHost = string;
+type EgressHost = string;
 
 export interface EgressScopeTarget {
   readonly kind: string;
@@ -97,7 +97,7 @@ function hostOf(target: EgressScopeTarget): EgressHost | null {
   return raw;
 }
 
-export interface EgressSyncDeps {
+interface EgressSyncDeps {
   readonly runner: ProcessRunner;
   /**
    * 出口代理容器名。
@@ -115,13 +115,13 @@ export interface EgressSyncDeps {
   readonly log?: (message: string) => void;
 }
 
-export interface EgressAllowlistState {
+interface EgressAllowlistState {
   readonly hosts: readonly EgressHost[];
   /** 容器里那一行原始值（含人类设置的基础设施条目），审计用。 */
   readonly raw: string;
 }
 
-export type EgressSyncResult =
+type EgressSyncResult =
   | {
       readonly ok: true;
       readonly changed: boolean;

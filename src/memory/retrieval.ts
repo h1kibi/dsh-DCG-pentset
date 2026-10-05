@@ -83,7 +83,7 @@ export function scopeFilterInput(
 
 // ───────────────────────────── 融合排序（§8.6） ─────────────────────────────
 
-export const RETRIEVAL_ROUTES = ['semantic', 'lexical', 'trigram'] as const;
+const RETRIEVAL_ROUTES = ['semantic', 'lexical', 'trigram'] as const;
 export type RetrievalRoute = (typeof RETRIEVAL_ROUTES)[number];
 
 /** 倒数排名融合常数。 */
@@ -106,21 +106,21 @@ export const SOURCE_AUTHORITY_BONUS: Readonly<Record<TrustLevel, number>> = {
 };
 
 /** 时效性：新近内容最多加成半个 RRF 单位，按半衰期衰减。 */
-export const RECENCY_MAX_BONUS = RRF_UNIT / 2;
-export const RECENCY_HALF_LIFE_DAYS = 7;
+const RECENCY_MAX_BONUS = RRF_UNIT / 2;
+const RECENCY_HALF_LIFE_DAYS = 7;
 
 /** 暂定惩罚（§8.4：未完成的流式片段标记为暂定）。 */
 export const PROVISIONAL_PENALTY = RRF_UNIT;
 
-export interface RouteRank {
+interface RouteRank {
   /** 1 起的排名；<= 0 或缺失表示该路没有命中。 */
   readonly chunkId: string;
   readonly rank: number;
 }
 
-export type RouteRankings = Readonly<Partial<Record<RetrievalRoute, readonly RouteRank[]>>>;
+type RouteRankings = Readonly<Partial<Record<RetrievalRoute, readonly RouteRank[]>>>;
 
-export interface RrfContribution {
+interface RrfContribution {
   readonly chunkId: string;
   readonly score: number;
   /** 命中的路数，按 canonical 顺序。 */
@@ -173,7 +173,7 @@ export function recencyBonus(
   return RECENCY_MAX_BONUS * 0.5 ** (ageDays / halfLifeDays);
 }
 
-export interface ScoreBreakdown {
+interface ScoreBreakdown {
   /** 三路融合分。 */
   readonly rrf: number;
   readonly authority: number;
@@ -260,14 +260,14 @@ export interface MemoryQuery {
   readonly limit?: number;
 }
 
-export type CandidateRejection =
+type CandidateRejection =
   | 'foreign_engagement'
   | 'not_indexable'
   | 'scope'
   | 'filter'
   | 'no_route_hit';
 
-export interface ScreenContext {
+interface ScreenContext {
   readonly query: MemoryQuery;
   readonly scope: ScopeSets;
   readonly now: Date;
@@ -372,7 +372,7 @@ export interface MemoryHit {
   readonly reasoningLabel: string | null;
 }
 
-export interface MemorySearchInput {
+interface MemorySearchInput {
   /** 服务端从会话解析出的 engagement；Agent 无法指定其他 engagement（§8.6 / §8.7）。 */
   readonly boundEngagementId: string;
   readonly query: MemoryQuery;
@@ -498,7 +498,7 @@ export function searchMemory(input: MemorySearchInput): MemorySearchResult {
 
 // ───────────────────────────── SQL 下推（§8.6） ─────────────────────────────
 
-export interface RetrievalSqlInput {
+interface RetrievalSqlInput {
   readonly engagementId: string;
   readonly query: MemoryQuery;
   readonly includedAssetIds: readonly string[];
@@ -521,7 +521,7 @@ export interface RetrievalSqlInput {
   readonly alias?: string;
 }
 
-export interface RetrievalSql {
+interface RetrievalSql {
   /** 追加到 FROM 之后的 JOIN 片段（kinds / include_reasoning 过滤需要）。 */
   readonly joins: readonly string[];
   /** WHERE 子句，不含 `WHERE` 关键字，占位符为 `$1…$n`。 */

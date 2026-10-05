@@ -14,9 +14,9 @@ import type { ActionClass, BehaviorProfile, ScopeEntryProfile } from '../contrac
 import type { ActionPolicySnapshot } from '../execution/service.ts';
 
 export type { BehaviorProfile, ScopeEntryProfile } from '../contracts.ts';
-export type CredentialMode = 'none' | 'reference' | 'session';
+type CredentialMode = 'none' | 'reference' | 'session';
 
-export interface BehaviorProfileHardLimits {
+interface BehaviorProfileHardLimits {
   readonly maxRatePerSecond?: number;
   readonly maxConcurrency?: number;
   readonly maxBurst?: number;
@@ -29,7 +29,7 @@ export interface BehaviorProfileHardLimits {
   readonly max_jitter?: number;
 }
 
-export interface BehaviorProfileInput {
+interface BehaviorProfileInput {
   readonly profile?: BehaviorProfile;
   /** 审批模式；省略按 `human`（人类逐次审批）——缺省必须是最保守的一档。 */
   readonly approvalMode?: ApprovalMode;
@@ -53,7 +53,7 @@ export interface BehaviorProfileInput {
   readonly profile_revision?: number;
 }
 
-export interface ProfilePacing {
+interface ProfilePacing {
   readonly rate: number;
   readonly concurrency: number;
   readonly jitter: number;
@@ -61,7 +61,7 @@ export interface ProfilePacing {
   readonly retry: number;
 }
 
-export interface ExpandedActionPolicy extends ActionPolicySnapshot {
+interface ExpandedActionPolicy extends ActionPolicySnapshot {
   readonly enabled: readonly ActionClass[];
   readonly disabled: readonly ActionClass[];
 }

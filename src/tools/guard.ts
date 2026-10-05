@@ -44,13 +44,13 @@
 import type { ErrorCode } from '../contracts.ts';
 
 /** 工具的分类，决定它是否可绕过执行服务。 */
-export type ToolKind =
+type ToolKind =
   /** 本插件的只读记忆与报告类工具，不触及目标网络。 */
   | 'non-target'
   /** 本插件的目标类工具，必须经 ExecutionService 准入。 */
   | 'target';
 
-export interface ToolRegistration {
+interface ToolRegistration {
   readonly name: string;
   readonly kind: ToolKind;
 }
@@ -80,7 +80,7 @@ export class ToolRegistry {
 }
 
 /** 守卫看到的调用视图（与 dsh 的 ToolExecution 结构对齐的最小子集）。 */
-export interface GuardedCall {
+interface GuardedCall {
   readonly name: string;
   readonly arguments: unknown;
   /** 非空表示 PTC（run_code）内的嵌套子调用。 */
@@ -88,7 +88,7 @@ export interface GuardedCall {
   readonly agent?: unknown;
 }
 
-export type GuardDecision =
+type GuardDecision =
   | { readonly kind: 'allow' }
   | { readonly kind: 'deny'; readonly reason: string; readonly code: ErrorCode };
 
@@ -227,7 +227,7 @@ export function evaluateGuard(
  * **PTC 嵌套子调用同样经过这两个扩展点**（`ToolExecution.parent` 非空），
  * 因此「把绕过动作塞进 run_code」的路径也会被拦住。
  */
-export interface GuardHost {
+interface GuardHost {
   on(event: 'tools/pre-execute', handler: (call: GuardedCall) => GuardDecision): void;
   guard(fn: (call: Readonly<GuardedCall>) => string | undefined): () => void;
 }

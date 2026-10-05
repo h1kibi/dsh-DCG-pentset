@@ -116,12 +116,12 @@ export interface AmendmentInput {
 }
 
 /** 提交闸门的阻断项。`code` 稳定，便于验收与测试分支。 */
-export interface AmendmentBlocker {
+interface AmendmentBlocker {
   readonly code: 'engagement-missing' | 'no-candidates' | 'reason-required';
   readonly message: string;
 }
 
-export interface AmendmentGateInput {
+interface AmendmentGateInput {
   readonly authorizationRef: string;
   readonly reason: string;
   readonly decisions: readonly AssetScopeDecision[];
@@ -173,7 +173,7 @@ export function formatScopeTarget(target: ScopeTarget): string {
 }
 
 /** 范围管理的 props。 */
-export interface ScopeManagerProps {
+interface ScopeManagerProps {
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;
   /** 当前生效的范围版本。 */

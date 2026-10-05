@@ -44,7 +44,7 @@ export interface SystemPausePort {
   }): Promise<unknown>;
 }
 
-export interface GateFailureSinkDeps {
+interface GateFailureSinkDeps {
   /** 账本端口（见 {@link GateFailureLedger}）。 */
   readonly ledger: GateFailureLedger;
   /** 账本写连接：闸门事件必须与工作流状态写入落在同一个事务里。 */

@@ -40,13 +40,13 @@ import { formatCount, phaseLabel, runMarkerLabel } from '../format.ts';
 import { Badge, Button, Card, Field, TextArea, TextInput } from '../ui.tsx';
 
 /** 启动 Agent 时可选填写的预算上限。留空即不设限（由阶段默认值决定）。 */
-export interface StartBudgetForm {
+interface StartBudgetForm {
   readonly maxTokensText: string;
   readonly maxStepsText: string;
   readonly maxSecondsText: string;
 }
 
-export interface RunControlsProps {
+interface RunControlsProps {
   /** 唯一写入路径（§4.2）：五个动作都经它下发。 */
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;
@@ -123,7 +123,7 @@ export function startBlockers(input: {
 }
 
 /** 运行期动作的可用性。单独成函数以便测试穷举状态组合。 */
-export interface RunActionAvailability {
+interface RunActionAvailability {
   readonly canPause: boolean;
   readonly canResume: boolean;
   readonly canAbort: boolean;

@@ -34,7 +34,7 @@ const DOC = '§10.2.2';
  * 「Agent 想打什么」与「服务端认成什么」——只记原文的话，事后无法判断
  * 是 Agent 写错了还是范围配错了。
  */
-export type Rejection = {
+type Rejection = {
   readonly ok: false;
   readonly code: ScopeRejectionCode;
   readonly detail: string;
@@ -65,7 +65,7 @@ const SCHEME_INFO: Readonly<Record<string, { readonly protocol: Protocol; readon
 };
 
 /** HTTP 路径（代理容器）覆盖的重定向链 scheme；其余 scheme 的重定向按「协议未确定」拒绝（§10.4）。 */
-export const REDIRECT_SCHEMES: readonly string[] = ['http', 'https'];
+const REDIRECT_SCHEMES: readonly string[] = ['http', 'https'];
 
 /** 主机名 / IP 条目未指定端口时按默认端口匹配（§10.2.2「端口的协议依赖性」）。 */
 const DEFAULT_HOST_PORTS: readonly number[] = [80, 443];
@@ -253,7 +253,7 @@ function tryNormalizeAddress(text: string): AddressForm | null {
 }
 
 /** 裁决地址集合中的地址必须是 IP 字面量（§10.2.2 DNS 解析与地址固定）。 */
-export function canonicalizeAddress(text: string): Result<AddressForm> {
+function canonicalizeAddress(text: string): Result<AddressForm> {
   const trimmed = text.startsWith('[') && text.endsWith(']') ? text.slice(1, -1) : text;
   const forbidden = findForbiddenChar(trimmed);
   if (forbidden !== null) return fail('control_chars', `裁决地址含控制字符或空白（${forbidden}）`);
@@ -294,7 +294,7 @@ function looksLikeNoncanonicalIp(text: string): boolean {
 
 // ───────────────────────────── IPv6 / IPv4 网段 ─────────────────────────────
 
-export interface NormalizedCidr {
+interface NormalizedCidr {
   readonly family: 4 | 6;
   readonly network: string;
   readonly prefix: number;
@@ -686,7 +686,7 @@ export function expandAssetLabel(label: string, registry: AssetRegistry | undefi
 
 // ───────────────────────────── 单目标规范化 ─────────────────────────────
 
-export interface ScopeTargetSelector {
+interface ScopeTargetSelector {
   readonly kind: 'domain' | 'ip' | 'cidr' | 'url' | 'asset-label';
   readonly value: string;
 }
@@ -696,7 +696,7 @@ export interface AdjudicatedAddresses {
   readonly [host: string]: readonly string[] | undefined;
 }
 
-export interface NormalizeOptions {
+interface NormalizeOptions {
   readonly adjudicatedAddresses?: AdjudicatedAddresses;
   readonly assetRegistry?: AssetRegistry;
 }
@@ -810,7 +810,7 @@ export interface NormalizedScopeEntry {
   readonly source: ScopeTarget;
 }
 
-export interface ScopeBuildOptions {
+interface ScopeBuildOptions {
   readonly assetRegistry?: AssetRegistry;
   /**
    * 资产标签**不做展开**，只校验条目形态。
@@ -1224,7 +1224,7 @@ function decisionCandidates(req: RequestShape): readonly string[] {
 
 // ───────────────────────────── 范围判定 ─────────────────────────────
 
-export interface EvaluateScopeInput {
+interface EvaluateScopeInput {
   readonly target: string | ScopeTargetSelector;
   /** 动作协议。URL 目标可由 scheme 推导；其余形态未声明即按协议未确定拒绝。 */
   readonly protocol?: Protocol;
@@ -1423,7 +1423,7 @@ function isIpLiteral(text: string): boolean {
 
 // ───────────────────────────── 重定向逐跳校验 ─────────────────────────────
 
-export interface RedirectChainInput {
+interface RedirectChainInput {
   readonly chain: readonly string[];
   readonly scope: ScopeRuleSet | LoadedScope;
   readonly adjudicatedAddresses?: AdjudicatedAddresses;

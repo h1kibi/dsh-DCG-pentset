@@ -53,7 +53,7 @@ import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextArea } fro
 // ─────────────── 文案与取值域（§21 暂无完整 locale 表，先集中在这里） ───────────────
 
 /** §8.9 的四类分节。顺序即报告里的顺序，也是本页的阅读顺序。 */
-export const REVIEW_SECTION_ORDER: readonly ReportSection[] = [
+const REVIEW_SECTION_ORDER: readonly ReportSection[] = [
   'verified_findings',
   'assessed_not_confirmed',
   'unverified_candidates',
@@ -135,7 +135,7 @@ export function reviewSectionOf(
  *
  * **任何**处置记录（含暂缓）都算「已给出处置」：暂缓是一条明确的判断，不是没判断。
  */
-export function isUndisposedFinding(
+function isUndisposedFinding(
   finding: Finding,
   disposition: DispositionAction | null,
 ): boolean {
@@ -169,7 +169,7 @@ export interface GateBlocker {
 }
 
 /** 一次处置提交的全部前置条件。 */
-export interface DispositionGateInput {
+interface DispositionGateInput {
   readonly action: DispositionAction;
   /** 人工确认后的严重度（可空：契约里 `severity` 可选，但接受时本页要求给出）。 */
   readonly severity: Severity | null;
@@ -294,7 +294,7 @@ export type DispositionOutcome =
   | { readonly ok: true; readonly replay?: boolean }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
-export interface ReportReviewProps {
+interface ReportReviewProps {
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;
   /**

@@ -27,9 +27,9 @@ import { RUNTIME_MARKER_TRANSITION_TYPES, isLegalStatusEdge, statusEdgesFor } fr
  *   - `'from-input'`：由人类在弹窗里选择——重做默认复用当前会话（§13.5）；
  *   - `null`：该操作不涉及会话复用判定（取消交接、运行标记等）。
  */
-export type SessionReuse = boolean | 'from-input' | null;
+type SessionReuse = boolean | 'from-input' | null;
 
-export interface TransitionDispatch {
+interface TransitionDispatch {
   readonly type: TransitionType;
   /** §5.4 分派表的「操作」列。 */
   readonly operation: string;
@@ -167,7 +167,7 @@ export const TRANSITION_DISPATCH: Readonly<Record<TransitionType, TransitionDisp
 
 // ───────────────────────────── 不变量 ─────────────────────────────
 
-export type DispatchProblemKind =
+type DispatchProblemKind =
   | 'unknown_type'
   | 'missing_type'
   | 'type_field_mismatch'
@@ -178,7 +178,7 @@ export type DispatchProblemKind =
   | 'session_reuse_mismatch'
   | 'status_edge_mismatch';
 
-export interface DispatchProblem {
+interface DispatchProblem {
   readonly kind: DispatchProblemKind;
   readonly type: TransitionType | null;
   readonly detail: string;
@@ -305,7 +305,7 @@ assertDispatchTable();
 
 // ───────────────────────────── 转移计划 ─────────────────────────────
 
-export interface TransitionRequest {
+interface TransitionRequest {
   readonly type: TransitionType;
   readonly fromStatus: MainStatus;
   readonly toStatus: MainStatus;

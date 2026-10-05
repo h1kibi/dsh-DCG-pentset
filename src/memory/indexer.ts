@@ -70,7 +70,7 @@ export const INDEX_STRATEGY_VERSION = 'index-v1';
  * `embedding_revision_inactive` 见 {@link MemoryIndexer} 的版本登记：写出检索面
  * 看不见的分块等于静默丢失，必须响亮拒绝。
  */
-export type IndexerErrorCode = ErrorCode | 'invalid_session_phase' | 'embedding_revision_inactive';
+type IndexerErrorCode = ErrorCode | 'invalid_session_phase' | 'embedding_revision_inactive';
 
 /**
  * 索引器故障：携带稳定码，供调度器与观测分支，而不是靠解析文本。
@@ -90,7 +90,7 @@ export class IndexerError extends Error {
   }
 }
 
-export interface IndexerDeps {
+interface IndexerDeps {
   /** 读路径与单语句写。 */
   readonly db: DbClient;
   /** 事务用途（版本切换、水位推进）。省略则用 `db`——但连接池下事务会静默失效。 */
@@ -128,7 +128,7 @@ export interface IndexEventResult {
   readonly lexicalOnly: boolean;
 }
 
-export interface IndexRunResult {
+interface IndexRunResult {
   readonly engagementId: string;
   readonly fromChainSeq: number;
   readonly toChainSeq: number;

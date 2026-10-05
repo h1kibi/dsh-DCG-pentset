@@ -73,7 +73,7 @@ function mainStatusTone(status: MainStatus): Tone {
 }
 
 /** 清理列的判定。单独成函数以便测试穷举「未归档 / 已归档 / 已清空」三种组合。 */
-export interface EngagementActionAvailability {
+interface EngagementActionAvailability {
   /** 归档按钮文案：归档 ⇄ 取消归档。 */
   readonly archiveLabel: string;
   /** 是否渲染「清空内容…」（只对已归档的作业有意义）。 */
@@ -99,7 +99,7 @@ export function engagementActionAvailability(
   };
 }
 
-export interface EngagementListProps {
+interface EngagementListProps {
   /** 完整列表（未经筛选）。筛选由本组件按 `filter` 做，空态才能区分两种原因。 */
   readonly engagements: readonly EngagementSummary[];
   /** 当前选中项（高亮）。 */

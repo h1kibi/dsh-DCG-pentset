@@ -21,7 +21,7 @@ import type { PhaseEdge, PhaseNode } from '../phase-track.ts';
 import { formatCount, formatTimestamp, truncate } from '../format.ts';
 import { Badge, Card, Empty, toneClass } from '../ui.tsx';
 
-export interface PhaseTrackProps {
+interface PhaseTrackProps {
   readonly sessions: readonly WorkerSessionSummary[];
   /** 便签在节点上显示的最大字符数。默认 40——轨道是横向布局，空间有限。 */
   readonly noteMaxChars?: number;

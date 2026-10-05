@@ -49,12 +49,12 @@ import { NOTIFY_CHANNEL } from './notify-listener.ts';
 //
 // 新增类型时只改这里，并同步索引器；`isOutboxJobType` 是唯一的判定入口。
 
-export const OUTBOX_JOB_TYPES = [
+const OUTBOX_JOB_TYPES = [
   'index_event',
   'index_memory_item',
   'reindex_engagement',
 ] as const;
-export type OutboxJobType = (typeof OUTBOX_JOB_TYPES)[number];
+type OutboxJobType = (typeof OUTBOX_JOB_TYPES)[number];
 
 /**
  * 具名常量：**唯一**的字面量出处（`satisfies` 保证它们仍在取值表内，写错即编译失败）。
@@ -66,18 +66,18 @@ export const INDEX_EVENT_JOB = 'index_event' satisfies OutboxJobType;
 export const INDEX_MEMORY_ITEM_JOB = 'index_memory_item' satisfies OutboxJobType;
 export const REINDEX_ENGAGEMENT_JOB = 'reindex_engagement' satisfies OutboxJobType;
 
-export function isOutboxJobType(value: unknown): value is OutboxJobType {
+function isOutboxJobType(value: unknown): value is OutboxJobType {
   return typeof value === 'string' && (OUTBOX_JOB_TYPES as readonly string[]).includes(value);
 }
 
 /** 任务状态（与 001 的 CHECK 逐字一致）。 */
-export const OUTBOX_STATUSES = ['pending', 'leased', 'done', 'dead'] as const;
+const OUTBOX_STATUSES = ['pending', 'leased', 'done', 'dead'] as const;
 export type OutboxJobStatus = (typeof OUTBOX_STATUSES)[number];
 
 /** 索引滞后状态（§15.5「索引状态单独展示为就绪、滞后或失败」；与 005 的 `index_watermarks.status` 同词表）。 */
-export type IndexLagState = 'ready' | 'lagging' | 'failed';
+type IndexLagState = 'ready' | 'lagging' | 'failed';
 
-export const OUTBOX_DEFAULTS = {
+const OUTBOX_DEFAULTS = {
   /** `claim` 单批上限。 */
   claimLimit: 16,
   /** 默认租约长度（秒）。索引一个事件是秒级工作，60 秒留出足够的余量。 */
@@ -160,7 +160,7 @@ export interface EnqueueResult {
   readonly created: boolean;
 }
 
-export interface ClaimInput {
+interface ClaimInput {
   readonly engagementId: string;
   /** 只领这些类型；省略 = 全部类型。 */
   readonly jobTypes?: readonly string[];
@@ -170,7 +170,7 @@ export interface ClaimInput {
   readonly leaseSeconds?: number;
 }
 
-export interface SweepInput {
+interface SweepInput {
   /** 判定基准时间；省略用数据库时钟。传入只为确定性（§14.3 启动重扫按真实时钟即可）。 */
   readonly now?: Date;
   /** 单批上限，默认 {@link OUTBOX_DEFAULTS.sweepLimit}。 */
@@ -189,7 +189,7 @@ export interface OutboxStats {
   readonly state: IndexLagState;
 }
 
-export interface IdempotencyKeyInput {
+interface IdempotencyKeyInput {
   readonly jobType: string;
   readonly entityId: string;
   /**

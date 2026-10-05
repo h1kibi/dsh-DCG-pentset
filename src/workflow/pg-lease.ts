@@ -373,12 +373,12 @@ class PgLeaseTx implements LeaseTx {
  * `engagementId` 为 `null` 表示**租户级**作用域（`listEngagements` 这类只按租户
  * 定界的操作）。engagement 作用域的读写在租户级下查不到行，是 fail closed。
  */
-export interface PgLeaseRlsContext {
+interface PgLeaseRlsContext {
   readonly tenantId: string;
   readonly engagementId: string | null;
 }
 
-export interface PgLeaseStoreOptions {
+interface PgLeaseStoreOptions {
   /** 静态 RLS 事务上下文；session-first 调用可通过 `rlsContextForSession` 动态解析。 */
   readonly rlsContext?: PgLeaseRlsContext;
   readonly rlsContextForSession?: (workerSessionId: string) => Promise<PgLeaseRlsContext | null>;

@@ -64,7 +64,7 @@ export const CHUNK_PARTS = [
   'http_metadata',
   'binary_metadata',
 ] as const;
-export type ChunkPart = (typeof CHUNK_PARTS)[number];
+type ChunkPart = (typeof CHUNK_PARTS)[number];
 
 /** 报告分段顺序（§8.5：按摘要、事实、假设、结论、限制分段）。 */
 export const REPORT_SECTIONS = [
@@ -92,7 +92,7 @@ export const REPORT_EVENT_TYPES = [
 ] as const satisfies readonly DomainEventType[];
 
 /** 工具输出类事件（§8.5「工具输出」「HTTP 与 JSON」「流量与二进制」共用这些来源）。 */
-export const TOOL_EVENT_TYPES = ['tool.call', 'tool.result', 'tool.artifact'] as const satisfies
+const TOOL_EVENT_TYPES = ['tool.call', 'tool.result', 'tool.artifact'] as const satisfies
   readonly DomainEventType[];
 
 /** 可留空 asset_ids 的记忆类型（§8.6：解析不出归属的事件类型才允许留空）。 */
@@ -147,19 +147,19 @@ export const CHUNKABLE_EVENT_TYPES: readonly string[] = [
 
 // ───────────────────────────── 分块窗口 ─────────────────────────────
 
-export const CHUNK_WINDOW_DEFAULTS = {
+const CHUNK_WINDOW_DEFAULTS = {
   /** 固定切分窗口（UTF-16 码元）。 */
   windowChars: 2_000,
   /** 相邻窗口重叠，保证跨窗口的标识符与命令不被截断丢证。 */
   overlapChars: 200,
 } as const;
 
-export interface WindowOptions {
+interface WindowOptions {
   readonly windowChars?: number;
   readonly overlapChars?: number;
 }
 
-export interface TextWindow {
+interface TextWindow {
   /** 窗口在原文中的序号（从 0 起）。 */
   readonly ordinal: number;
   readonly start: number;
@@ -199,7 +199,7 @@ export function splitFixedWindow(text: string, options: WindowOptions = {}): rea
 
 // ───────────────────────────── 分块草稿 ─────────────────────────────
 
-export interface ChunkRange {
+interface ChunkRange {
   readonly start: number;
   readonly end: number;
 }
@@ -253,7 +253,7 @@ export interface ToolResultPayload {
   readonly evidenceRefs?: readonly string[];
 }
 
-export interface HttpExchangePayload {
+interface HttpExchangePayload {
   readonly method?: string;
   readonly url?: string;
   readonly path?: string;
@@ -267,7 +267,7 @@ export interface HttpExchangePayload {
   readonly rawBodyRef?: string;
 }
 
-export interface BinaryEvidencePayload {
+interface BinaryEvidencePayload {
   readonly mimeType?: string;
   readonly byteLength?: number;
   /** 证据哈希。 */
@@ -282,7 +282,7 @@ export interface BinaryEvidencePayload {
  * 但历史载荷与模型都可能写成纯字符串——两种都要能落块。**形状不匹配不能表现为静默丢弃**：
  * 丢掉的正是「事实」，那等于报告在记忆面不存在（QA 2026-10-04 实测：facts 全丢，只剩摘要）。
  */
-export interface ReportItemObject {
+interface ReportItemObject {
   /** 主文本。设计用 `statement`；`fact`/`title`/`text` 是实测中模型写过的同义字段。 */
   readonly statement?: string;
   readonly fact?: string;
@@ -298,7 +298,7 @@ export interface ReportItemObject {
 }
 
 /** 报告分段里的一条：字符串（旧载荷）或对象（设计 schema）。 */
-export type ReportItem = string | ReportItemObject;
+type ReportItem = string | ReportItemObject;
 
 export interface ReportPayload {
   readonly revision?: number;
@@ -354,7 +354,7 @@ export interface ChunkingOptions extends WindowOptions {
  * `set-cookie` / `authorization` 属于关键头部（「有没有下发会话」本身就是证据），
  * 但值一律经 {@link SENSITIVE_HEADER} 脱敏，只保留头部名。
  */
-export const DEFAULT_HTTP_HEADER_ALLOW_LIST = [
+const DEFAULT_HTTP_HEADER_ALLOW_LIST = [
   'content-type',
   'content-length',
   'location',
@@ -616,7 +616,7 @@ export function reportSectionTexts(payload: unknown): readonly string[] {
 }
 
 /** 无法归类时的兜底种类（§8.9：观察经规范化后即为事实）。显式兜底，不静默丢弃内容。 */
-export const UNCLASSIFIED_CHUNK_KIND: ChunkKind = 'fact';
+const UNCLASSIFIED_CHUNK_KIND: ChunkKind = 'fact';
 
 /** 事件类型 → 可能的分块种类（{@link CHUNK_KIND_EVENT_TYPES} 的逆索引，按 `CHUNK_KINDS` 顺序）。 */
 const KINDS_BY_EVENT_TYPE: Readonly<Record<string, readonly ChunkKind[]>> = (() => {
@@ -901,11 +901,11 @@ function buildDrafts(
 
 // ───────────────────────────── 写入侧义务校验（§8.6） ─────────────────────────────
 
-export type ChunkWriteCheck =
+type ChunkWriteCheck =
   | { readonly ok: true }
   | { readonly ok: false; readonly code: ErrorCode; readonly detail: string };
 
-export interface ChunkAssetObligationInput {
+interface ChunkAssetObligationInput {
   readonly kind: ChunkKind;
   readonly assetIds: readonly string[];
   readonly sourceEventId: string;

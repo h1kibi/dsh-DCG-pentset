@@ -38,7 +38,7 @@ import { SessionChatClient, projectTranscript } from '../session-chat.ts';
 import { actionClassLabel } from '../format.ts';
 import { Badge, Button, Card, Empty, Field, List, Stat, Table, TextArea, TextInput } from '../ui.tsx';
 
-export interface SessionChatProps {
+interface SessionChatProps {
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;
   readonly rpc?: SessionChatRpc;

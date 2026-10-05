@@ -31,7 +31,7 @@ export interface BehaviorBrief {
 }
 
 /** 场景名（与界面下拉的标签同源语义；界面另有自己的 exhaustiveness 映射）。 */
-export const PROFILE_SCENARIOS: Readonly<Record<BehaviorProfile, string>> = Object.freeze({
+const PROFILE_SCENARIOS: Readonly<Record<BehaviorProfile, string>> = Object.freeze({
   stealth: '红队 / 隐蔽测试',
   standard: '已通知的授权渗透测试',
   deep: '高许可 / 穷尽利用尝试',

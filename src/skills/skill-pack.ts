@@ -52,7 +52,7 @@ const PHASES: readonly Phase[] = [
   'post-exploitation',
 ];
 
-export class SkillPackError extends Error {
+class SkillPackError extends Error {
   override readonly name = 'SkillPackError';
 }
 

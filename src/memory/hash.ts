@@ -59,7 +59,7 @@ export class LedgerError extends Error {
 
 // ───────────────────────────── 常量与取值域 ─────────────────────────────
 
-export const HASH_ALGORITHM = 'sha256';
+const HASH_ALGORITHM = 'sha256';
 export const HASH_HEX_LENGTH = 64;
 /** 记录的签名算法标识（审计与锚点存储用），对应 Node 摘要名 `sha256`。 */
 export const BATCH_SIGNATURE_ALGORITHM = 'hmac-sha256';
@@ -204,7 +204,7 @@ function requireSafeSeq(value: unknown, path: string): number {
 }
 
 /** 覆盖字段校验：缺字段、未覆盖字段、类型不符一律拒绝（fail-closed）。 */
-export function assertHashCoverage(payload: EventHashPayload): void {
+function assertHashCoverage(payload: EventHashPayload): void {
   if (!isPlainObject(payload)) {
     throw new LedgerError('audit_unavailable', '事件哈希负载必须是平凡对象');
   }

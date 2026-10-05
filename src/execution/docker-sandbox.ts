@@ -57,7 +57,7 @@ export interface AllowedImage {
   readonly templateIds?: readonly string[];
 }
 
-export interface SandboxLimits {
+interface SandboxLimits {
   readonly cpus: string;
   readonly memory: string;
   readonly pidsLimit: number;
@@ -376,7 +376,7 @@ export const spawnRunner: ProcessRunner = {
   },
 };
 
-export interface DockerSandboxDeps {
+interface DockerSandboxDeps {
   readonly runner?: ProcessRunner;
   /** 生成容器名的函数（便于测试注入固定值）。 */
   readonly containerName?: (plan: ExecutionPlan) => string;

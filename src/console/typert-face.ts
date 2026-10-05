@@ -45,12 +45,12 @@ import { CONSOLE_TYPRET_SERVICE } from './method-names.ts';
 export { CONSOLE_TYPRET_SERVICE } from './method-names.ts';
 
 /** 操作者身份的来源（部署配置，见 `PluginConfig.operator` 的说明）。 */
-export interface ConsoleTypertOperator {
+interface ConsoleTypertOperator {
   readonly id: string;
   readonly source: string;
 }
 
-export interface ConsoleTypertServiceOptions {
+interface ConsoleTypertServiceOptions {
   readonly rpc: ConsoleRpc;
   readonly operator: ConsoleTypertOperator;
   /** 时钟注入，便于测试。 */

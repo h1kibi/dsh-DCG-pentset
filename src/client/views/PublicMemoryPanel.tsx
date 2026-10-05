@@ -33,7 +33,7 @@ import { formatTimestamp } from '../format.ts';
 import { Button, Card, Empty, ErrorBar, Field, TextArea } from '../ui.tsx';
 import { PUBLIC_MEMORY_MAX_CHARS } from '../../contracts.ts';
 
-export interface PublicMemoryPanelProps {
+interface PublicMemoryPanelProps {
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;
   /** 已读取的记忆；`null` = 尚未成功读取（还没读，或读失败）。 */

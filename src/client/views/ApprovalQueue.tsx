@@ -97,7 +97,7 @@ function missingFields(item: ApprovalItem): readonly string[] {
  * 对人类的含义完全不同（前者已成事实、后者仍可撤销），而数据库里两者都是
  * `decision = 'approved'` + `consumed_at` 有值。多出来的这一个值正是这一屏要讲的差异。
  */
-export type ApprovalResolution =
+type ApprovalResolution =
   | 'awaiting'
   | 'approved'
   | 'consumed'
@@ -291,7 +291,7 @@ export function approvalItemOf(detail: ApprovalDetail): ApprovalItem {
   };
 }
 
-export interface ApprovalGate {
+interface ApprovalGate {
   /** 处置状态的判别值。视图据它计数与分支，**不比较展示标签**。 */
   readonly resolution: ApprovalResolution;
   readonly stateLabel: string;
@@ -478,7 +478,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
 }
 
 /** 放行队列的 props。 */
-export interface ApprovalQueueProps {
+interface ApprovalQueueProps {
   /** 唯一写入路径（§4.2）：放行决策经它下发。 */
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;

@@ -59,7 +59,7 @@ import {
 export const EVENT_SCHEMA_VERSION = 1;
 
 /** advisory lock 键的命名空间高位，区分本插件与同库其它锁使用者。 */
-export const ADVISORY_LOCK_NAMESPACE = 0x4453_4850; // 'DSHP'
+const ADVISORY_LOCK_NAMESPACE = 0x4453_4850; // 'DSHP'
 
 const ENGAGEMENT_ID_PATTERN = /^[0-9a-zA-Z][0-9a-zA-Z-]{0,63}$/;
 
@@ -156,7 +156,7 @@ export interface AnchorSink {
 }
 
 /** 批次签名器。默认用注入的密钥对「负载集合 + 作用域」做 HMAC-SHA256。 */
-export type BatchSigner = (
+type BatchSigner = (
   payloads: readonly EventHashPayload[],
   scope: BatchSignatureScope,
 ) => string;
@@ -176,7 +176,7 @@ export interface TransactionalLedger {
 }
 
 /** 账本选项。 */
-export interface LedgerOptions {
+interface LedgerOptions {
   readonly db: DbClient;
   readonly txDb?: DbClient;
   readonly secret: LedgerSecret;
@@ -449,7 +449,7 @@ function assertAppendInput(input: AppendEventInput): void {
 
 // ───────────────────────────── 链校验 ─────────────────────────────
 
-export type ChainFailureKind = 'genesis_prev_hash' | 'broken_link' | 'hash_mismatch' | 'seq_gap';
+type ChainFailureKind = 'genesis_prev_hash' | 'broken_link' | 'hash_mismatch' | 'seq_gap';
 
 export interface ChainFailure {
   readonly kind: ChainFailureKind;
@@ -457,7 +457,7 @@ export interface ChainFailure {
   readonly detail: string;
 }
 
-export interface ChainVerification {
+interface ChainVerification {
   readonly engagementId: string;
   readonly ok: boolean;
   readonly eventCount: number;
@@ -465,9 +465,9 @@ export interface ChainVerification {
   readonly failures: readonly ChainFailure[];
 }
 
-export type AnchorMismatch = 'chain_head' | 'event_count';
+type AnchorMismatch = 'chain_head' | 'event_count';
 
-export interface AnchorCheck {
+interface AnchorCheck {
   readonly engagementId: string;
   readonly ok: boolean;
   readonly chainHead: string;

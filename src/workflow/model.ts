@@ -330,7 +330,7 @@ function readAuthorizationExpiry(scopeSnapshot: unknown): string | null {
   return typeof raw === 'string' && raw !== '' ? raw : null;
 }
 
-export /**
+/**
  * 内置默认模型路由。
  *
  * 路由名必须是宿主**已注册**的 provider 名。写错的代价不是创建期报错，而是第一个回合
@@ -441,7 +441,7 @@ function previewOne(entry: ScopeTarget, index: number): ScopePreviewEntry {
   };
 }
 
-export /**
+/**
  * 端口语义的人读描述。
  *
  * 两种情形：
@@ -544,7 +544,7 @@ function asStringArray(value: unknown): readonly string[] {
   return [];
 }
 
-export /** 收窄成范围条目数组。形状不符的条目**丢弃**但计数可观测（不静默改变语义）。 */
+/** 收窄成范围条目数组。形状不符的条目**丢弃**但计数可观测（不静默改变语义）。 */
 function asScopeTargets(value: unknown): readonly ScopeTarget[] {
   const items = asStringArray(value).length > 0 ? [] : (Array.isArray(value) ? value : []);
   const out: ScopeTarget[] = [];

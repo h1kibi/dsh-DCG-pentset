@@ -68,7 +68,7 @@ export const PALETTE = {
 export type PaletteKey = keyof typeof PALETTE;
 
 /** 语义别名：视图与样式规则用这些名字，不直接挑色相。 */
-export const SEMANTIC: Readonly<Record<string, PaletteKey>> = {
+const SEMANTIC: Readonly<Record<string, PaletteKey>> = {
   'bg-void': 'void',
   'bg-panel': 'bg',
   'bg-module': 'raise',
@@ -95,7 +95,7 @@ export const SEMANTIC: Readonly<Record<string, PaletteKey>> = {
  * - 不做 CJK 随包字体：一份可用子集也要 2–5 MB，而本机字体的中文在这套
  *   「暗底 + 紧凑字距」里已经够用。要换风格时改这一处即可。
  */
-export const FONTS = {
+const FONTS = {
   mono: '"Pentest Cascadia Mono","Cascadia Mono","Cascadia Code",Consolas,"DejaVu Sans Mono",ui-monospace,monospace',
   sans: '"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei","DengXian",system-ui,sans-serif',
 } as const;
@@ -120,7 +120,7 @@ export const SPACE = {
 } as const;
 
 /** 动效时长与缓动。 */
-export const MOTION = {
+const MOTION = {
   fast: 120,
   base: 220,
   slow: 420,
@@ -128,7 +128,7 @@ export const MOTION = {
 } as const;
 
 /** 圆角：仪器感——几乎全是直角，只在胶囊与弧线上用圆。 */
-export const RADII = {
+const RADII = {
   sharp: 2,
   pill: 999,
 } as const;
@@ -198,7 +198,7 @@ export function tokenCss(): string {
 }
 
 /** `phosDim` → `phos-dim`。 */
-export function camelToKebab(value: string): string {
+function camelToKebab(value: string): string {
   return value.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 }
 
@@ -240,7 +240,7 @@ export function definedTokens(): readonly string[] {
 }
 
 /** 相对亮度（WCAG 2.1）。 */
-export function relativeLuminance(hex: string): number {
+function relativeLuminance(hex: string): number {
   const value = hex.replace('#', '');
   const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16) / 255);
   const [r, g, b] = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)) as [number, number, number];

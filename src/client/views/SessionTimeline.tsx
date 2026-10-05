@@ -36,7 +36,7 @@ import {
 } from '../format.ts';
 import { Badge, Button, Card, Empty, TextInput, toneClass } from '../ui.tsx';
 
-export interface SessionTimelineProps {
+interface SessionTimelineProps {
   readonly sessions: readonly WorkerSessionSummary[];
   /**
    * 「进入会话」：切到该会话的对话界面（人类报障：各阶段的会话只能看，进不去）。

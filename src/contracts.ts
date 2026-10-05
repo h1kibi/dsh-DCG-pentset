@@ -1427,7 +1427,7 @@ export interface RejectScopeProposalInput extends HumanActor {
 }
 
 
-export interface FinishWorkerInput {
+interface FinishWorkerInput {
   readonly workerSessionId: string;
   readonly report: WorkerReportInput;
 }
@@ -1602,7 +1602,7 @@ export interface HumanApprovalDecision {
 }
 
 /** 原审批绑定上下文；验证器据此重新裁决修改计划。 */
-export interface ApprovalPlanValidationContext {
+interface ApprovalPlanValidationContext {
   readonly approvalId: string;
   readonly engagementId: string;
   readonly workerSessionId: string | null;
@@ -2004,7 +2004,7 @@ export interface LedgerVerificationView {
   readonly checkedAt: string;
 }
 
-export interface LedgerChainFailureView {
+interface LedgerChainFailureView {
   readonly chainSeq: number;
   readonly detail: string;
 }
@@ -2134,7 +2134,7 @@ export interface ReportVersionRef {
  * 列成枚举而不是自由文本：这两处是**设计里唯二的系统暂停**（§10.2.2 的范围违规阈值、
  * §10.5 的预算硬阈值），而事后审计要能一眼区分「是哪一个触发的」。
  */
-export type SystemPauseCause = 'scope_violation_threshold' | 'budget_exhausted';
+type SystemPauseCause = 'scope_violation_threshold' | 'budget_exhausted';
 
 export interface SystemPauseRequest {
   readonly engagementId: string;

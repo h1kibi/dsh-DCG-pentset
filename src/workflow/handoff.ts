@@ -34,7 +34,7 @@ import type {
   ToolError,
 } from '../contracts.ts';
 
-export const DEFAULT_HANDOFF_HASH_ALGORITHM = 'sha256';
+const DEFAULT_HANDOFF_HASH_ALGORITHM = 'sha256';
 
 /**
  * 交接包里**引用列表**的上限（设计 §8.10.1：被截断的引用要写进交接包）。
@@ -51,7 +51,7 @@ export const DEFAULT_HANDOFF_HASH_ALGORITHM = 'sha256';
  */
 export { HANDOFF_MAX_CONTEXT_REFS } from '../contracts.ts';
 
-export interface CappedContextRefs {
+interface CappedContextRefs {
   /** 进入交接包的引用（保持原顺序）。 */
   readonly kept: readonly string[];
   /** 因超预算未进入交接包的引用（顺序不变）——写入交接包供下一 Agent 检索补齐。 */
@@ -102,7 +102,7 @@ export function capContextRefs(
   return { kept: unique.slice(0, max), truncated: unique.slice(max) };
 }
 
-export interface HandoffViolationContext {
+interface HandoffViolationContext {
   readonly draftId?: string;
   readonly transitionType?: unknown;
   readonly requiredKeys?: readonly string[];
@@ -203,7 +203,7 @@ export interface BoundScopeVersion {
 }
 
 /** 每个必需键解析出的引用集合；空数组即"解析为空"（§7.2 阻止确认）。 */
-export type ResolvedHandoffKeys = Readonly<Record<RequiredHandoffKey, readonly string[]>>;
+type ResolvedHandoffKeys = Readonly<Record<RequiredHandoffKey, readonly string[]>>;
 
 /**
  * §7.2 的解析来源表，逐条实现：
@@ -310,7 +310,7 @@ export function validateHandoff(
 }
 
 /** 确认前的完整检查：非法转移类型 → 必需键。两者是不同的失败，模型据码分支。 */
-export interface HandoffConfirmationInput {
+interface HandoffConfirmationInput {
   readonly pkg: HandoffPackage;
   /** 目标阶段 Profile 声明的必需键（人类可追加，不可超出来源表）。 */
   readonly requiredKeys: readonly RequiredHandoffKey[];
@@ -318,7 +318,7 @@ export interface HandoffConfirmationInput {
   readonly context?: HandoffResolutionContext;
 }
 
-export type HandoffConfirmationCheck =
+type HandoffConfirmationCheck =
   | { readonly ok: true }
   | {
       readonly ok: false;

@@ -64,17 +64,17 @@ import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextInput } fr
 export const REASONING_NOTE = '模型内部推理，不等同于事实';
 
 /** 思考链开关的标签。写全 `include_reasoning`，让它与文档/接口参数一一对上。 */
-export const REASONING_SWITCH_LABEL = '纳入思考链（include_reasoning 筛选开关）';
+const REASONING_SWITCH_LABEL = '纳入思考链（include_reasoning 筛选开关）';
 
 /** 开关的说明：这是本视图最容易被误读的一处（见文件头第 1 条）。 */
 export const REASONING_SWITCH_HINT =
   '这是筛选开关，不是权限门禁：思考链对本 engagement 的全部 Worker 都开放检索与阅读（§8.3）。'
   + '勾选与否只决定本次检索是否返回思考链条目，不代表获得了或失去了任何权限。';
 
-export const REASONING_SWITCH_ON_NOTE =
+const REASONING_SWITCH_ON_NOTE =
   '思考链与其他记忆类型使用完全相同的排序规则：既不额外加分也不降权，只多一个「模型内部推理」标注（§8.6）。';
 
-export const REASONING_SWITCH_OFF_NOTE =
+const REASONING_SWITCH_OFF_NOTE =
   '本次检索不返回思考链条目——仅筛选，不改变任何人的读取权限（§8.3）。';
 
 const AUDIT_NOTE =
@@ -122,7 +122,7 @@ function isMemoryKind(value: string): value is ChunkKind {
 }
 
 /** 可勾选的记忆类型，顺序即 §8.5 的分块来源顺序。 */
-export const MEMORY_KIND_OPTIONS: readonly { readonly value: ChunkKind; readonly label: string }[] =
+const MEMORY_KIND_OPTIONS: readonly { readonly value: ChunkKind; readonly label: string }[] =
   Object.entries(KIND_LABELS).flatMap(([value, label]) => (isMemoryKind(value) ? [{ value, label }] : []));
 
 /**
@@ -316,7 +316,7 @@ export function parseIdList(text: string): readonly string[] {
 }
 
 /** 多选开关的纯函数：勾选/取消一个值，保序。 */
-export function toggleValue<T extends string>(
+function toggleValue<T extends string>(
   list: readonly T[],
   value: T,
   next: boolean,
@@ -331,7 +331,7 @@ export function toggleValue<T extends string>(
  * 融合分的展示。RRF 分在 1e-2 量级（§8.6 的 `RRF_UNIT = 1/(60+1)`），固定 4 位小数才能
  * 看出两行的差别；`toFixed` 对非有限数会得到 `"NaN"`，因此先判一次。
  */
-export function formatScore(score: number): string {
+function formatScore(score: number): string {
   if (!Number.isFinite(score)) return '—';
   return score.toFixed(4);
 }
@@ -351,7 +351,7 @@ export function reasoningNoteOf(hit: MemoryHitView): string | null {
 
 // ───────────────────────── 组件 ─────────────────────────
 
-export interface MemoryExplorerProps {
+interface MemoryExplorerProps {
   /**
    * 控制台控制器。按控制台视图的统一 props 契约接收（调用方总是同时给 controller +
    * snapshot）。本视图**不订阅**它，只用 `newKey()` 为「展开原文」的审计写入生成幂等键

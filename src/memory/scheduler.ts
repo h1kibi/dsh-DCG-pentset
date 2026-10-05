@@ -36,7 +36,7 @@
 import type { OutboxQueue } from './outbox.ts';
 import type { IndexDispatcher, DrainResult } from './dispatcher.ts';
 
-export interface IndexSchedulerDeps {
+interface IndexSchedulerDeps {
   readonly dispatcher: IndexDispatcher;
   /** 用于启动时回收过期租约（§14.3：崩溃实例留下的 `leased` 行）。 */
   readonly outbox: OutboxQueue;
@@ -48,7 +48,7 @@ export interface IndexSchedulerDeps {
   readonly onStartup?: (result: SchedulerTickResult) => void;
 }
 
-export interface SchedulerTickResult {
+interface SchedulerTickResult {
   readonly drained: readonly DrainResult[];
   /** 启动清扫回收的任务数（仅启动 tick 非零）。 */
   readonly sweptJobs: number;

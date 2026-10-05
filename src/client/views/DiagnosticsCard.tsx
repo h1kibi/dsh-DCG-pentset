@@ -21,7 +21,7 @@ import type { DiagnosticsSnapshot } from '../../contracts.ts';
 import { Button, Card, Empty, ErrorBar, Stat } from '../ui.tsx';
 import { formatCount, formatTimestamp } from '../format.ts';
 
-export interface DiagnosticsCardProps {
+interface DiagnosticsCardProps {
   /** null = 尚未成功读取（与「读到了空数据」是两件事）。 */
   readonly diagnostics: DiagnosticsSnapshot | null;
   readonly error?: { readonly code: string; readonly message: string } | null;

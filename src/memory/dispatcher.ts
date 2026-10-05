@@ -60,7 +60,7 @@ export const REINDEX_BATCH_BUDGET = 50;
  * 字符串再解析出来：字符串解析是脆弱的（改一处措辞就让统计静默归零），而
  * 统计数字应当由类型保证。
  */
-export type JobOutcome =
+type JobOutcome =
   | {
       readonly kind: 'done';
       readonly detail: string;
@@ -70,7 +70,7 @@ export type JobOutcome =
   /** 未实现或不可处理：走重试直至死信，从而在索引状态里可见。 */
   | { readonly kind: 'unsupported'; readonly detail: string };
 
-export interface DispatcherDeps {
+interface DispatcherDeps {
   readonly outbox: OutboxQueue;
   readonly indexer: MemoryIndexer;
   /** 读库：用于发现有待办任务的 engagement。 */
@@ -100,7 +100,7 @@ export interface DispatcherDeps {
   };
 }
 
-export interface DispatchBatchResult {
+interface DispatchBatchResult {
   readonly engagementId: string;
   readonly claimed: number;
   readonly completed: number;

@@ -27,7 +27,7 @@ function handoffDraftOf(value: unknown): HandoffDraft | null {
  * 修改、再提交（`controller.confirmTransition`）。从前这里会自动按草稿原样确认——
  * 人类没有机会审计，那正是本次要改掉的（2026-10-05 人类要求：先生成、给我改、再注入）。
  */
-export type PhaseAdvanceOutcome =
+type PhaseAdvanceOutcome =
   | { readonly ok: true; readonly draft: HandoffDraft }
   | { readonly ok: false; readonly message: string };
 

@@ -114,7 +114,7 @@ export interface SessionContextDeps {
 }
 
 /** 会话准入的拒绝：与工具层同形的稳定码 + 可执行处置。 */
-export class SessionContextRefusal extends Error {
+class SessionContextRefusal extends Error {
   readonly code: string;
   readonly nextAction: string;
 
@@ -385,7 +385,7 @@ export async function currentScopeVersion(db: DbClient, engagementId: string): P
 }
 
 /** 一次会话准入的全部结果：身份、冻结版本、范围集合，以及两个受控通道。 */
-export interface WorkerSessionContext {
+interface WorkerSessionContext {
   readonly engagementId: string;
   readonly session: SessionRow;
   /** 会话冻结版本下的 I(v)/X(v)（§8.6：Agent 只能看它被授权时的那条边界）。 */

@@ -15,7 +15,6 @@
  */
 
 import type { Phase, SessionStatus, WorkerSessionSummary } from '../contracts.ts';
-import { PHASES } from '../contracts.ts';
 import { phaseLabel as sessionPhaseLabel, sessionStatusLabel, sessionStatusTone, type Tone } from './format.ts';
 
 /**
@@ -28,7 +27,7 @@ import { phaseLabel as sessionPhaseLabel, sessionStatusLabel, sessionStatusTone,
  *   - `superseded` → 被重做/切换取代（正常流程，但人类需要知道）；
  *   - `failed` → 失败/中断（若同时无结束时间，原因归到「未收尾」）。
  */
-export interface OrphanInfo {
+interface OrphanInfo {
   readonly reason: string;
   /** 是否需要人类清理或确认（用于界面上的显式提醒）。 */
   readonly needsAttention: boolean;
@@ -81,7 +80,7 @@ export interface TimelineFilter {
  * 2. **纳入便签**：列表扫描的主要线索（§6.2.2）。
  * 3. **纳入历史指针**：人类可能按「谁交接来的」找。
  */
-export function matchesFilter(session: WorkerSessionSummary, filter: TimelineFilter): boolean {
+function matchesFilter(session: WorkerSessionSummary, filter: TimelineFilter): boolean {
   if (filter.phases !== undefined && filter.phases.length > 0) {
     if (!filter.phases.includes(session.phase)) return false;
   }
@@ -126,7 +125,7 @@ export function filterSessions(
 }
 
 /** 迷你地图的一个色块。 */
-export interface MinimapBlock {
+interface MinimapBlock {
   readonly sessionId: string;
   readonly tone: Tone;
   readonly title: string;
@@ -136,7 +135,7 @@ export interface MinimapBlock {
 }
 
 /** 迷你地图分组：一个迭代一组。 */
-export interface MinimapGroup {
+interface MinimapGroup {
   readonly iteration: number;
   readonly blocks: readonly MinimapBlock[];
   /** 该迭代里是否至少有一个需要留意。 */
@@ -176,7 +175,7 @@ export function buildMinimap(sessions: readonly WorkerSessionSummary[]): readonl
 }
 
 /** 时间轴的时钟轴刻度：按真实时间而不是序号（§6.2「按真实时钟时间标注」）。 */
-export interface TimeTick {
+interface TimeTick {
   readonly at: string;
   readonly label: string;
 }
@@ -211,9 +210,4 @@ export function buildTimeTicks(
 function clockLabel(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getMonth() + 1)}-${String(d.getDate())} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-/** 阶段在轨道上的序号（供时间轴按阶段分组显示）。 */
-export function phaseOrder(phase: Phase): number {
-  return PHASES.indexOf(phase);
 }

@@ -40,7 +40,7 @@ export const MEMORY_EMBEDDING_DIMENSIONS = 1024;
 export const DEFAULT_EMBED_BATCH_SIZE = 64;
 
 /** 远端嵌入服务的默认调用超时。 */
-export const DEFAULT_EMBED_TIMEOUT_MS = 30_000;
+const DEFAULT_EMBED_TIMEOUT_MS = 30_000;
 
 // ───────────────────────────── 错误类型 ─────────────────────────────
 
@@ -48,7 +48,7 @@ export const DEFAULT_EMBED_TIMEOUT_MS = 30_000;
  * 嵌入链路错误码。与 `contracts.ts` 的 `ErrorCode` 分开：那些码面向工具调用方，
  * 这里的码面向索引器与装配层，且都不会被渲染成模型可见的成功消息。
  */
-export type EmbeddingErrorCode =
+type EmbeddingErrorCode =
   | 'invalid_config'
   | 'dimension_mismatch'
   | 'invalid_response'
@@ -278,7 +278,7 @@ function unavailableFromError(kernel: BatchKernel, error: unknown): EmbeddingErr
 
 // ───────────────────────────── 本地提供方 ─────────────────────────────
 
-export interface LocalEmbeddingOptions {
+interface LocalEmbeddingOptions {
   readonly model: string;
   readonly dimensions: number;
   readonly revision: string;
@@ -354,7 +354,7 @@ export type EmbeddingFetch = (
   },
 ) => Promise<EmbeddingHttpResponse>;
 
-export interface RemoteEmbeddingOptions {
+interface RemoteEmbeddingOptions {
   /** 已由调用方从 `endpoint_ref` 解析出的端点。 */
   readonly endpoint: string;
   /** 已由调用方从 `api_key_ref` 解析出的凭据；本模块不回显、不落库、不写日志。 */
@@ -595,7 +595,7 @@ function readRemoteVectors(
 // ───────────────────────────── 嵌入版本登记 ─────────────────────────────
 
 /** `embedding_revisions` 行在本模块内的投影。 */
-export interface EmbeddingRevisionRecord {
+interface EmbeddingRevisionRecord {
   readonly engagementId: string;
   readonly revision: string;
   readonly model: string;
@@ -603,7 +603,7 @@ export interface EmbeddingRevisionRecord {
   readonly isActive: boolean;
 }
 
-export interface EmbeddingRevisionRegistryOptions {
+interface EmbeddingRevisionRegistryOptions {
   /** 读路径客户端（`active` 不走事务）。 */
   readonly db: DbClient;
   /**

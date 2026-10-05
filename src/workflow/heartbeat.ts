@@ -55,7 +55,7 @@ export const DEFAULT_HEARTBEAT_SECONDS = DEFAULTS.leaseHeartbeatSeconds;
  */
 export const DEFAULT_RENEW_AHEAD_SECONDS = DEFAULT_HEARTBEAT_SECONDS * 3;
 
-export interface LeaseHeartbeatDeps {
+interface LeaseHeartbeatDeps {
   readonly db: DbClient;
   readonly leases: LeaseStore;
   readonly clock?: () => Date;
@@ -82,7 +82,7 @@ export interface LeaseHeartbeatDeps {
   };
 }
 
-export interface HeartbeatResult {
+interface HeartbeatResult {
   /** 扫到的活跃租约数。 */
   readonly scanned: number;
   /** 本轮先被 expireLeases 标记 expired 的租约数。 */

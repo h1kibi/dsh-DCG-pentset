@@ -141,7 +141,7 @@ export const CONSOLE_ERROR_CODES = [
 export type ConsoleErrorCode = (typeof CONSOLE_ERROR_CODES)[number] | ErrorCode;
 
 /** 控制台 RPC 故障：携带稳定码，供 {@link ConsoleRpc.handle} 映射为结构化响应。 */
-export class ConsoleRpcFault extends Error {
+class ConsoleRpcFault extends Error {
   override readonly name = 'ConsoleRpcFault';
   readonly code: ConsoleErrorCode;
 
@@ -218,7 +218,7 @@ export interface ConsoleRequest {
 }
 
 /** 成功响应。`replay` 为 true 表示未再次执行，返回的是该幂等键的首次结果。 */
-export interface ConsoleOk {
+interface ConsoleOk {
   readonly ok: true;
   readonly method: ConsoleMethodName;
   readonly result: unknown;
@@ -226,7 +226,7 @@ export interface ConsoleOk {
 }
 
 /** 失败响应。`method` 是**请求中声称的**端点名（无法解析时为 null），仅用于诊断。 */
-export interface ConsoleFailure {
+interface ConsoleFailure {
   readonly ok: false;
   readonly method: string | null;
   readonly code: ConsoleErrorCode;
@@ -253,7 +253,7 @@ export type ConsoleResponse = ConsoleOk | ConsoleFailure;
  *   （`decideApproval` / `revokeApproval` 的输入类型里没有 `expectedStateVersion`；
  *   审批的一次性由 `approvals.decision` 的状态迁移与 `consumeApproval` 保证）。
  */
-export type ConsoleLockKind = 'actor' | 'envelope' | 'none';
+type ConsoleLockKind = 'actor' | 'envelope' | 'none';
 
 /** 命名参数的类型标签。校验是**结构化**的，不引入第二套 schema DSL（§21.0 A9）。 */
 type ConsoleParamKind =
@@ -347,7 +347,7 @@ type FirstParamOf<
  * 之所以是 `{ scalar: '字段名' }` 而不是布尔：显式写出取哪个字段，
  * 读表时就能看出这个端点把哪个命名参数当实参，不必回查服务签名。
  */
-export type MethodCallArgs<
+type MethodCallArgs<
   F extends keyof ConsoleServices,
   K extends keyof ConsoleServices[F],
 > = [FirstParamOf<F, K>] extends [string] ? { readonly scalar: string } : 'object';
@@ -1268,7 +1268,7 @@ export function lookupConsoleMethod(name: string): ConsoleMethodSpec | null {
 }
 
 /** 方法表的一行：供 UI 渲染"该操作是否需要版本/理由/幂等键"，也供测试锁定方法集。 */
-export interface ConsoleMethodDescription {
+interface ConsoleMethodDescription {
   readonly name: ConsoleMethodName;
   readonly kind: 'read' | 'mutation';
   readonly lock: ConsoleLockKind;
@@ -1406,7 +1406,7 @@ export interface ConsoleServices {
   readonly diagnostics: PentestDiagnosticsService;
 }
 
-export interface ConsoleRpcDeps {
+interface ConsoleRpcDeps {
   /** 四个服务面（见 {@link ConsoleServices}）。 */
   readonly services: ConsoleServices;
   /**

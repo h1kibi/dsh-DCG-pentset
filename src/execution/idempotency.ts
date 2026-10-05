@@ -88,7 +88,7 @@ export function deriveIdempotencyKey(input: IdempotencyInput): string {
  * 不含 approvalId / idempotencyKey / leaseGeneration：凭证标识本身不参与摘要
  * （申请时尚不存在），租约世代另行单独校验。
  */
-export interface PlanHashInput {
+interface PlanHashInput {
   readonly templateId: string;
   readonly actionClass: ActionClass;
   readonly normalizedTarget: string;

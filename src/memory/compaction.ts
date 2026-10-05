@@ -81,7 +81,7 @@ export const PINNED_ENTRY_KINDS = [
   'human_interjection',
   'human_decision',
 ] as const satisfies readonly HistoryEntryKind[];
-export type PinnedEntryKind = (typeof PINNED_ENTRY_KINDS)[number];
+type PinnedEntryKind = (typeof PINNED_ENTRY_KINDS)[number];
 
 const PINNED_KIND: Readonly<Partial<Record<HistoryEntryKind, true>>> = {
   system_identity: true,
@@ -97,14 +97,14 @@ const PINNED_KIND: Readonly<Partial<Record<HistoryEntryKind, true>>> = {
  * 该类别是否「永不压缩」。命名即契约：§8.10「人类决策与交接内容永不被压缩」，
  * 以及「完整保留」清单里的身份、skill、任务提示词。
  */
-export function isNeverCompacted(kind: HistoryEntryKind): boolean {
+function isNeverCompacted(kind: HistoryEntryKind): boolean {
   return PINNED_KIND[kind] === true;
 }
 
 /** 可被截断的条目类别（§8.10「先截断超大工具输出」）。 */
 export const TOOL_OUTPUT_ENTRY_KINDS = ['tool_call', 'tool_observation'] as const satisfies
   readonly HistoryEntryKind[];
-export type ToolOutputEntryKind = (typeof TOOL_OUTPUT_ENTRY_KINDS)[number];
+type ToolOutputEntryKind = (typeof TOOL_OUTPUT_ENTRY_KINDS)[number];
 
 const TOOL_OUTPUT_KIND: Readonly<Partial<Record<HistoryEntryKind, true>>> = {
   tool_call: true,
@@ -169,12 +169,12 @@ function isCjkCodePoint(cp: number): boolean {
   );
 }
 
-export function estimateEntryTokens(entry: HistoryEntry): number {
+function estimateEntryTokens(entry: HistoryEntry): number {
   if (typeof entry.tokens === 'number') return entry.tokens;
   return estimateTokens(entry.content ?? '');
 }
 
-export function estimateHistoryTokens(entries: readonly HistoryEntry[]): number {
+function estimateHistoryTokens(entries: readonly HistoryEntry[]): number {
   let total = 0;
   for (const entry of entries) total += estimateEntryTokens(entry);
   return total;
@@ -182,7 +182,7 @@ export function estimateHistoryTokens(entries: readonly HistoryEntry[]): number 
 
 // ───────────────────────────── 触发判定 ─────────────────────────────
 
-export interface CompactionTriggerInput {
+interface CompactionTriggerInput {
   /** 模型上下文窗口大小（由调用方按模型路由给出，不在本模块硬编码）。 */
   readonly contextWindowTokens: number;
   /** 当前请求的估算规模（历史 + 提示词 + 工具输出）。 */
@@ -240,7 +240,7 @@ export const COMPACTION_TRUNCATION_DEFAULTS = {
   tailChars: 600,
 } as const;
 
-export interface ToolOutputTruncationInput {
+interface ToolOutputTruncationInput {
   readonly text: string;
   /** 账本事件引用：省略标记里必须写清完整内容去哪儿取。 */
   readonly eventRef: string;
@@ -249,7 +249,7 @@ export interface ToolOutputTruncationInput {
   readonly tailChars?: number;
 }
 
-export interface ToolOutputTruncation {
+interface ToolOutputTruncation {
   readonly text: string;
   readonly headChars: number;
   readonly tailChars: number;
@@ -305,7 +305,7 @@ function truncationMarker(
 // ───────────────────────────── 压缩计划 ─────────────────────────────
 
 /** 保留理由。`human_content` 覆盖人工决策与插话（§8.10「全部人工决策与插话」）。 */
-export type KeepReason =
+type KeepReason =
   | 'identity'
   | 'skill_instructions'
   | 'task_prompt'
@@ -324,7 +324,7 @@ const KEEP_REASON_BY_KIND: Readonly<Partial<Record<PinnedEntryKind, KeepReason>>
   human_decision: 'human_content',
 };
 
-export interface KeepDecision {
+interface KeepDecision {
   readonly entryId: string;
   readonly turn: number | null;
   readonly kind: HistoryEntryKind;
@@ -332,9 +332,9 @@ export interface KeepDecision {
 }
 
 /** 截断发生在保留窗口内还是压缩范围内。 */
-export type TruncationScope = 'protected' | 'compressed';
+type TruncationScope = 'protected' | 'compressed';
 
-export interface TruncationDecision {
+interface TruncationDecision {
   readonly entryId: string;
   readonly turn: number | null;
   readonly kind: ToolOutputEntryKind;
@@ -350,7 +350,7 @@ export interface TruncationDecision {
   readonly evidenceRefs: readonly string[];
 }
 
-export interface CompressDecision {
+interface CompressDecision {
   readonly turn: number;
   readonly entryIds: readonly string[];
   /** 该回合被压缩的推理条目（§8.10：压缩必须连同推理内容一起处理）。 */
@@ -361,9 +361,9 @@ export interface CompressDecision {
 
 /** §8.10「顺序」的固定步骤：先截断超大工具输出，再压缩早期回合。 */
 export const COMPACTION_STEPS = ['truncate_tool_outputs', 'compress_early_turns'] as const;
-export type CompactionStep = (typeof COMPACTION_STEPS)[number];
+type CompactionStep = (typeof COMPACTION_STEPS)[number];
 
-export interface CompactionPlanOptions {
+interface CompactionPlanOptions {
   /** 完整保留的最近回合数，默认 {@link DEFAULTS.compactionKeepRecentTurns}（6 轮）。 */
   readonly keepRecentTurns?: number;
   /** 触发截断的工具输出规模阈值。 */
@@ -402,7 +402,7 @@ export interface CompactionPlan {
   readonly estimatedRetainedTokens: number;
 }
 
-export interface CompactionPlanInput {
+interface CompactionPlanInput {
   readonly entries: readonly HistoryEntry[];
   readonly options?: CompactionPlanOptions;
 }
@@ -590,14 +590,14 @@ export const COMPACTION_VIOLATION_CODES = [
   'chain_unknown_base_summary',
   'chain_duplicate_summary',
 ] as const;
-export type CompactionViolationCode = (typeof COMPACTION_VIOLATION_CODES)[number];
+type CompactionViolationCode = (typeof COMPACTION_VIOLATION_CODES)[number];
 
-export interface CompactionViolation {
+interface CompactionViolation {
   readonly code: CompactionViolationCode;
   readonly detail: string;
 }
 
-export interface AssertCompactionOptions {
+interface AssertCompactionOptions {
   /**
    * 提供窗口大小时，计划执行后仍超出窗口即抛错——「超限时抛错而不是静默丢」。
    * 此时唯一能继续压缩的只剩人工决策与交接内容，而那两条被 §8.10 明令禁止，
@@ -749,13 +749,13 @@ export function assertCompactionInvariants(
 
 // ───────────────────────────── 摘要产出契约 ─────────────────────────────
 
-export const VERBATIM_CATEGORIES = [
+const VERBATIM_CATEGORIES = [
   'target_address',
   'credential_name',
   'version',
   'error_detail',
 ] as const;
-export type VerbatimCategory = (typeof VERBATIM_CATEGORIES)[number];
+type VerbatimCategory = (typeof VERBATIM_CATEGORIES)[number];
 
 const VERBATIM_PATTERNS: Readonly<Record<VerbatimCategory, readonly RegExp[]>> = {
   target_address: [
@@ -800,7 +800,7 @@ export function requiresVerbatimPreservation(text: string): boolean {
 }
 
 /** 摘要中的一个条目（动作、观测或失败项）。 */
-export interface SummaryItem {
+interface SummaryItem {
   readonly text: string;
   /** 指向原事件的引用：原文可顺着引用取回。 */
   readonly sourceEventRef: string;
@@ -809,7 +809,7 @@ export interface SummaryItem {
   readonly verbatimCategories: readonly VerbatimCategory[];
 }
 
-export interface SummaryConclusion {
+interface SummaryConclusion {
   readonly text: string;
   readonly confidence: number;
   /** `established` 仅在原文已有证据时成立；否则标为待验证（§8.10）。 */
@@ -852,7 +852,7 @@ export interface SummaryItemInput {
   readonly sourceEventRef: string;
 }
 
-export interface SummaryConclusionInput {
+interface SummaryConclusionInput {
   readonly text: string;
   readonly confidence: number;
   /** 原文中的证据引用；为空或引用越界时摘要标注为待验证。 */
@@ -860,7 +860,7 @@ export interface SummaryConclusionInput {
   readonly sourceEventRef: string;
 }
 
-export interface CompactionSummaryInput {
+interface CompactionSummaryInput {
   readonly engagementId: string;
   readonly workerSessionId?: string | null;
   readonly fromTurn: number;
@@ -1077,7 +1077,7 @@ export function checkCompactionSummary(
 }
 
 /** 由（engagement、覆盖回合、策略版本、引用集合）确定性派生摘要标识。 */
-export function deriveSummaryId(input: {
+function deriveSummaryId(input: {
   readonly engagementId: string;
   readonly compactedThroughTurn: number;
   readonly strategyVersion: string;
@@ -1099,7 +1099,7 @@ export function deriveSummaryId(input: {
  * > **逐级压缩的记录**：同一段历史被压缩两次时，第二次的输入是第一次的摘要。
  * > 插件记录压缩链（哪次压缩基于哪次摘要），使漂移可追溯。
  */
-export interface CompactionChainLink {
+interface CompactionChainLink {
   readonly producedSummaryId: string;
   /** 本次压缩的输入摘要；空表示直接作用于原始回合。 */
   readonly baseSummaryIds: readonly string[];
@@ -1111,13 +1111,13 @@ export interface CompactionChainLink {
   readonly compactedAt: string;
 }
 
-export interface CompactionChain {
+interface CompactionChain {
   readonly engagementId: string;
   readonly workerSessionId: string | null;
   readonly links: readonly CompactionChainLink[];
 }
 
-export type CompactionChainUpdate =
+type CompactionChainUpdate =
   | { readonly ok: true; readonly chain: CompactionChain }
   | { readonly ok: false; readonly code: CompactionViolationCode; readonly detail: string };
 

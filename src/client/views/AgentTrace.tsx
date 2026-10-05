@@ -29,7 +29,7 @@ const LIVE_STATUSES: readonly WorkerSessionSummary['status'][] = ['starting', 'a
 
 /** 会话状态的中文标签来自 `format.ts` 的**单源**（`sessionStatusLabel`）——此前本文件与时间轴各一份，措辞已分叉。 */
 
-export interface AgentTraceProps {
+interface AgentTraceProps {
   /** 与 `SessionChat` 同一个调用面（走 dsh 的 `session/page`）。 */
   readonly rpc: SessionChatRpc | undefined;
   /** 要看的 Worker 会话（通常是当前活动的那一个）。 */

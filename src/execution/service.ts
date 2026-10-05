@@ -271,7 +271,7 @@ export const DEFAULT_ACTION_POLICY: ActionPolicySnapshot = Object.freeze({
   perActionApprovalClasses: PER_ACTION_APPROVAL_CLASSES,
 });
 
-export const defaultActionPolicySource: ActionPolicySource = Object.freeze({
+const defaultActionPolicySource: ActionPolicySource = Object.freeze({
   forSession: async (): Promise<ActionPolicySnapshot> => DEFAULT_ACTION_POLICY,
 });
 

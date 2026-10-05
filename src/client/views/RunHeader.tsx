@@ -28,7 +28,7 @@ import {
 } from '../format.ts';
 import { Badge, Card, ErrorBar, Stat } from '../ui.tsx';
 
-export interface RunHeaderProps {
+interface RunHeaderProps {
   readonly engagementName: string;
   readonly state: WorkflowSnapshot | null;
   /** 授权到期时间（来自范围版本快照）。 */

@@ -100,7 +100,7 @@ const WEEKDAYS: readonly { readonly id: string; readonly label: string }[] = [
 // ───────────────────────────── 表单状态 ─────────────────────────────
 
 /** 一条目标/排除项的可编辑形态。与 `ScopeTarget` 的差别只在端口是文本（便于人类书写）。 */
-export interface TargetRow {
+interface TargetRow {
   readonly kind: ScopeTarget['kind'];
   readonly value: string;
   readonly protocols: readonly Protocol[];
@@ -151,7 +151,7 @@ interface WizardForm {
  * 登记方式、默认测试类型、时区、紧急停止联系人都随部署而定，逐个手填既慢又容易漏。
  * 其余字段（尤其是名称与到期时间）**刻意不给默认值**：它们必须是一次有意的决定。
  */
-export interface EngagementWizardDefaults {
+interface EngagementWizardDefaults {
   readonly name?: string;
   readonly publicMemory?: string;
   readonly authorizationRef?: string;
@@ -172,7 +172,7 @@ export interface EngagementWizardDefaults {
   readonly timezone?: string;
 }
 
-export interface EngagementWizardProps {
+interface EngagementWizardProps {
   /** 提交走控制器封装的 `createEngagement`（§6.2.3、§16.1）。 */
   readonly controller: ConsoleController;
   readonly defaults?: EngagementWizardDefaults;

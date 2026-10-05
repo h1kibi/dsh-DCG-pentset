@@ -32,7 +32,7 @@ import type { DbClient } from '../db/port.ts';
  * 恢复建议。**只描述结论与所需的人类决定，不执行任何动作**——
  * 恢复动作由工作流服务在人类确认后执行（本模块是纯判定层，便于测试与审计）。
  */
-export type RecoveryAction =
+type RecoveryAction =
   /** 会话行停在 starting：dsh 会话可能建了也可能没建，需人工核对后处置。 */
   | { readonly kind: 'mark_interrupted'; readonly reason: string }
   /** 会话存活且可继续：仅对账，不改状态。 */
@@ -242,7 +242,7 @@ export interface ApprovalReconciliationInput {
   readonly now: string;
 }
 
-export type ApprovalReconciliationAction =
+type ApprovalReconciliationAction =
   /** 仍可用。 */
   | { readonly kind: 'keep' }
   /** 已过期 → 标记 expired（不复活）。 */
@@ -285,7 +285,7 @@ export function reconcileApproval(input: ApprovalReconciliationInput): ApprovalR
  * 文档原话：**所有触及目标的动作一律停止**（不按风险分类挑拣——分类准确度
  * 不足以支撑"只停高风险"的降级）。因此这条判定不看动作类别。
  */
-export interface AuditAvailability {
+interface AuditAvailability {
   readonly writable: boolean;
   readonly detail: string;
 }
@@ -304,15 +304,8 @@ export function executionGateForAudit(availability: AuditAvailability): { allowe
 
 // ───────────────────────────── 数据库读取 ─────────────────────
 
-/** 从数据库读出一个 engagement 的所有会话，供对账使用。 */
-export interface ReconciliationSource {
-  loadSessions(engagementId: string): Promise<readonly SessionReconciliationInput[]>;
-  /** 探测 dsh 侧会话是否可达。 */
-  probeDshSession(dshSessionId: string): Promise<boolean>;
-}
-
 /**
- * 收集对账输入。
+ * 收集对账输入：从数据库读出一个 engagement 的所有会话，供对账使用。
  *
  * 把「读库」与「探测」分开注入：探测会触碰 dsh 运行时，而读库只是 SQL。
  * 这样对账逻辑本身（上面的纯函数）可以在没有 dsh 的环境里被完整测试。

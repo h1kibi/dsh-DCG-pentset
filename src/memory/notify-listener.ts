@@ -93,7 +93,7 @@ export interface NotifyConnection {
 
 // ───────────────────────────── 退避 ─────────────────────────────
 
-export interface NotifyBackoff {
+interface NotifyBackoff {
   /** 第一次失败后的等待（毫秒），也是递增的起点。 */
   readonly initialDelayMs: number;
   /** 等待上限（毫秒）。 */
@@ -140,7 +140,7 @@ export type NotifyErrorPhase =
   /** 唤醒目标抛错（`wakeNow()` 的事故不应波及连接循环）。 */
   | 'notify';
 
-export interface NotifyListenerDeps {
+interface NotifyListenerDeps {
   readonly target: NotifyTarget;
   /**
    * 建立一条**新**连接。断开后重连会再次调用它——旧连接不可复用。

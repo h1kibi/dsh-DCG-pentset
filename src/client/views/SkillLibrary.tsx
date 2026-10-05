@@ -66,16 +66,16 @@ export const SESSION_ISOLATION =
   'skill 装载在创建会话时冻结：修改库里的 skill 不影响已创建的会话，只对之后创建的会话生效（§2.2）。';
 
 /** §2.2「可选择」：不按阶段硬性限制。 */
-export const ANY_PHASE_NOTE =
+const ANY_PHASE_NOTE =
   '任意阶段的 Agent 都可以装载库中任意 skill，不按阶段硬性限制——是否合适由装载它的人类判断，插件不预设（§2.2）。';
 
 /** §2.2「可为空」：空集是显式选项。 */
-export const EMPTY_SET_LABEL = '不装载任何 skill（空集，合法状态）';
-export const EMPTY_SET_HINT =
+const EMPTY_SET_LABEL = '不装载任何 skill（空集，合法状态）';
+const EMPTY_SET_HINT =
   '空集意味着 Agent 仅凭自身 Profile 与人类写清楚的任务提示词工作（§2.2）。'
   + '取消勾选表示「还没决定」——空集本身是合法状态，但必须被显式选中，以区分「有意为空」与「漏了」（§7.2）。';
 
-export const UNDECIDED_NOTE =
+const UNDECIDED_NOTE =
   '尚未作出装载选择：请显式勾选「不装载任何 skill」或至少勾选一个条目。';
 
 const AUDIT_NOTE =
@@ -105,7 +105,7 @@ export interface SkillView {
 }
 
 /** 可编辑的字段。名称/描述/正文三者都必填（§2.2）。 */
-export interface SkillDraftForm {
+interface SkillDraftForm {
   readonly name: string;
   readonly description: string;
   readonly body: string;
@@ -167,7 +167,7 @@ export function skillDraftBlockers(input: {
 }
 
 /** 表单内容是否与上一次提交的完全相同。用于阻止用新幂等键重复提交同一份内容（§15.3）。 */
-export function sameDraft(a: SkillDraftForm, b: SkillDraftForm): boolean {
+function sameDraft(a: SkillDraftForm, b: SkillDraftForm): boolean {
   return a.name === b.name && a.description === b.description && a.body === b.body;
 }
 
@@ -183,7 +183,7 @@ export const SKILL_COLUMNS: readonly { readonly key: string; readonly header: st
 
 // ───────────────────────── 组件 ─────────────────────────
 
-export interface SkillLibraryProps {
+interface SkillLibraryProps {
   /**
    * 控制台控制器。按控制台视图的统一 props 契约接收（调用方总是同时给 controller +
    * snapshot）。本视图**不订阅**它，只用 `newKey()` 为写操作生成幂等键（§15.3）。

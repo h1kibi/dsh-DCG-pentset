@@ -72,7 +72,7 @@ export function blocked(
 }
 
 /** 范围判定拒绝码 → 稳定错误码（模型据码分支，不解析文本）。 */
-export function mapScopeRejection(code: ScopeRejectionCode): ErrorCode {
+function mapScopeRejection(code: ScopeRejectionCode): ErrorCode {
   switch (code) {
     case 'protocol_undetermined':
       return 'protocol_undetermined';
@@ -176,12 +176,12 @@ export function leaseViolation(
 // ───────────────────────────── 闸门形状 ─────────────────────────────
 
 /** 闸门失败事件的内容（归属字段 engagementId/workerSessionId/rawTarget 由调用方补）。 */
-export type AdmissionGateFailure = Omit<
+type AdmissionGateFailure = Omit<
   GateFailureRecord,
   'engagementId' | 'workerSessionId' | 'rawTarget'
 >;
 
-export type GateOutcome =
+type GateOutcome =
   | { readonly kind: 'pass' }
   | {
       readonly kind: 'rejected';
@@ -191,14 +191,14 @@ export type GateOutcome =
     };
 
 /** 闸门形状（受理与执行前复核共用同一套短路语义）。 */
-export interface Gate<State> {
+interface Gate<State> {
   /** 具名：审计与测试里用名字指认「是哪一道闸门拒的」。 */
   readonly name: string;
   readonly check: (state: State) => Promise<GateOutcome>;
 }
 
 /** 受理闸门：读 {@link AdmissionState}（intent 形态）。 */
-export type AdmissionGate = Gate<AdmissionState>;
+type AdmissionGate = Gate<AdmissionState>;
 
 /** 闸门读取依赖的最小端口面（只读）。 */
 export interface AdmissionPorts {
@@ -623,7 +623,7 @@ export const ADMISSION_GATES: readonly AdmissionGate[] = [
 /** 具名顺序表（测试与运维诊断用）。 */
 export const ADMISSION_GATE_ORDER: readonly string[] = ADMISSION_GATES.map((gate) => gate.name);
 
-export type PipelineVerdict =
+type PipelineVerdict =
   | { readonly kind: 'passed' }
   | {
       readonly kind: 'rejected';
@@ -642,7 +642,7 @@ export type PipelineVerdict =
  * 受理与执行前复核共用这一个运行器——两处的短路语义必须是同一套，否则
  * 「先报哪个拒绝」会在两条路径上分叉，而拒绝码的顺序本身就是验收判据。
  */
-export async function runGates<State>(
+async function runGates<State>(
   state: State,
   gates: readonly Gate<State>[],
 ): Promise<PipelineVerdict> {
@@ -729,7 +729,7 @@ export class RevalidationState {
 }
 
 /** 复核闸门（plan 形态）。 */
-export type RevalidationGate = Gate<RevalidationState>;
+type RevalidationGate = Gate<RevalidationState>;
 
 /**
  * 1. 模板仍在注册表中。
@@ -804,7 +804,7 @@ export const planSessionGate: RevalidationGate = {
 };
 
 /** 5. engagement 仍在运行（停机时租约是否有效不是重点——先报「整个作业停了」）。 */
-export const planEngagementGate: RevalidationGate = {
+const planEngagementGate: RevalidationGate = {
   name: 'plan_engagement_running',
   async check(state) {
     const violation = engagementViolation(state.binding, state.plan.workerSessionId);
@@ -813,7 +813,7 @@ export const planEngagementGate: RevalidationGate = {
 };
 
 /** 6. 租约有效且世代未前进（计划里冻结的世代是判据）。 */
-export const planLeaseGate: RevalidationGate = {
+const planLeaseGate: RevalidationGate = {
   name: 'plan_lease_valid',
   async check(state) {
     const violation = leaseViolation(
@@ -827,7 +827,7 @@ export const planLeaseGate: RevalidationGate = {
 };
 
 /** 7. 范围版本未变化：范围修订后旧凭证与旧计划失效。 */
-export const planScopeVersionGate: RevalidationGate = {
+const planScopeVersionGate: RevalidationGate = {
   name: 'plan_scope_version_current',
   async check(state) {
     const current = state.binding.scopeVersion;
@@ -843,7 +843,7 @@ export const planScopeVersionGate: RevalidationGate = {
 };
 
 /** 8. 策略 epoch 未前进：策略或范围变更后在途动作必须停止。 */
-export const planPolicyEpochGate: RevalidationGate = {
+const planPolicyEpochGate: RevalidationGate = {
   name: 'plan_policy_epoch_current',
   async check(state) {
     const current = state.binding.policyEpoch;

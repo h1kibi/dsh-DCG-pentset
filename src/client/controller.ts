@@ -86,7 +86,7 @@ export interface ConsoleSnapshot {
 }
 
 /** 控制器内部使用的枚举函数：返回 uSES 兼容的 `{getSnapshot, subscribe}` 形状。 */
-export interface Readable<T> {
+interface Readable<T> {
   getSnapshot(): T;
   subscribe(listener: () => void): () => void;
 }

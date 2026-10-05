@@ -28,11 +28,11 @@ import type { BudgetExtension, BudgetLimits, SessionStatus } from '../contracts.
 
 /** 预算的三个维度；顺序固定，读数、理由与暂停请求都按这个顺序呈现。 */
 export const BUDGET_DIMENSIONS = ['tokens', 'steps', 'seconds'] as const;
-export type BudgetDimension = (typeof BUDGET_DIMENSIONS)[number];
+type BudgetDimension = (typeof BUDGET_DIMENSIONS)[number];
 
 /** 软阈值（80%）记 `warning`，达到上限记 `exhausted`，其余 `ok`。 */
 export const BUDGET_VERDICTS = ['ok', 'warning', 'exhausted'] as const;
-export type BudgetVerdict = (typeof BUDGET_VERDICTS)[number];
+type BudgetVerdict = (typeof BUDGET_VERDICTS)[number];
 
 /**
  * 触顶之后的动作取值域：只有「继续」与「暂停」——**没有终止**。
@@ -40,11 +40,11 @@ export type BudgetVerdict = (typeof BUDGET_VERDICTS)[number];
  * 插件不代人做终止决定。取值域里没有终止成员，调用方也就拿不到终止。
  */
 export const BUDGET_ACTIONS = ['continue', 'pause'] as const;
-export type BudgetAction = (typeof BUDGET_ACTIONS)[number];
+type BudgetAction = (typeof BUDGET_ACTIONS)[number];
 
 /** 人类在预算暂停后的三条路由（§10.5）；本模块只呈现，不代选。 */
 export const HUMAN_BUDGET_OPTIONS = ['extend_budget', 'retry', 'transition'] as const;
-export type HumanBudgetOption = (typeof HUMAN_BUDGET_OPTIONS)[number];
+type HumanBudgetOption = (typeof HUMAN_BUDGET_OPTIONS)[number];
 
 /**
  * 终止与失败状态：不再消耗预算（§10.5「终止与失败状态不再消耗预算」）。
@@ -100,7 +100,7 @@ export interface OfficialBudgetAggregator {
 // ───────────────────────────── 预算：修订与读数 ─────────────────────────────
 
 /** 任一维度的追加量；三个字段都允许为 0，但不能同时为 0。 */
-export interface BudgetDelta {
+interface BudgetDelta {
   readonly tokens: number;
   readonly steps: number;
   readonly seconds: number;
@@ -110,7 +110,7 @@ export interface BudgetDelta {
  * 预算修订：创建时冻结第一版，追加预算产生新的一版并写入审计（§10.5：
  * 「追加预算产生新的修订并写入审计，不静默放大」）。
  */
-export interface BudgetRevision {
+interface BudgetRevision {
   /** 从 1 开始，单调递增。 */
   readonly revision: number;
   /** 该修订生效后的上限。 */
@@ -124,7 +124,7 @@ export interface BudgetRevision {
 }
 
 /** 单维度读数。`limit <= 0` 视为无额度，比率记 1（任何消耗即触顶）。 */
-export interface BudgetDimensionReading {
+interface BudgetDimensionReading {
   readonly dimension: BudgetDimension;
   readonly used: number;
   readonly limit: number;
@@ -139,7 +139,7 @@ export interface BudgetDimensionReading {
 }
 
 /** 软阈值告警（达到上限的 80%）：写入告警事件后会话继续运行。 */
-export interface BudgetWarning {
+interface BudgetWarning {
   readonly dimension: BudgetDimension;
   readonly used: number;
   readonly limit: number;
@@ -148,18 +148,18 @@ export interface BudgetWarning {
 }
 
 /** `worker_sessions.consumed_*` 投影读模型；**不是**计数源（§10.5）。 */
-export interface BudgetProjection {
+interface BudgetProjection {
   readonly consumedTokens: number;
   readonly consumedSteps: number;
 }
 
-export type BudgetDiagnosticKind = 'projection_mismatch_tokens' | 'projection_mismatch_steps';
+type BudgetDiagnosticKind = 'projection_mismatch_tokens' | 'projection_mismatch_steps';
 
 /**
  * 诊断事件：投影与计量不一致时不静默，写明分歧与以谁为准。
  * token 以 dsh-budget 为准，步数以步骤事件为准（投影由它写回）。
  */
-export interface BudgetDiagnostic {
+interface BudgetDiagnostic {
   readonly kind: BudgetDiagnosticKind;
   readonly projectionValue: number;
   readonly meteredValue: number;
@@ -168,7 +168,7 @@ export interface BudgetDiagnostic {
 }
 
 /** 硬阈值后的暂停请求；人类三条路由见 `humanOptions`。 */
-export interface BudgetPauseRequest {
+interface BudgetPauseRequest {
   readonly action: 'pause';
   readonly reason: 'budget_exhausted';
   /** 触顶的维度，按 `BUDGET_DIMENSIONS` 顺序。 */
@@ -177,7 +177,7 @@ export interface BudgetPauseRequest {
   readonly humanOptions: readonly HumanBudgetOption[];
 }
 
-export interface BudgetReading {
+interface BudgetReading {
   readonly at: Date;
   readonly revision: number;
   readonly limits: BudgetLimits;
@@ -208,7 +208,7 @@ export class BudgetProtocolError extends Error {
 
 // ───────────────────────────── 预算计量器 ─────────────────────────────
 
-export interface BudgetMeterInput {
+interface BudgetMeterInput {
   /** dsh-budget 端口：token 维度的唯一来源。 */
   readonly dshBudget: DshBudgetPort;
   readonly dshSessionId: string;
@@ -583,7 +583,7 @@ export const HEALTH_SIGNAL_KINDS = [
   'queue_pressure',
   'context_pressure',
 ] as const;
-export type HealthSignalKind = (typeof HEALTH_SIGNAL_KINDS)[number];
+type HealthSignalKind = (typeof HEALTH_SIGNAL_KINDS)[number];
 
 /**
  * 上下文「持续高于」判定窗的默认值（秒）。
@@ -599,9 +599,9 @@ export const DEFAULT_CONTEXT_PRESSURE_SECONDS = 60;
  * 插话纠偏还是中断重做」。取值域里没有终止成员，调用方也就拿不到终止。
  */
 export const LIVENESS_ACTIONS = ['continue', 'signal'] as const;
-export type LivenessAction = (typeof LIVENESS_ACTIONS)[number];
+type LivenessAction = (typeof LIVENESS_ACTIONS)[number];
 
-export interface HealthSignal {
+interface HealthSignal {
   readonly kind: HealthSignalKind;
   readonly at: Date;
   /** 触发阈值与实测值，控制台据此标注；账本里也据此复核。 */
@@ -611,7 +611,7 @@ export interface HealthSignal {
   readonly detail: string;
 }
 
-export interface LivenessSnapshot {
+interface LivenessSnapshot {
   readonly at: Date;
   /** 连续错过的检查点数（一次检查点到达即清零）。 */
   readonly missedCheckpoints: number;
@@ -633,7 +633,7 @@ export interface LivenessSnapshot {
   readonly issued: readonly HealthSignal[];
 }
 
-export interface LivenessMonitorInput {
+interface LivenessMonitorInput {
   readonly startedAt: Date;
   /** 检查点间隔（秒）；默认 `DEFAULTS.checkpointIntervalSeconds`（180）。 */
   readonly checkpointIntervalSeconds?: number;

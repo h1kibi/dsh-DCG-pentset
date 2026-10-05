@@ -194,7 +194,7 @@ function targetLine(target: ScopeTarget): string {
 }
 
 /** 卡片要展示的、由服务端事实推导出的结构（纯函数，便于脱离 React 断言）。 */
-export interface IntakePromptFacts {
+interface IntakePromptFacts {
   readonly engagementId: string;
   readonly engagementName: string | null;
   /** 有范围方案要确认时为 true。 */
@@ -263,7 +263,7 @@ export function intakePromptFacts(status: IntakeStatus | null): IntakePromptFact
  *    判据只有一处，否则会出现「队列里能批、聊天里批不了」或者更糟的反向不一致。
  * 2. **原样展示完整命令，不做摘要**：摘要会把「批准你看到的东西」变成「批准聊天里的转述」。
  */
-export interface PendingApprovalsProps {
+interface PendingApprovalsProps {
   readonly items: readonly ApprovalItem[];
   readonly now: Date;
   readonly busyId: string | null;
@@ -449,7 +449,7 @@ export function PhaseStrip(props: {
  * 只取 `kind === 'advance'`：重做/回补/回环都不是「进入下一阶段」，把它们塞进
  * 一键按钮会让人类以为自己只是在往前走。
  */
-export function nextAdvancePhase(from: Phase): Phase | null {
+function nextAdvancePhase(from: Phase): Phase | null {
   const move = RECOMMENDED_MOVES[from].find((candidate) => candidate.kind === 'advance');
   return move === undefined ? null : move.toPhase;
 }
@@ -487,7 +487,7 @@ export function AdvanceAction(props: {
   );
 }
 
-export interface IntakeRunningCardProps {
+interface IntakeRunningCardProps {
   readonly engagementName: string | null;
   readonly mainStatus: MainStatus | null;
   readonly currentPhase: Phase | null;
@@ -564,7 +564,7 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
   );
 }
 
-export interface IntakePromptProps {
+interface IntakePromptProps {
   readonly controller: ConsoleController;
   /** 当前 dsh 会话标识（会话级槽位的标准 props）。 */
   readonly dshSessionId: string;

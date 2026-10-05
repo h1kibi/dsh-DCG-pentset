@@ -28,7 +28,7 @@ import type { DbClient } from '../db/port.ts';
 // ───────────────────────────── 结果与错误 ─────────────────────────────
 
 /** 拒绝路径：带稳定错误码，调用方据码分支，不解析 message（设计文档 §16.5）。 */
-export type LeaseResult<T> =
+type LeaseResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly code: ErrorCode; readonly message: string };
 
@@ -47,7 +47,7 @@ export function describeLease(lease: SessionLease | null): string {
   return `世代 ${lease.generation} 生效至 ${lease.expiresAt.toISOString()}`;
 }
 
-export interface LeaseViolationContext {
+interface LeaseViolationContext {
   /** 触发违规的操作名。 */
   readonly operation?: string;
   readonly workerSessionId?: string;
@@ -196,7 +196,7 @@ export function isLeaseExpired(lease: SessionLease, now: Date): boolean {
 }
 
 /** §5.1：会话状态到租约处置的对应关系；存活态一律保留。 */
-export type LeaseDisposition =
+type LeaseDisposition =
   | { readonly action: 'keep' }
   | { readonly action: 'revoke'; readonly reason: LeaseRevocationReason };
 
@@ -254,7 +254,7 @@ function rejectionForLeaseState(
   return null;
 }
 
-export interface LeaseAdmissionOptions {
+interface LeaseAdmissionOptions {
   /** 判定时刻；省略则取当前时刻。测试显式传入以获得确定性。 */
   readonly now?: Date;
   /** 本次提交所属任务；与租约绑定任务不一致即跨任务提权，拒绝。 */
@@ -346,7 +346,7 @@ async function emitPostCommit(
 // ───────────────────────────── 签发 ─────────────────────────────
 
 
-export interface IssueLeaseInput {
+interface IssueLeaseInput {
   readonly workerSessionId: string;
   /** 省略时取会话行绑定的任务。 */
   readonly taskRef?: string;
@@ -391,7 +391,7 @@ export async function issueLease(store: LeaseStore, input: IssueLeaseInput): Pro
   return lease;
 }
 
-export interface ReissueLeaseInput {
+interface ReissueLeaseInput {
   readonly workerSessionId: string;
   /** 省略时沿用当前生效租约绑定的任务，其次回落到会话行。 */
   readonly taskRef?: string;
@@ -400,7 +400,7 @@ export interface ReissueLeaseInput {
   readonly leaseId?: string;
 }
 
-export interface ReissueLeaseOutcome {
+interface ReissueLeaseOutcome {
   readonly lease: SessionLease;
   readonly revokedLeaseIds: readonly string[];
 }
@@ -520,7 +520,7 @@ async function insertLease(
 
 // ───────────────────────────── 续租 ─────────────────────────────
 
-export interface RenewLeaseInput {
+interface RenewLeaseInput {
   readonly workerSessionId: string;
   readonly generation: number;
   readonly now: Date;
@@ -567,7 +567,7 @@ export async function renewLease(
   return outcome;
 }
 
-export interface RevokeLeaseInput {
+interface RevokeLeaseInput {
   readonly workerSessionId: string;
   readonly reason: LeaseRevocationReason;
   readonly now: Date;
@@ -575,7 +575,7 @@ export interface RevokeLeaseInput {
   readonly expectGeneration?: number;
 }
 
-export interface RevokeLeaseOutcome {
+interface RevokeLeaseOutcome {
   readonly revokedLeaseIds: readonly string[];
   readonly reason: LeaseRevocationReason;
 }
@@ -634,7 +634,7 @@ export async function revokeLease(
 
 // ───────────────────────────── 到期清扫 ─────────────────────────────
 
-export interface ExpireLeasesInput {
+interface ExpireLeasesInput {
   readonly now: Date;
   /**
    * 作业作用域。给出时清扫落在该作业的 RLS 上下文里（心跳逐作业调用）；
@@ -644,7 +644,7 @@ export interface ExpireLeasesInput {
   readonly engagementId?: string;
 }
 
-export interface ExpireLeasesOutcome {
+interface ExpireLeasesOutcome {
   readonly expiredLeases: readonly ExpiredLeaseRef[];
   readonly clearedBefore: Date;
 }
@@ -675,13 +675,13 @@ export async function expireLeases(
 
 // ───────────────────────────── 会话状态联动 ─────────────────────────────
 
-export interface SessionStatusChangeInput {
+interface SessionStatusChangeInput {
   readonly workerSessionId: string;
   readonly status: SessionStatus;
   readonly now: Date;
 }
 
-export interface SessionStatusChangeOutcome {
+interface SessionStatusChangeOutcome {
   readonly disposition: LeaseDisposition;
   readonly revokedLeaseIds: readonly string[];
 }
@@ -710,7 +710,7 @@ export async function applySessionStatusChange(
 
 // ───────────────────────────── 提交准入 ─────────────────────────────
 
-export interface LeaseAdmissionInput {
+interface LeaseAdmissionInput {
   readonly workerSessionId: string;
   readonly generation: number;
   readonly operation: LeaseRequiredOperation;

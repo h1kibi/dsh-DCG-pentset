@@ -142,7 +142,7 @@ export interface WorkerToolDeps {
  *
  * `blocked` 分支承载契约里的稳定错误码（`ErrorCode`），模型据码分支而不解析文本。
  */
-export type ExecuteOutcome =
+type ExecuteOutcome =
   | {
       readonly kind: 'executed';
       readonly plan: ExecutionPlan;

@@ -130,7 +130,7 @@ export function PentestPanelFrame(props: { readonly children: ReactNode }): Reac
  * 纯函数：状态条的**全部**内容都由它决定，因此可以脱离 React 断言
  * （哪些情况显示什么，是这一屏最容易出错、也最该被锁住的部分）。
  */
-export interface StatusPillFacts {
+interface StatusPillFacts {
   /** 一行主文本：作业名，或「未选择作业」。 */
   readonly title: string;
   /** 阶段名（没有阶段时不显示）。 */

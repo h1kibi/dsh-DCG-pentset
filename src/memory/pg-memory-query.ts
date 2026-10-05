@@ -135,7 +135,7 @@ export class MemoryQueryRejection extends Error {
 
 // ───────────────────────────── 构造依赖 ─────────────────────────────
 
-export interface PgMemoryQueryOptions {
+interface PgMemoryQueryOptions {
   /**
    * 审计账本。**省略即不写访问审计**——这是明确的降级，不是等价形态：
    * §8.3 要求「每次读取记入访问审计」，缺了它 `readMemory` 就只剩读取、没有留痕。
@@ -164,7 +164,7 @@ export interface PgMemoryQueryOptions {
  * 刻意不 `Pick<MemoryLedger, …>`：`MemoryLedger.verifyChain` 的返回类型含内部结构
  * （`ChainFailure.kind` 等），端口越窄，替换实现（如未来的远端审计器）越容易。
  */
-export interface LedgerVerifierPort {
+interface LedgerVerifierPort {
   verifyChain(engagementId: string): Promise<{
     readonly ok: boolean;
     readonly eventCount: number;

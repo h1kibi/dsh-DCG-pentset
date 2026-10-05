@@ -27,7 +27,7 @@ import { HandoffEditor } from './HandoffEditor.tsx';
 import { Button, Card, Empty, Field, TextArea, TextInput } from '../ui.tsx';
 import { GateList } from './GateList.tsx';
 
-export interface HandoffPanelProps {
+interface HandoffPanelProps {
   /** 唯一写入路径（§4.2）。 */
   readonly controller: ConsoleController;
   readonly snapshot: ConsoleSnapshot;

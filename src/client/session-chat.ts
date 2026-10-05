@@ -6,7 +6,7 @@ export interface SessionRecord {
   readonly event: { readonly seq: number; readonly time: number; readonly type: string; readonly data: unknown };
 }
 
-export interface SessionPageResult {
+interface SessionPageResult {
   readonly records: readonly SessionRecord[];
   readonly hasMore: boolean;
 }
@@ -16,7 +16,7 @@ export interface SessionChatRpc {
 }
 
 /** 一次读取的结果：**尾部**那一页，外加定位到的游标。 */
-export interface SessionTranscript {
+interface SessionTranscript {
   readonly records: readonly SessionRecord[];
   /**
    * 会话日志的最后一个 seq；`-1` 表示会话还没有任何事件。
@@ -29,7 +29,7 @@ export interface SessionTranscript {
   readonly hasMore: boolean;
 }
 
-export interface SessionChatClientOptions {
+interface SessionChatClientOptions {
   readonly rpc: SessionChatRpc;
   readonly channel?: string;
   readonly maxMessages?: number;
@@ -49,7 +49,7 @@ const MAX_GROWTH_PROBES = 24;
 const MAX_PROBES_PER_READ = 64;
 
 /** 会话读取/投递失败，保留宿主的稳定错误码供调用方分支。 */
-export class SessionChatError extends Error {
+class SessionChatError extends Error {
   readonly code: string | null;
   constructor(code: string | null, message: string) {
     super(message);
@@ -321,7 +321,7 @@ function isHostRpcResult(value: unknown): value is HostRpcResult {
 // ───────────────────────────── 事件 → 人类可读的消息 ─────────────────────────────
 
 /** 一条要在授权会话里显示的消息。 */
-export interface TranscriptMessage {
+interface TranscriptMessage {
   /** 稳定键：`seq` + 组内下标（一条事件可能携带多条消息）。 */
   readonly key: string;
   readonly seq: number;
@@ -331,7 +331,7 @@ export interface TranscriptMessage {
   readonly text: string;
 }
 
-export interface TranscriptProjection {
+interface TranscriptProjection {
   readonly messages: readonly TranscriptMessage[];
   /**
    * 被折叠的**运行事件**条数（preset/sandbox/policy/turn/step 这类）。

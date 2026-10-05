@@ -37,7 +37,7 @@ export interface GateBlocker {
 }
 
 /** 允许直接给字符串：多数判定函数返回的就是 `string[]`。 */
-export type GateInput = GateBlocker | string;
+type GateInput = GateBlocker | string;
 
 /**
  * 归一化 + 去重（按消息文本）。

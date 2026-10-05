@@ -22,7 +22,7 @@ import pg from 'pg';
 export const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 
 /** 迁移记录表：迁移器自身拥有，不属于任何一版 DDL。 */
-export const MIGRATIONS_TABLE = 'pentest.schema_migrations';
+const MIGRATIONS_TABLE = 'pentest.schema_migrations';
 
 const CREATE_MIGRATIONS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
@@ -63,7 +63,7 @@ export class SchemaVersionError extends Error {
   }
 }
 
-export interface MigrationFile {
+interface MigrationFile {
   /** 文件名前缀解析出的单调版本号，例如 001_init.sql → 1。 */
   readonly version: number;
   readonly fileName: string;
@@ -72,7 +72,7 @@ export interface MigrationFile {
   readonly sql: string;
 }
 
-export interface MigrationPlan {
+interface MigrationPlan {
   /** 需要按顺序执行的版本。 */
   readonly pending: readonly number[];
   /** 已执行且与代码一致的版本。 */
@@ -81,13 +81,13 @@ export interface MigrationPlan {
   readonly databaseVersion: number;
 }
 
-export interface MigrateOptions {
+interface MigrateOptions {
   readonly connectionString?: string;
   readonly migrationsDir?: string;
   readonly log?: (message: string) => void;
 }
 
-export interface MigrateResult {
+interface MigrateResult {
   readonly appliedFiles: readonly string[];
   readonly skippedFiles: readonly string[];
   readonly databaseVersion: number;

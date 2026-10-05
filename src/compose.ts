@@ -118,7 +118,7 @@ import type { WorkerToolDeps } from './tools/worker.ts';
  * 因此它被移到 {@link RlsScope}（异步作用域），本类型只保留租户：
  * 租户是部署属性，全进程唯一且不变，放在进程级是正确的。
  */
-export interface RuntimeRlsContext {
+interface RuntimeRlsContext {
   readonly tenantId: string;
 }
 
@@ -456,7 +456,7 @@ function txClientWithRlsContext(
 }
 
 /** 独占连接：事务的唯一合法载体。 */
-export interface TxClientHandle {
+interface TxClientHandle {
   readonly client: DbClient;
   /**
    * 归还连接。传错误即**销毁**而不是归还池中（pg-pool 的 `release(err)` 语义）——
@@ -890,7 +890,7 @@ function approvalPlanValidatorFor(
  * 启动时探测一次当前角色的**真实属性**，由调用方据 {@link classifyRlsCombination}
  * 告警或拒绝启动。
  */
-export interface RlsDiagnosis {
+interface RlsDiagnosis {
   readonly currentUser: string;
   readonly superuser: boolean;
   readonly rlsContextConfigured: boolean;
@@ -962,20 +962,20 @@ export async function inspectRls(
  * 具名而不是内联返回形状：安装器要把它当作产品的一部分传给调用方，
  * 内联形状会让下游只能用 `ReturnType<typeof createTxDb>` 表达类型。
  */
-export interface TxDbPort {
+interface TxDbPort {
   readonly db: DbClient;
   readonly dispose: () => Promise<void>;
 }
 
 /** 后台循环用的作用域端口：在 {@link RlsScopePort} 之上补一个作业列举。 */
-export interface BackgroundScopes {
+interface BackgroundScopes {
   readonly run: RlsScopePort['run'];
   readonly current: RlsScopePort['current'];
   readonly listEngagementIds: () => Promise<readonly string[]>;
 }
 
 /** `installDatabase` 的产物：连接池、读写通道、RLS 作用域端口。 */
-export interface DatabaseInstallation {
+interface DatabaseInstallation {
   readonly pool: Pool;
   readonly readDb: DbClient;
   readonly txDb: DbClient;
@@ -997,7 +997,7 @@ export interface DatabaseInstallation {
  * 安装器把「一块基础设施」的输入与产物显式写成类型：调用方只看
  * {@link DatabaseInstallation} 就知道这一层给出去什么，而这一层内部改接线不影响调用方。
  */
-export function installDatabase(config: ComposeConfig): DatabaseInstallation {
+function installDatabase(config: ComposeConfig): DatabaseInstallation {
   const pool = createDatabasePool(config.database, (error) => {
     console.warn(`[dsh-pentest] 连接池错误（空闲连接被终止或网络断开，池将自行回收重建）：${error.message}`);
   });
@@ -1069,7 +1069,7 @@ export function installDatabase(config: ComposeConfig): DatabaseInstallation {
 }
 
 /** `installIndexing` 的产物：队列、账本与索引器。 */
-export interface IndexingInstallation {
+interface IndexingInstallation {
   readonly outbox: PgOutboxQueue;
   readonly ledger: MemoryLedger;
   readonly indexer: MemoryIndexer;
@@ -1081,7 +1081,7 @@ export interface IndexingInstallation {
  * 锚点与版本登记器**不**作为产物给出：它们只服务于这一层的内部装配
  * （锚点与账本共用写连接、登记器供索引器调用），调用方拿不到也不需要它们。
  */
-export function installIndexing(input: {
+function installIndexing(input: {
   readonly config: ComposeConfig;
   readonly readDb: DbClient;
   readonly txDb: DbClient;
@@ -1144,7 +1144,7 @@ export function installIndexing(input: {
  * `createExecutionService` 消费，组合根不需要它们——因此不做成产物（否则调用方会
  * 拿到一组「看着像公共面」的内部件）。需要时再加，一行的事。
  */
-export interface ExecutionInstallation {
+interface ExecutionInstallation {
   readonly policy: PgPolicyService;
   readonly approvalPlanValidator: ApprovalPlanValidator;
   readonly auditProbe: AuditProbe;
@@ -1157,7 +1157,7 @@ export interface ExecutionInstallation {
  * 只有这些**产物**给出去：`actions`（动作策略源）与 `store`（执行存储）只在这一层内部被使用；
  * 闸门失败 sink 由本安装器内部构造（它的实现已独立成 `execution/gate-failures.ts`）。
  */
-export function installExecution(input: {
+function installExecution(input: {
   readonly config: ComposeConfig;
   readonly readDb: DbClient;
   readonly txDb: DbClient;
@@ -1259,13 +1259,13 @@ export function installExecution(input: {
  * 具名：它是**跨层**的解析口（租约层内部用它，控制台建作用域也用它），
  * 内联函数类型会让两边各写一遍形状。
  */
-export type LeaseRlsResolver = (workerSessionId: string) => Promise<{
+type LeaseRlsResolver = (workerSessionId: string) => Promise<{
   readonly tenantId: string;
   readonly engagementId: string;
 } | null>;
 
 /** `installWorkflow` 的产物。 */
-export interface WorkflowInstallation {
+interface WorkflowInstallation {
   readonly leases: PgLeaseStore;
   readonly workflow: PgWorkflowService;
   readonly workerTools: WorkerToolDeps;
@@ -1289,7 +1289,7 @@ export interface WorkflowInstallation {
  * * 记忆面与诊断面**不在这里**：它们只服务控制台（见 `installConsole`），
  *   工作流不依赖它们。
  */
-export function installWorkflow(input: {
+function installWorkflow(input: {
   readonly config: ComposeConfig;
   readonly pool: Pool;
   readonly readDb: DbClient;
@@ -1477,7 +1477,7 @@ export function installWorkflow(input: {
 }
 
 /** `installConsole` 的产物：控制台 RPC 与它背后的四个服务面。 */
-export interface ConsoleInstallation {
+interface ConsoleInstallation {
   readonly consoleRpc: ConsoleRpc;
   readonly memoryFace: PgMemoryQueryService;
   readonly diagnosticsFace: PgDiagnosticsService;
@@ -1498,7 +1498,7 @@ export interface ConsoleInstallation {
  * * `resolveEngagement` 用 `installWorkflow` 给出的同一条会话→作业反查：
  *   控制台与租约两条路径对归属的判断必须一致。
  */
-export function installConsole(input: {
+function installConsole(input: {
   readonly config: ComposeConfig;
   readonly pool: Pool;
   readonly readDb: DbClient;
@@ -1655,7 +1655,7 @@ function pendingWarningKeys(
 }
 
 /** `installBudget` 的产物：预算表工厂与生命周期观察器。 */
-export interface BudgetInstallation {
+interface BudgetInstallation {
   readonly createBudget: (input: {
     dshSessionId: string;
     limits: BudgetLimits;
@@ -1681,7 +1681,7 @@ export interface BudgetInstallation {
  * 晚绑定工作流（系统暂停的出口）与其它层同一形态：`input.workflow()`，
  * 而不是靠构造顺序的巧合。
  */
-export function installBudget(input: {
+function installBudget(input: {
   readonly config: ComposeConfig;
   readonly readDb: DbClient;
   readonly txDb: DbClient;
