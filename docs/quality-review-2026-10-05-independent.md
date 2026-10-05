@@ -704,10 +704,53 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 （其中一条覆盖本次搬动的暂停路径：`system_auto_pause:scope_violation_threshold`）；
 全量套件通过。
 
-### 复核清单已全部落地（5/5）
+### 复核清单已全部落地（5/5）+ 第 6 个安装器
+
+| 安装器 | 产物 | 说明 |
+|---|---|---|
+| `installBudget({config, readDb, txDb, ledger, rlsContext, rlsScopePort, workflow})` | `{createBudget, lifecycle}` | **持状态**（每会话绑定/串行链）；晚绑定工作流同形态；顺手把两处「缩进说谎」的嵌套声明（`BudgetSessionRow`、`pendingWarningKeys`）提到模块作用域 |
+
+`compose()` 最终 **880 → 148 行**（复核目标「≈200 行编排」已达成）。
 
 `installDatabase` / `installIndexing` / `installExecution` / `installWorkflow` / `installConsole`——每个都有具名输入与产物，内部细节（为什么共用写连接、为什么晚绑定、为什么报告面共享实例、为什么四个面分开构造）都随代码移动。
 
 ### 剩余（复核清单之外，明确记录）
 
 `compose()` 仍是 349 行——剩下的主体是**预算与活性块**（§10.5，~228 行：dsh-budget 端口绑定、步骤累计、预算告警与系统暂停）与对账/心跳入口（~40 行）。复核的安装器清单里**没有**预算这一项，且它不是纯接线（它持有状态：绑定表、链式队列、观察器），要继续压缩需要第 6 个安装器（`installBudget`），边界要单独设计——已记入待办，不在本轮冒充完成。
+
+---
+
+## 附十五：C4 客户端闸门收敛 + C7 端点面一致性锁（2026-10-05，续）
+
+### C4：一处渲染「为什么现在不能做这件事」
+
+收敛前同一件事有**三份实现、三种数据形状、三组样式**（正是复核点名的 3 形状 / 7 份 CSS）：
+
+| 视图 | 数据形状 | 标记 |
+|---|---|---|
+| `ReportExport`（本地 `GateList`） | `{code,message}[]` | `pentest-report-export__gate*`（5 条规则） |
+| `HandoffEditor` | `string[]`（自己 `[...new Set()]`） | `pentest-handoff__gates`（3 条规则） |
+| `EngagementList`（清空内容） | `string[]` | `pentest-engagement-list__purge-warn`（1 条规则） |
+
+而 `HandoffPanel` / `MemoryExplorer` 只在按钮 `reason` 里显示**第一条**——人类看不到剩下的闸门。
+
+现在只有 `views/GateList.tsx`：归一化（`string` 与 `{code,message}` 混着给都可以）+ 按文案去重 + 空清单渲染 `null` + 可选标题；`code` 渲染成 `data-blocker`（没有码时不造假标识）。样式收敛为 `pentest-gate*` 一族。**判定仍留在各视图的纯函数里**（`signBlockers` / `exportBlockers` / `searchBlockers`）——组件只管呈现。
+
+四个视图改用它（`ReportExport` / `HandoffEditor` / `EngagementList` / `HandoffPanel`），`MemoryExplorer` 补上完整清单（按钮 `reason` 仍只给第一条，交互不变）。新增 `test/client-gate-list.test.ts` 5 条用例锁住归一化/去重/空态/`data-blocker`/标题可选。
+
+**顺带修掉门禁自身的噪声**：`verify-style-coverage.mjs` 把**注释里**的历史类名当成使用点（共享组件的文档表格写了两个已删除的类名 → 两个假失败）。现在与 `verify-client-bundle.ts` 同一条纪律：**只看去注释后的代码**。修正后 346 使用 / 346 声明——两条口径恰好对齐，说明也没有死样式。
+
+### C7：先验证机制，再决定生成还是校验
+
+**机制验证（复核要求的第一步）**：SRC 模式下每个端点方法的形状完全相同——
+`@Remote async <name>(request: ConsoleRequest): Promise<ConsoleResponse>`，参数名 `request`
+是线协议的一部分（网关 `assertExactArguments` 从**源码**解析参数名）——**因此生成是可行的**。
+
+**但没有选生成**：该文件同时承载只能用文字表达的机制约束（必须继承 `TypertRemoteService`；
+依赖必须用 TS `private` 而非 `#`，否则 cordis 的 traceable 代理读不到；签名不得解构/默认值/rest，
+否则被网关以 `gateway/signature-invalid` 拒绝——三条都是实测踩出来的）。生成器会把这些说明
+挤进脚本，而**校验能达到同一个不变量**：「增删端点只改一处，另一处漏了就红」。
+
+于是新增 `scripts/verify-typert-face.ts`（`npm run verify:typert-face`）：双向集合比较
+（清单↔门面）、方法形状合规性、重复声明、数量对齐。**实测 53/53 一致**——两条事实源当前同步，
+这条锁从此接手「漂移即红」。

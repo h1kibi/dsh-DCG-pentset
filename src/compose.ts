@@ -1648,58 +1648,70 @@ export function installConsole(input: {
   return { consoleRpc, memoryFace, diagnosticsFace, skillFace };
 }
 
-/** 装配全部服务。 */
-export function compose(config: ComposeConfig): ComposedPlugin {
-  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
-  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
-  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
-    throw new Error(
-      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
-    );
-  }
-  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
-  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+interface BudgetSessionRow {
+  readonly id: string;
+  readonly engagement_id: string;
+  readonly status: string;
+  readonly budget_max_tokens: number | string | null;
+  readonly budget_max_steps: number | string | null;
+  readonly budget_max_seconds: number | string | null;
+  readonly consumed_tokens: number | string;
+  readonly consumed_steps: number | string;
+  readonly started_at: Date | string | null;
+  readonly created_at: Date | string;
+}
 
-  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
-  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
-  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
-  let workflowRef: PgWorkflowService | null = null;
-  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
-    config,
-    readDb,
-    txDb,
-    ledger,
-    workflow: () => workflowRef,
-  });
+function pendingWarningKeys(
+  reading: ReturnType<BudgetMeter['evaluate']>,
+  seen: ReadonlySet<string>,
+): readonly { readonly warning: ReturnType<BudgetMeter['evaluate']>['warnings'][number]; readonly key: string }[] {
+  return reading.warnings
+    .map((warning) => ({ warning, key: `r${String(reading.revision)}:${warning.dimension}` }))
+    .filter(({ key }) => !seen.has(key));
+}
 
-  const { leases, workflow, workerTools, reportFace, leaseRlsContextForSession } = installWorkflow({
-    config,
-    pool,
-    readDb,
-    txDb,
-    rlsContext,
-    rlsScopePort,
-    ledger,
-    execution,
-    policy,
-    approvalPlanValidator,
-    workflow: () => workflowRef,
-  });
-  workflowRef = workflow;
+/** `installBudget` 的产物：预算表工厂与生命周期观察器。 */
+export interface BudgetInstallation {
+  readonly createBudget: (input: {
+    dshSessionId: string;
+    limits: BudgetLimits;
+    startedAt: Date;
+    initialSteps?: number;
+    status?: SessionStatus;
+  }) => BudgetMeter | null;
+  readonly lifecycle: {
+    observe(dshSessionId: string, eventType: 'step/start' | 'assistant/message'): Promise<void>;
+  };
+}
 
-  const { consoleRpc, memoryFace, diagnosticsFace, skillFace } = installConsole({
-    config,
-    pool,
-    readDb,
-    ledger,
-    outbox,
-    auditProbe,
-    workflow,
-    reportFace,
-    leaseRlsContextForSession,
-    rlsContext,
-    rlsScopePort,
-  });
+/**
+ * 安装预算与活性（§10.5）：会话绑定表、串行链、观察器与系统暂停出口。
+ *
+ * ── 为什么它不是一个「纯接线」安装器 ──
+ *
+ * 它**持有状态**：每个 dsh 会话的绑定（计量器、上限、已发出的告警键与耗尽键），
+ * 以及按会话串行化的链。因此边界必须画在这里——状态只在 `observe` 内读写，
+ * `createBudget` 是纯工厂。这两件事此前与组合根的其它装配平铺在一起，
+ * 组合根因此看不出「哪一段有状态」。
+ *
+ * 晚绑定工作流（系统暂停的出口）与其它层同一形态：`input.workflow()`，
+ * 而不是靠构造顺序的巧合。
+ */
+export function installBudget(input: {
+  readonly config: ComposeConfig;
+  readonly readDb: DbClient;
+  readonly txDb: DbClient;
+  readonly ledger: MemoryLedger;
+  readonly rlsContext: RuntimeRlsContext | undefined;
+  /** 预算观察在无外层作用域的回调里跑，必须自己进作用域（见 `observe` 内的说明）。 */
+  readonly rlsScopePort: RlsScopePort;
+  /** 系统暂停的出口（见 `installBudget` 的说明）。 */
+  readonly workflow: () => PgWorkflowService | null;
+}): BudgetInstallation {
+  const { config, readDb, txDb, ledger, rlsContext, rlsScopePort } = input;
+  // 晚绑定的别名：避免与 `observe` 内部的局部变量重名（同 `installWorkflow` 的做法）。
+  const workflowPort = input.workflow;
+
 
   // ── 预算与活性（§10.5）──
   //
@@ -1731,27 +1743,7 @@ export function compose(config: ComposeConfig): ComposedPlugin {
  * 提成具名类型而不是内联：`readSession` 与两条分流路径共用同一形状，
  * 内联三次会让「加一列」变成三处修改。
  */
-interface BudgetSessionRow {
-  readonly id: string;
-  readonly engagement_id: string;
-  readonly status: string;
-  readonly budget_max_tokens: number | string | null;
-  readonly budget_max_steps: number | string | null;
-  readonly budget_max_seconds: number | string | null;
-  readonly consumed_tokens: number | string;
-  readonly consumed_steps: number | string;
-  readonly started_at: Date | string | null;
-  readonly created_at: Date | string;
-}
 
-function pendingWarningKeys(
-  reading: ReturnType<BudgetMeter['evaluate']>,
-  seen: ReadonlySet<string>,
-): readonly { readonly warning: ReturnType<BudgetMeter['evaluate']>['warnings'][number]; readonly key: string }[] {
-  return reading.warnings
-    .map((warning) => ({ warning, key: `r${String(reading.revision)}:${warning.dimension}` }))
-    .filter(({ key }) => !seen.has(key));
-}
   const observeBudget = async (dshSessionId: string, eventType: 'step/start' | 'assistant/message'): Promise<void> => {
     if (dshBudget === undefined) return;
     const previous = budgetChains.get(dshSessionId) ?? Promise.resolve();
@@ -1887,8 +1879,9 @@ function pendingWarningKeys(
         if (stateRow === undefined) throw new Error(`预算会话的 engagement 不存在：${engagementId}`);
         if (events.length > 0) await ledger.appendBatchInTransaction(tx, events);
         if (reading.pauseRequest !== null && pendingExhausted && stateRow.status === 'running') {
-          if (workflowRef === null) throw new Error('系统暂停工作流尚未装配');
-          await workflowRef.pauseForSystem({ engagementId, expectedStateVersion: Number(stateRow.state_version), cause: 'budget_exhausted', detail: reading.pauseRequest.message });
+          const late = workflowPort();
+          if (late === null) throw new Error('系统暂停工作流尚未装配');
+          await late.pauseForSystem({ engagementId, expectedStateVersion: Number(stateRow.state_version), cause: 'budget_exhausted', detail: reading.pauseRequest.message });
         }
         const projected = projectionOf(reading);
         await tx.query(
@@ -1910,6 +1903,73 @@ function pendingWarningKeys(
     }
   };
   const budgetLifecycle = { observe: observeBudget };
+
+  return { createBudget, lifecycle: budgetLifecycle };
+}
+
+/** 装配全部服务。 */
+export function compose(config: ComposeConfig): ComposedPlugin {
+  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
+  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
+  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
+    throw new Error(
+      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
+    );
+  }
+  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
+  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+
+  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
+  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
+  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
+  let workflowRef: PgWorkflowService | null = null;
+  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
+    config,
+    readDb,
+    txDb,
+    ledger,
+    workflow: () => workflowRef,
+  });
+
+  const { leases, workflow, workerTools, reportFace, leaseRlsContextForSession } = installWorkflow({
+    config,
+    pool,
+    readDb,
+    txDb,
+    rlsContext,
+    rlsScopePort,
+    ledger,
+    execution,
+    policy,
+    approvalPlanValidator,
+    workflow: () => workflowRef,
+  });
+  workflowRef = workflow;
+
+  const { consoleRpc, memoryFace, diagnosticsFace, skillFace } = installConsole({
+    config,
+    pool,
+    readDb,
+    ledger,
+    outbox,
+    auditProbe,
+    workflow,
+    reportFace,
+    leaseRlsContextForSession,
+    rlsContext,
+    rlsScopePort,
+  });
+
+  const { createBudget, lifecycle: budgetLifecycle } = installBudget({
+    config,
+    readDb,
+    txDb,
+    ledger,
+    rlsContext,
+    rlsScopePort,
+    workflow: () => workflowRef,
+  });
+
   const dispatcher = new IndexDispatcher({
     outbox,
     indexer,
