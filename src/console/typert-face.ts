@@ -35,13 +35,14 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { Context } from '@deepseek-ai/cordis';
 
 import type { ConsoleRequest, ConsoleResponse } from './rpc.ts';
-import { CONSOLE_TYPRET_SERVICE, ConsoleRpc } from './rpc.ts';
+import { ConsoleRpc } from './rpc.ts';
+import { CONSOLE_TYPRET_SERVICE } from './method-names.ts';
 
 /**
  * 命名空间（= cordis 服务键）。定义在 `./rpc.ts` 以便客户端共用同一处——
  * 客户端要拼 `/api/<ns>/<method>`，两处各写一份必然漂移。
  */
-export { CONSOLE_TYPRET_SERVICE } from './rpc.ts';
+export { CONSOLE_TYPRET_SERVICE } from './method-names.ts';
 
 /** 操作者身份的来源（部署配置，见 `PluginConfig.operator` 的说明）。 */
 export interface ConsoleTypertOperator {

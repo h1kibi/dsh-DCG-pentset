@@ -19,7 +19,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { Finding, MainStatus, ReportDraft } from '../src/contracts.ts';
-import { isConsoleMethod } from '../src/console/rpc.ts';
+import { isConsoleMethod } from '../src/console/method-names.ts';
 import { ConsoleController } from '../src/client/controller.ts';
 import type { ConsoleSnapshot } from '../src/client/controller.ts';
 import {

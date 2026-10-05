@@ -26,10 +26,11 @@
  */
 
 import type { HostRpcResult } from './rpc.ts';
-import { DEFAULT_CONSOLE_CHANNEL } from './rpc.ts';
-import { CONSOLE_TYPRET_SERVICE } from './rpc.ts';
-import { CONSOLE_RPC_METHODS } from './rpc.ts';
-import type { ConsoleErrorCode, ConsoleMethodName, ConsoleResponse } from './rpc.ts';
+// 零依赖模块：本文件进客户端产物，而 `console/rpc.ts` 的实现链会拉到 `node:crypto`。
+// 端点名/命名空间/通道都必须从 `method-names.ts` 取（2026-10-05 复核 REQ-13c）。
+import { CONSOLE_METHOD_NAMES, CONSOLE_TYPRET_SERVICE, DEFAULT_CONSOLE_CHANNEL } from './method-names.ts';
+import type { ConsoleErrorCode, ConsoleResponse } from './rpc.ts';
+import type { ConsoleMethodName } from './method-names.ts';
 
 /**
  * 调用宿主的函数。
@@ -306,7 +307,7 @@ export class ConsoleClient {
 
   /** 全部可调用端点，供 UI 生成菜单或做能力探测。 */
   static methods(): readonly ConsoleMethodName[] {
-    return CONSOLE_RPC_METHODS;
+    return CONSOLE_METHOD_NAMES;
   }
 }
 

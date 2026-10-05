@@ -21,7 +21,7 @@ import type { DbClient } from '../src/memory/ledger.ts';
 import { WorkflowRejection } from '../src/workflow/model.ts';
 import type { ActionTemplateSpec } from '../src/execution/templates.ts';
 import { applyPentest, PENTEST_HOST_SERVICES } from '../src/index.ts';
-import { CONSOLE_TYPRET_SERVICE } from '../src/console/rpc.ts';
+import { CONSOLE_TYPRET_SERVICE } from '../src/console/method-names.ts';
 import { WORKER_TOOL_NAMES } from '../src/tools/worker.ts';
 
 import { cleanupEngagements } from './helpers/cleanup.ts';

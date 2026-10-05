@@ -21,9 +21,8 @@ import {
 } from '../src/console/client.ts';
 import type { ConsoleCallInput } from '../src/console/client.ts';
 import type { HostRpcResult } from '../src/console/rpc.ts';
-import { DEFAULT_CONSOLE_CHANNEL } from '../src/console/rpc.ts';
-import { CONSOLE_TYPRET_SERVICE } from '../src/console/rpc.ts';
-import type { ConsoleMethodName } from '../src/console/rpc.ts';
+import { CONSOLE_TYPRET_SERVICE, DEFAULT_CONSOLE_CHANNEL } from '../src/console/method-names.ts';
+import type { ConsoleMethodName } from '../src/console/method-names.ts';
 import type { WorkflowSnapshot } from '../src/contracts.ts';
 
 const SNAPSHOT: WorkflowSnapshot = {

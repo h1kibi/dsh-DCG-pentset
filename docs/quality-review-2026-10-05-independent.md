@@ -355,3 +355,24 @@ P3  lint/CI → verify 脚本族 → 单一来源 → 测试纪律 → git init 
 - 测试夹具新增两个**注入点**（`HarnessHooks.afterCommit` / `failFinishRun`）——这类"时序窗口"缺陷只能在窗口处注入故障才测得到，纯黑盒调用测不出来。
 - 容器清理只覆盖 `timedOut`/`aborted`：正常退出由 `--rm` 回收，运行期错误说明容器根本没起来。
 - 未做：宿主 deadline 与容器 `PENTEST_TIMEOUT_MS` 的对齐（相差镜像启动延迟，属已知小窗口）；结算失败用的是既有 `execution.stopped` 事件类型 + 精确 reason，而不是新增事件类型（审计词汇表受控，新增值的成本高于收益）。
+
+---
+
+## 附六：REQ-13 客户端三修（2026-10-05，续）
+
+| 项 | 落地 |
+|---|---|
+| REQ-13a（预算静默丢弃）| `parseLimit` 从 `Number.parseInt` 改为**只认纯十进制正整数**（`/^\d+$/` + `Number.isSafeInteger`）：`'1e5'` 不再是 1、`'2,5'` 不再是 2；`startBlockers` 对「填了但解析不了」给出**具名**禁用理由（指出是哪一项、原值是什么）；`submitStart` 增加防御分支——绕过 UI 调用时**拒绝提交**，而不是把三项预算丢掉、悄悄改用阶段默认值 |
+| REQ-13b（快照污染与迟到响应）| `select()` 在切换的**瞬间**清空 `state`/`sessions`/`scopeProposal`；`#read` 增加**归属守卫**（发起时记下作业 id，响应回来时选中项已变则直接丢弃——不写快照、也不写错误）；`refreshScopeProposal(engagementId?)` 接受显式作业并由 `refreshState` 传入发起时的 id |
+| REQ-13c（产物里的 `node:` 边）| 新增**零依赖** `src/console/method-names.ts`：命名空间（`CONSOLE_TYPRET_SERVICE`）、通道（`DEFAULT_CONSOLE_CHANNEL`）、53 个端点名、`ConsoleMethodName` 类型与 `isConsoleMethod`（`Set` 实现，不受原型链影响）。`rpc.ts` 在**加载期**双向断言清单与方法表逐字一致（`assertMethodNamesAligned`）；客户端侧（两个视图、`console/client.ts`、controller、`console/client.ts` 的类型）全部改从清单导入——`console/rpc.ts` 彻底离开客户端图 |
+
+### 度量与回归锁
+
+- **产物**：`lib/client.js` 1,155,366 → **1,131,392 字节**（−24KB：53 条端点 spec 表不再进产物）；产物代码里 `createHash` 0 命中、无 `require("node:`。
+- **断言修正**：`verify:client` 的两条新断言改为**只看去注释后的代码**——tsdown 保留注释，而本仓注释大量解释"为什么不能引 `node:crypto`"；把注释算命中会让断言变成噪声，而噪声断言的下场是被忽略。
+- **测试 +5**：`parseLimit` 严格用例（`'1e5'`/`'1.5'`/`'2,5'`/`'+5'`/超安全整数）、`startBlockers` 具名理由 + 合法输入不误拦、清单↔方法表一致 + 原型链键名拒绝、以及新文件 `test/client-controller-staleness.test.ts`（手动结算 invoker：读失败不回落到上一作业；迟到响应不覆盖新作业）。
+
+### 遗留
+
+- `#fetch`（面板数据读：结论/放行队列/记忆）未加归属守卫——面板数据不参与状态条，且各自有"读取失败"呈现；需要时再按同一模式收。
+- `test/client-memory-views.test.ts` 里另有一个 `parseLimit`（记忆检索条数，非法值回落 `DEFAULT_MEMORY_LIMIT`）——与预算解析**同名不同义**，本轮未动；若后续混淆，建议改名（`parseMemoryLimit`）。

@@ -14,9 +14,9 @@ import assert from 'node:assert/strict';
 import {
   ConsoleRpc,
   CONSOLE_RPC_METHODS,
-  isConsoleMethod,
   describeConsoleMethods,
 } from '../src/console/rpc.ts';
+import { CONSOLE_METHOD_NAMES, isConsoleMethod } from '../src/console/method-names.ts';
 import type { CallContext } from '../src/console/rpc.ts';
 import type { HumanWorkflowService, WorkflowSnapshot } from '../src/contracts.ts';
 
@@ -263,6 +263,20 @@ test('**Worker 工具方法不在控制台面**：finishWorker 永不导出', ()
   // 它是 Agent 侧动作（pentest_submit_report 调用），不是人类操作
   assert.equal(CONSOLE_RPC_METHODS.includes('finishWorker' as never), false);
   assert.equal(isConsoleMethod('finishWorker'), false);
+});
+
+test('零依赖端点清单与方法表逐字一致，且不受原型链影响（REQ-13c 回归锁）', () => {
+  // 清单是客户端视图**值导入**的模块：它一旦与 rpc.ts 的方法表漂移，视图会按错的
+  // 名字探测端点（表现为功能「莫名不可用」）。两边在加载期已断言，这里再钉一层，
+  // 把「清单顺序也是对外枚举顺序」这件事显式锁住。
+  assert.deepEqual([...CONSOLE_RPC_METHODS], [...CONSOLE_METHOD_NAMES]);
+  for (const name of CONSOLE_METHOD_NAMES) {
+    assert.equal(isConsoleMethod(name), true, `${name} 必须在清单里`);
+  }
+  // 原型链键名不得被当成端点（表实现与清单实现都必须不受影响）。
+  for (const prototypeKey of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+    assert.equal(isConsoleMethod(prototypeKey), false, `${prototypeKey} 不得被当成端点`);
+  }
 });
 
 test('控制台面不含任何状态机内部方法或工具名', () => {

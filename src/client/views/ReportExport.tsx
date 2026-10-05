@@ -33,8 +33,10 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ExportRequest, ExportResult, MainStatus, ReportDraft } from '../../contracts.ts';
-import { isConsoleMethod } from '../../console/rpc.ts';
-import type { ConsoleMethodName } from '../../console/rpc.ts';
+// **值导入**必须来自零依赖清单：`console/rpc.ts` 的实现链会拉到 `node:crypto`，
+// 浏览器产物里出现 `require("node:")` 会让整个插件加载失败（2026-10-05 复核 REQ-13c）。
+import { isConsoleMethod } from '../../console/method-names.ts';
+import type { ConsoleMethodName } from '../../console/method-names.ts';
 import type { PentestReportService } from '../../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { formatCount, mainStatusLabel, runMarkerLabel, truncate } from '../format.ts';

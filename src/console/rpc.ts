@@ -93,6 +93,8 @@ import type {
   WorkflowSnapshot,
 } from '../contracts.ts';
 import { sha256Hex } from '../memory/chunks.ts';
+import { CONSOLE_METHOD_NAMES, isConsoleMethod } from './method-names.ts';
+import type { ConsoleMethodName } from './method-names.ts';
 
 // ───────────────────────────── 稳定错误码 ─────────────────────────────
 
@@ -181,17 +183,6 @@ export interface CallContext {
  * 的静默分歧。
  */
 /**
- * 控制台端点的 Remote **命名空间**，同时是宿主侧的 cordis 服务键。
- *
- * 它决定浏览器里的端点路径：`POST /api/pentest/<method>`。
- * 必须匹配宿主的段名规则 `/^[A-Za-z0-9_$.-]+$/`（`pentest` 合法；带斜杠或空格的键会被拒）。
- *
- * 常量放在本模块而不是 `typert-face.ts`：后者依赖 cordis 与 typert 协议，
- * **不能进浏览器产物**；而客户端要拼同一个前缀，两侧必须来自同一处，否则改一处就静默 404。
- */
-export const CONSOLE_TYPRET_SERVICE = 'pentest';
-
-/**
  * 宿主 Connection RPC 的**结果形状**。
  *
  * `{ok:true,value} | {ok:false,error:{code,message,details}}` 是宿主的既定形状，
@@ -207,16 +198,11 @@ export type HostRpcResult =
   | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details: Record<string, unknown> } };
 
 /**
- * 控制台端点所在的通道。
+ * 控制台端点所在的通道：见 `method-names.ts` 的 `DEFAULT_CONSOLE_CHANNEL`。
  *
- * 固定为 `/api`：端点是**共享网关**上的 Remote（`/api/<namespace>/<method>`），
- * 不再自建通道——`connection.rpc.handle()` 在本版本对任何调用方都抛
- * `cannot get property "webServer" without inject`（详见 `typert-face.ts`）。
- *
- * 宿主的通道规则是 `/^\/[A-Za-z0-9._~-]+$/`（**单层**）：`/api` 合法，
- * `/rpc/pentest` 这类两层名会在客户端被拒（`invalid RPC target`）。
+ * （常量与命名空间都移到了零依赖模块——客户端要拼同一路径，而本模块的实现链
+ * 会拉到 `node:crypto`；两侧必须来自同一处，否则改一处就静默 404。）
  */
-export const DEFAULT_CONSOLE_CHANNEL = '/api';
 
 export interface ConsoleRequest {
   /** 端点名，取值见 {@link CONSOLE_RPC_METHODS}。 */
@@ -1243,27 +1229,29 @@ const METHOD_TABLE: Record<string, ConsoleMethodSpec> = (() => {
   return merged;
 })();
 
-export type ConsoleMethodName = keyof typeof WORKFLOW_METHOD_TABLE
-  | keyof typeof REPORT_METHOD_TABLE
-  | keyof typeof MEMORY_METHOD_TABLE
-  | keyof typeof SKILL_METHOD_TABLE
-  | keyof typeof DIAGNOSTICS_METHOD_TABLE;
-
-/** 暴露的端点名（声明序即 §16.1 的列出顺序）。 */
 /**
- * 暴露的端点名（声明序近似 §16.1 的列出顺序，按服务面分组）。
+ * 加载期对齐：零依赖端点清单（`method-names.ts`）必须与方法表**逐字一致**（两向）。
  *
- * 用 `filter` 的谓词窄化而不是 `as ConsoleMethodName[]`：`Object.keys` 返回
- * `string[]`，断言会掩盖「表里有不认识的键」这种真实不一致；谓词则把它降级成
- * 一个可处理的分支（不认识的键直接被滤掉，而它本来就调不到）。
+ * 清单是客户端视图**值导入**的那个模块——视图只需要「这个名字是不是端点」这一个事实，
+ * 而本模块的实现链会拉到 `node:crypto`（会话摘要）。它一旦与表漂移，视图就会按错的
+ * 名字探测端点（表现为功能「莫名不可用」或「点了 404」）；因此把漂移做成启动即失败。
  */
-export const CONSOLE_RPC_METHODS: readonly ConsoleMethodName[] = Object.keys(METHOD_TABLE)
-  .filter(isConsoleMethod);
-
-/** 端点是否存在。 */
-export function isConsoleMethod(name: string): name is ConsoleMethodName {
-  return Object.hasOwn(METHOD_TABLE, name);
+function assertMethodNamesAligned(): void {
+  const tableNames = Object.keys(METHOD_TABLE);
+  const missing = CONSOLE_METHOD_NAMES.filter((name) => !tableNames.includes(name));
+  const extra = tableNames.filter((name) => !(CONSOLE_METHOD_NAMES as readonly string[]).includes(name));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      '控制台端点清单与方法表不一致（method-names.ts ↔ rpc.ts）：' +
+        `清单缺失 [${missing.join(', ')}]，表内多余 [${extra.join(', ')}]`,
+    );
+  }
 }
+
+assertMethodNamesAligned();
+
+/** 暴露的端点名（声明序近似 §16.1 的列出顺序，按服务面分组）。 */
+export const CONSOLE_RPC_METHODS: readonly ConsoleMethodName[] = CONSOLE_METHOD_NAMES;
 
 /**
  * 查方法表，返回 `null` 表示端点不存在。

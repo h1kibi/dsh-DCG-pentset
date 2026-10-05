@@ -57,11 +57,25 @@ export interface RunControlsProps {
 
 const EMPTY_BUDGET: StartBudgetForm = { maxTokensText: '', maxStepsText: '', maxSecondsText: '' };
 
-/** 正整数解析：空与非正数都返回 undefined（表示「不设限」）。 */
+/**
+ * 预算上限解析：**只接受十进制正整数**。
+ *
+ * 事故（2026-10-05 复核 REQ-13a）：此前用 `Number.parseInt`——`'1e5'` 解析成 1
+ * （想设 10 万，实际按 1 步执行）、`'2,5'` 解析成 2；而调用方无法区分「空」与
+ * 「写了但解析失败」，于是一次手滑会让三项预算被**整体静默丢弃**、悄悄回落到阶段默认值。
+ * 现在：语法非法一律返回 undefined，由 `startBlockers` 把「写了但解析不了」变成
+ * 可见的禁用理由——拒绝提交，而不是带着默认值开跑。
+ */
 export function parseLimit(text: string): number | undefined {
-  const n = Number.parseInt(text.trim(), 10);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+  const trimmed = text.trim();
+  // 只认纯十进制数字：科学计数法、小数、正负号、千分位、空白一律拒绝。
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
+
+/** 预算三项的展示名（错误信息里指出是哪一项手滑）。 */
+const BUDGET_FIELD_LABELS: readonly string[] = ['tokens', '步数', '秒数'];
 
 /**
  * 启动闸门：返回阻止启动的原因（空数组即可启动）。
@@ -89,9 +103,21 @@ export function startBlockers(input: {
     gates.push('必须填写任务提示词：Agent 靠它知道本轮要做什么（§6.4）');
   }
   // 预算是「全给或全不给」：只填一部分无法构成一次会话的完整上限。
-  const filled = input.budgetFields.filter((text) => text.trim() !== '').length;
-  if (filled > 0 && filled < input.budgetFields.length) {
-    gates.push(`预算上限要么三项都填、要么都不填（当前填了 ${String(filled)} 项）`);
+  const filled = input.budgetFields
+    .map((text, index) => ({ text: text.trim(), index }))
+    .filter((entry) => entry.text !== '');
+  if (filled.length > 0 && filled.length < input.budgetFields.length) {
+    gates.push(`预算上限要么三项都填、要么都不填（当前填了 ${String(filled.length)} 项）`);
+  }
+  // 填了的必须**真的能解析**（2026-10-05 复核 REQ-13a）：此前只数非空个数，
+  // 写 `abc`/`1e5` 也算「填了」——提交时被静默丢弃，悄悄回落到阶段默认值。
+  const invalid = filled.filter((entry) => parseLimit(entry.text) === undefined);
+  if (invalid.length > 0) {
+    gates.push(
+      `预算上限必须是正整数（${invalid
+        .map((entry) => `${BUDGET_FIELD_LABELS[entry.index] ?? '?'}：“${entry.text}”`)
+        .join('、')}）：不接受小数、科学计数法或千分位分隔符`,
+    );
   }
   return gates;
 }
@@ -250,7 +276,20 @@ export function RunControls(props: RunControlsProps): ReactNode {
     const maxTokens = parseLimit(budget.maxTokensText);
     const maxSteps = parseLimit(budget.maxStepsText);
     const maxSeconds = parseLimit(budget.maxSecondsText);
-    const allThree = maxTokens !== undefined && maxSteps !== undefined && maxSeconds !== undefined;
+    const filled = [budget.maxTokensText, budget.maxStepsText, budget.maxSecondsText]
+      .filter((text) => text.trim() !== '').length;
+    const parsedBudget = maxTokens !== undefined && maxSteps !== undefined && maxSeconds !== undefined
+      ? { maxTokens, maxSteps, maxSeconds }
+      : undefined;
+    if (filled > 0 && parsedBudget === undefined) {
+      // 闸门应当已经拦住；真走到这里说明调用方绕过了 UI。**拒绝提交**，
+      // 而不是把三项预算静默丢掉、悄悄改用阶段默认值（2026-10-05 复核 REQ-13a）。
+      setFailure({
+        code: 'client/argument-invalid',
+        message: '预算上限必须是正整数；解析失败时不提交，避免静默改用阶段默认值',
+      });
+      return;
+    }
     settle(
       props.controller.startWorker({
         engagementId,
@@ -259,8 +298,8 @@ export function RunControls(props: RunControlsProps): ReactNode {
         // **不传** `skillIds` / `toolAllow`：省略即由服务端用该阶段能力声明的默认装载。
         // 这里曾固定传空数组，而宿主把 allow 当白名单——空集意味着「一个工具都不给」，
         // 于是 Agent 连 `pentest_exec` 都看不见，界面上却看不出任何异常。
-        ...(allThree ? { budget: { maxTokens, maxSteps, maxSeconds } } : {}),
-      reason: '',
+        ...(parsedBudget === undefined ? {} : { budget: parsedBudget }),
+        reason: '',
       }),
       () => { setNotice('已请求启动 Agent；会话建立后时间轴会出现新的一轮。'); },
     );

@@ -69,18 +69,32 @@ check('factory 是函数', typeof entry.factory === 'function');
 check('产物外部化 react（require 而非内联）', source.includes('require("react")'), '');
 check('产物外部化 react/jsx-runtime', source.includes('require("react/jsx-runtime")'), '');
 
+/**
+ * 产物文本里**去掉注释**后的代码部分。
+ *
+ * 断言必须只看代码：注释里出现 `node:crypto`、`sha256Hex` 这类字样是**正常**的
+ * （本仓的注释大量解释"为什么不能引它"），把它们当命中会让断言变成噪声，
+ * 而噪声断言的下场是被忽略。
+ */
+function codeOnly(productSource: string): string {
+  return productSource
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/[^\n]*$/gm, '');
+}
+
 // 客户端产物**不得**引用 Node 内置或服务端实现：产物在浏览器里执行，任何一处
 // `require("node:…")` 都会让整个插件加载失败（不止那一个面板）。这条边曾只靠
-// tree-shaking 侥幸成立（2026-10-05 复核报告 §3.4），因此在这里钉成产物断言，
+// tree-shaking 侥幸成立（2026-10-05 复核 §3.4），因此在这里钉成产物断言，
 // 而不是继续依赖构建配置的偶然。
+const productCode = codeOnly(source);
 check(
   '产物不含 Node 内置引用',
-  !/\brequire\(\s*["']node:/.test(source) && !/\bfrom\s*["']node:/.test(source),
+  !/\brequire\(\s*["']node:/.test(productCode) && !/\bfrom\s*["']node:/.test(productCode),
   '',
 );
 check(
   '产物不含服务端摘要实现（createHash / sha256Hex）',
-  !/\bcreateHash\b/.test(source) && !/\bsha256Hex\b/.test(source),
+  !/\bcreateHash\b/.test(productCode) && !/\bsha256Hex\b/.test(productCode),
   '',
 );
 

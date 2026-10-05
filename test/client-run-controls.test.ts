@@ -158,6 +158,30 @@ test('parseLimit：非法值回落到「不设限」，而不是回落到 1', ()
   assert.equal(parseLimit(' 42 '), 42);
 });
 
+test('parseLimit：只认纯十进制正整数（科学计数法/小数/千分位一律拒绝，REQ-13a 回归锁）', () => {
+  // 事故：`Number.parseInt('1e5')` 得 1——想设 10 万、实际按 1 步执行；`'2,5'` 得 2。
+  // 这些值此前既不是「空」也不是「可解析」，于是调用方把它们当「没填」静默丢掉整份预算。
+  assert.equal(parseLimit('1e5'), undefined, '科学计数法不得被截断解析');
+  assert.equal(parseLimit('1.5'), undefined);
+  assert.equal(parseLimit('2,5'), undefined, '千分位不得被截断解析');
+  assert.equal(parseLimit('+5'), undefined);
+  assert.equal(parseLimit('9007199254740993'), undefined, '超出安全整数即拒绝');
+  assert.equal(parseLimit('007'), 7, '前导零合法（值本身就是正整数）');
+});
+
+test('startBlockers：填了但解析不了的预算必须拦下，而不是静默回落到阶段默认值（REQ-13a 回归锁）', () => {
+  const base = { mainStatus: 'ready', taskPrompt: 'p' };
+  const invalid = startBlockers({ ...base, budgetFields: ['1e5', '2', '3'] });
+  assert.equal(invalid.length, 1, '只该报预算这一条');
+  assert.match(invalid[0] ?? '', /正整数/, '理由要说明必须是正整数');
+  assert.match(invalid[0] ?? '', /tokens/, '要指出是哪一项手滑');
+  assert.deepEqual(
+    startBlockers({ ...base, budgetFields: ['10', '20', '30'] }),
+    [],
+    '合法输入不得被拦（防「恒拦」的假通过）',
+  );
+});
+
 // ───────────────────── 渲染 ─────────────────────
 
 test('RunControls：未选中 engagement 时整块不渲染（不摆一排永远禁用的按钮）', () => {

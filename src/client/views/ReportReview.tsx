@@ -44,7 +44,7 @@ import type {
   ReportSection,
   Severity,
 } from '../../contracts.ts';
-import { isConsoleMethod } from '../../console/rpc.ts';
+import { isConsoleMethod } from '../../console/method-names.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { formatConfidence, formatCount, formatTimestamp, truncate } from '../format.ts';
 import type { Tone } from '../format.ts';

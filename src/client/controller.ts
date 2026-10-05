@@ -21,7 +21,7 @@
 import type { ConsoleCallResult, ConsoleCallInput } from '../console/client.ts';
 import { ConsoleClient } from '../console/client.ts';
 import type { HostInvoker } from '../console/client.ts';
-import type { ConsoleMethodName } from '../console/rpc.ts';
+import type { ConsoleMethodName } from '../console/method-names.ts';
 import type { PurgePreview,
   StartWorkerInput,
   TransitionConfirmation,
@@ -293,10 +293,14 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
     return this.#fetch<HandoffDraft | null>('currentHandoffDraft', { workerSessionId });
   }
 
-  async refreshScopeProposal(): Promise<ScopeProposal | null> {
-    const id = this.#snapshot.selectedEngagementId;
+  async refreshScopeProposal(engagementId?: string): Promise<ScopeProposal | null> {
+    // 显式给出作业时按它读（`refreshState` 会把发起时的 id 传进来）：读的归属由
+    // **发起方**决定，而不是「await 回来时的选中项」（2026-10-05 复核 REQ-13b）。
+    const id = engagementId ?? this.#snapshot.selectedEngagementId;
     if (id === null) return null;
     const result = await this.#fetch<ScopeProposal | null>('getScopeProposal', { engagementId: id });
+    // 迟到的方案不得污染刚切换到的作业。
+    if (this.#snapshot.selectedEngagementId !== id) return null;
     this.#emit({ scopeProposal: result });
     return result;
   }
@@ -402,7 +406,14 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
    * 完整状态，而状态页需要刷新单个 engagement 的高频数据。
    */
   async select(engagementId: string): Promise<void> {
-    this.#emit({ selectedEngagementId: engagementId });
+    // 切换作业时**先清空**上一条快照（2026-10-05 复核 REQ-13b）：读失败时界面会显示
+    // 「B 的名字 + A 的阶段/在跑数」，比空白更误导人。清空后失败即呈现空态 + 错误。
+    this.#emit({
+      selectedEngagementId: engagementId,
+      state: null,
+      sessions: [],
+      scopeProposal: null,
+    });
     await this.refreshState();
   }
 
@@ -690,11 +701,14 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
   async refreshState(): Promise<void> {
     const id = this.#snapshot.selectedEngagementId;
     if (id === null) return;
-    await this.#read('getState', { engagementId: id }, (result) => ({ state: result as WorkflowSnapshot }));
+    // 归属守卫：本次读属于 `id`；响应回来时若选中项已变，`#read` 会丢弃它
+    // （2026-10-05 复核 REQ-13b：快速切换时迟到的响应会用旧作业的状态覆盖新作业）。
+    await this.#read('getState', { engagementId: id }, (result) => ({ state: result as WorkflowSnapshot }), id);
     await this.#read('listWorkerSessions', { engagementId: id }, (result) => ({
       sessions: Array.isArray(result) ? (result as readonly WorkerSessionSummary[]) : [],
-    }));
-    await this.refreshScopeProposal();
+    }), id);
+    // 方案读同样按**发起时的**作业取，而不是「读到这里时的选中项」。
+    await this.refreshScopeProposal(id);
   }
 
   /** 一次通用读操作：置 loading、清错误、必要时清冲突标记。 */
@@ -702,9 +716,15 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
     method: ConsoleMethodName,
     params: Readonly<Record<string, unknown>>,
     project: (value: unknown) => Partial<ConsoleSnapshot>,
+    /** 归属守卫：这次读属于哪个作业；响应回来时选中项已变则**丢弃**（REQ-13b）。 */
+    forEngagement?: string,
   ): Promise<void> {
     this.#emit({ loading: true });
     const result = await this.#call({ method, params, reason: '读操作', idempotencyKey: this.newKey('read'), expectedStateVersion: 0 });
+    if (forEngagement !== undefined && this.#snapshot.selectedEngagementId !== forEngagement) {
+      // 迟到的响应：不写快照，也不写错误——它描述的是另一个作业。
+      return;
+    }
     if (result.ok) {
       // 成功的读会清掉冲突标记——冲突的处置就是「重读并重渲染」（§15.4）
       this.#emit({ ...project(result.value), loading: false, lastError: null, conflict: false, loadedAt: this.#clock().toISOString() });
