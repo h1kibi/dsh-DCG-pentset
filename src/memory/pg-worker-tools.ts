@@ -36,6 +36,16 @@ import type {
   WorkerReportInput,
 } from '../contracts.ts';
 import { DEFAULTS, LIVE_SESSION_STATUSES, isPhase, ACTION_CLASSES } from '../contracts.ts';
+// 会话准入 + 范围集合 + RLS 查询/事务的唯一入口（C3；与 pg-memory-query 共用机制）。
+import {
+  admitWorkerSession,
+  enterWorkerSession,
+  queryWithRlsContext,
+  resolveEngagementForSession,
+  withSessionRlsContext,
+  type SessionContextDeps,
+  type SessionRow,
+} from './session-context.ts';
 import type { SkillFreezeEntry } from '../contracts.ts';
 import type {
   ArtifactRecord,
@@ -52,14 +62,13 @@ import {
   type ChunkKind,
 } from './chunks.ts';
 import { TRUST_LEVELS } from './hash.ts';
-import { transactionRunnerFor, type DbClient, type DbResult, type DbTransactionRunner, type TransactionalLedger, type RlsAwareDbClient } from './ledger.ts';
+import { transactionRunnerFor, type DbClient, type DbTransactionRunner, type TransactionalLedger } from './ledger.ts';
 import {
   DEFAULT_RETRIEVAL_LIMIT,
   MAX_RETRIEVAL_LIMIT,
   REASONING_LABEL,
   buildRetrievalSql,
   isChunkVisibleInScope,
-  resolveScopeSets,
   scopeFilterInput,
   searchMemory,
   type MemoryQuery,
@@ -146,21 +155,6 @@ export interface PgWorkerToolsOptions {
   readonly resolveRlsEngagement?: (workerSessionId: string) => Promise<string | null>;
 }
 
-interface SessionRow {
-  readonly engagement_id: string;
-  readonly scope_version: number;
-  readonly phase: string | null;
-  readonly status: string;
-  readonly session_kind: 'intake' | 'phase';
-  readonly attempt: number;
-  readonly iteration: number;
-  readonly state_version: number | string;
-}
-interface ScopeDecisionRow {
-  readonly asset_id: string;
-  readonly scope_version: number;
-  readonly decision: string;
-}
 
 /** 检索候选行：三路排名 + 还原分块种类所需的分块元数据。 */
 interface CandidateRow {
@@ -349,6 +343,8 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
   readonly #ledger: TransactionalLedger | undefined;
   readonly #rlsContext: PgWorkerToolsOptions['rlsContext'];
   readonly #resolveRlsEngagement: PgWorkerToolsOptions['resolveRlsEngagement'];
+  /** 会话上下文的依赖：注入工具层自己的拒绝类型，准入失败仍是 `PgWorkerToolRefusal`。 */
+  readonly #ctxDeps: SessionContextDeps;
   constructor(db: DbClient, options: PgWorkerToolsOptions) {
     this.#db = db;
     this.#txDb = options.txDb ?? db;
@@ -358,48 +354,15 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     this.#ledger = options.ledger;
     this.#rlsContext = options.rlsContext;
     this.#resolveRlsEngagement = options.resolveRlsEngagement;
-  }
-
-  async #queryWithRlsContext<Row = Record<string, unknown>>(
-    workerSessionId: string,
-    engagementId: string,
-    sql: string,
-    params?: readonly unknown[],
-  ): Promise<DbResult<Row>> {
-    const rlsDb = this.#db as Partial<RlsAwareDbClient>;
-    if (this.#rlsContext !== undefined && typeof rlsDb.queryWithRlsContext === 'function') {
-      return rlsDb.queryWithRlsContext<Row>(
-        { tenantId: this.#rlsContext.tenantId, engagementId, workerSessionId },
-        sql,
-        params,
-      );
-    }
-    return this.#db.query<Row>(sql, params);
-  }
-
-  async #engagementForSession(workerSessionId: string): Promise<string> {
-    if (this.#rlsContext === undefined) return '';
-    const resolved = this.#resolveRlsEngagement === undefined
-      ? null
-      : await this.#resolveRlsEngagement(workerSessionId);
-    if (this.#resolveRlsEngagement !== undefined && resolved === null) {
-      throw refuse(
-        'lease_required',
-        `会话 ${workerSessionId} 不属于当前租户或不存在，拒绝建立 RLS 上下文`,
-        '由当前控制台创建并签发租约的 Worker 会话调用工具',
-      );
-    }
-    // 此前这里会回退到 `rlsContext.engagementId`（进程级的那个）。多作业下它已不存在，
-    // 而且那个回退本身就是错的：会话解析不出作业时，拿别的作业的上下文继续读，
-    // 会把「这个会话不属于任何作业」伪装成正常结果。宁可拒绝。
-    if (resolved === null) {
-      throw refuse(
-        'lease_required',
-        `会话 ${workerSessionId} 没有可解析的 engagement，拒绝建立 RLS 上下文`,
-        '由控制台创建 Worker 会话并签发租约后再调用',
-      );
-    }
-    return resolved;
+    this.#ctxDeps = {
+      db: this.#db,
+      ...(this.#rlsContext === undefined ? {} : { rlsContext: this.#rlsContext }),
+      ...(this.#resolveRlsEngagement === undefined
+        ? {}
+        : { resolveRlsEngagement: this.#resolveRlsEngagement }),
+      txRunner: this.#txRunner,
+      refuse: (code, message, nextAction) => refuse(code as ErrorCode, message, nextAction),
+    };
   }
 
   /**
@@ -424,8 +387,9 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
      */
     readonly refusal?: { readonly message: string; readonly nextAction: string };
   }> {
-    const engagementId = await this.#engagementForSession(input.workerSessionId);
-    const session = await this.#queryWithRlsContext<{ skill_ids: unknown; skill_freeze: unknown }>(
+    const engagementId = await resolveEngagementForSession(this.#ctxDeps, input.workerSessionId);
+    const session = await queryWithRlsContext<{ skill_ids: unknown; skill_freeze: unknown }>(
+      this.#ctxDeps,
       input.workerSessionId,
       engagementId,
       `select skill_ids, skill_freeze from pentest.worker_sessions where id = $1::uuid`,
@@ -440,7 +404,7 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     const freeze = parseSkillFreeze(session.rows[0]?.skill_freeze);
     const frozen = freeze.find((entry) => entry.name === input.skillName);
 
-    const rows = await this.#queryWithRlsContext<{
+    const rows = await queryWithRlsContext<{
       name: string;
       description: string;
       body: string;
@@ -448,6 +412,7 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
       revision: number;
       disabled: boolean;
     }>(
+      this.#ctxDeps,
       input.workerSessionId,
       engagementId,
       `select name, description, body, content_hash, revision, disabled
@@ -516,18 +481,12 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     };
   }
 
-  async #withSessionRlsContext(tx: DbClient, workerSessionId: string): Promise<void> {
-    if (this.#rlsContext === undefined) return;
-    const engagementId = await this.#engagementForSession(workerSessionId);
-    await tx.query('select pentest.set_rls_context($1, $2::uuid, $3::uuid)', [
-      this.#rlsContext.tenantId,
-      engagementId,
-      workerSessionId,
-    ]);
-  }
-
 
   // ── 会话与范围解析（§8.7：engagement 由服务端从当前会话解析，不接受调用方传值） ──
+  //
+  // 解析与准入的全部实现都在 `session-context.ts`（C3）：`resolveEngagementForSession` /
+  // `admitWorkerSession` / `enterWorkerSession` / `scopeSetsForVersion`。
+  // 这里只保留 dsh 会话标识 → worker 会话标识的反查（它不属于「准入」，而是身份解析）。
 
   /**
    * dsh 会话标识 → worker 会话标识。
@@ -605,7 +564,8 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     const bound = binding.rows[0];
     if (bound === undefined || bound.worker_session_id === null || bound.engagement_id === null) return null;
     // 拿到绑定之后就有了作业，可以在正确作用域里读租约。
-    const result = await this.#queryWithRlsContext<{ generation: number | string | null }>(
+    const result = await queryWithRlsContext<{ generation: number | string | null }>(
+      this.#ctxDeps,
       bound.worker_session_id,
       bound.engagement_id,
       `select generation
@@ -621,162 +581,13 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     };
   }
 
-  /**
-   * 解析会话及其**当前生效租约**，并据此做读取准入。
-   *
-   * ── 为什么读取也要过租约 ──
-   *
-   * 此前这里只查 `worker_sessions` + `engagements`，于是 `search` / `read` / `readArtifact`
-   * 三条读取路径对「租约已被吊销」「租约已到期」完全无感：一个已被人工吊销租约、或租约到期
-   * 未续（§10.6）的会话，只要它的 dsh Agent 还活着就仍能读整个 engagement 的记忆与证据。
-   * 租约是「这个会话现在还被允许代表本作业工作」的唯一凭证，读取属于「代表作业工作」的一部分，
-   * 因此与 `submitReport` / `requestScopeConfirmation` 同口径。
-   *
-   * 三条判定按「越基础越先判」排序，返回的错误码各自可被调用方分支（§16.5）：
-   *   1. 会话不存在 / 没有生效租约 → `lease_required`；
-   *   2. 租约已到期 → `lease_expired`；
-   *   3. 会话状态已不在存活集合内 → `lease_revoked`。
-   *
-   * 第 3 条看着与第 1 条重复（终态转移会顺带吊销租约），但两者防的是不同的事：租约吊销由
-   * 状态转移驱动，一旦某次转移漏了吊销，第 3 条就是那道兜底；读的是状态，不是租约痕迹。
-   * 反过来，`human_revoke` 与到期清扫会吊销租约而**不**改会话状态，那种情况下只有第 1/2 条能拦住。
-   */
-  async #session(
-    workerSessionId: string,
-    options: { readonly allowExpiredLease?: boolean } = {},
-  ): Promise<SessionRow> {
-    // engagement 由当前 worker session 通过受约束反查解析；锁定后的单实例拒绝第二个 engagement。
-    // 所有读取都把解析出的 engagement 传给 queryWithRlsContext，避免使用 bootstrap 值访问真实作业。
-    //
-    // ── 租约取「最新一行」而不是「最新未吊销行」 ──
-    //
-    // 到期清扫（`PgLeaseStore.revokeExpiredLeases`）会把过期租约写成
-    // `revoked_at = now(), revoked_reason = 'expired'`。若 LATERAL 里过滤 `revoked_at is null`，
-    // 被清扫过的会话看起来就像「从未签发租约」，于是一次**授权到期**会被报成
-    // `lease_required`（文案「已吊销或从未签发」）——调用方与人都被指向错误的处置。
-    // 取最新一行再按 `revoked_reason` 分流，才能把「到期」与「人为吊销」分开。
-    const engagementId = await this.#engagementForSession(workerSessionId);
-    const result = await this.#queryWithRlsContext<
-      SessionRow & {
-        readonly lease_generation: number | string | null;
-        readonly lease_expired: boolean | null;
-        readonly lease_revoked_reason: string | null;
-      }
-    >(
-      workerSessionId,
-      engagementId,
-      `SELECT ws.engagement_id, ws.scope_version, ws.phase, ws.status, ws.session_kind,
-              ws.attempt, ws.iteration, e.state_version,
-              l.generation AS lease_generation,
-              (l.revoked_at IS NULL AND l.expires_at <= now()) AS lease_expired,
-              l.revoked_reason AS lease_revoked_reason
-         FROM pentest.worker_sessions ws
-         JOIN pentest.engagements e ON e.id = ws.engagement_id
-         LEFT JOIN LATERAL (
-           SELECT generation, revoked_at, revoked_reason, expires_at
-             FROM pentest.session_leases
-            WHERE worker_session_id = ws.id
-            ORDER BY generation DESC
-            LIMIT 1
-         ) l ON true
-        WHERE ws.id = $1::uuid`,
-      [workerSessionId],
-    );
-    const row = result.rows[0];
-    if (row === undefined) {
-      throw refuse(
-        'lease_required',
-        `会话 ${workerSessionId} 不存在或没有 engagement 绑定，无法确定检索与提交范围`,
-        '由控制台创建 Worker 会话并签发租约后再调用',
-      );
-    }
-    if (row.lease_generation === null) {
-      throw refuse(
-        'lease_required',
-        `会话 ${workerSessionId} 从未签发租约，读取被拒绝`,
-        '由控制台签发租约后再调用；不要改用其它会话读取同一份记忆',
-      );
-    }
-    // 到期清扫把过期租约写成 `revoked_at`（reason `expired`），因此「到期」有两种形态：
-    // 尚未被清扫（`lease_expired` 为真）与已被清扫（`lease_revoked_reason = 'expired'`）。
-    // 两者对调用方的处置**相同**（等控制台重新签发），必须报同一个码——
-    // 否则一次授权到期会随机地显示成「没有租约」，把排错方向引到「为什么没签发」上。
-    const leaseExpired =
-      row.lease_revoked_reason === 'expired'
-      || (row.lease_expired === true && row.lease_revoked_reason === null);
-    if (leaseExpired) {
-      // ── intake 的两个**只写提案**的工具豁免到期（`allowExpiredLease`）──
-      //
-      // 事实依据（2026-10-04 实机）：intake 会话靠人类逐题回答推进，而人的思考时间不受
-      // 10 分钟 TTL 约束——人类答复慢于 TTL 是**常态**，不是异常。租约一到期，
-      // `pentest_request_scope_confirmation` 就会被拒，于是「人类想改口径、Agent 重新提交方案」
-      // 这条唯一路径被锁死，会话卡在 waiting_human 且无法自救（实测：用户遇到的就是这个）。
-      //
-      // **两种「到期」形态都要豁免**：未清扫（`lease_expired`）与**已被心跳清扫**
-      //（`revoked_at=now(), revoked_reason='expired'`）。只豁免前者等于「推迟一个心跳 tick
-      // 再卡死」——评审在 2026-10-04 的改动里抓到过这个半修。
-      //
-      // 豁免的边界必须说清：intake 会话**不做任何目标动作**（它连动作模板都没有），
-      // 它的产出是「待人类确认的方案」——闸门是人类的确认，不是租约。真正的目标动作
-      // （`pentest_exec`）走的是执行服务的租约闸门，那里**没有**任何豁免。
-      if (options.allowExpiredLease !== true) {
-        throw refuse(
-          'lease_expired',
-          `会话 ${workerSessionId} 的租约已到期，读取被拒绝`,
-          '由控制台重新签发租约后再调用；到期未续的租约不会自动复活',
-        );
-      }
-    }
-    // 非到期的吊销（superseded / closed / failed / human_revoke）一律拒绝，豁免不覆盖它们。
-    if (row.lease_revoked_reason !== null && !leaseExpired) {
-      throw refuse(
-        'lease_revoked',
-        `会话 ${workerSessionId} 的租约已被吊销（${row.lease_revoked_reason}），读取被拒绝`,
-        '由控制台重新签发租约后再调用；被吊销的租约不会自动恢复',
-      );
-    }
-    if (!(LIVE_SESSION_STATUSES as readonly string[]).includes(row.status)) {
-      throw refuse(
-        'lease_revoked',
-        `会话 ${workerSessionId} 的状态 ${row.status} 已不在存活集合内，读取被拒绝`,
-        '本会话已被取代、关闭或失败；等待当前活动 Worker 接手',
-      );
-    }
-    return {
-      engagement_id: row.engagement_id,
-      scope_version: row.scope_version,
-      phase: row.phase,
-      status: row.status,
-      session_kind: row.session_kind,
-      attempt: row.attempt,
-      iteration: row.iteration,
-      state_version: row.state_version,
-    };
-  }
-
-  /** 由会话绑定的范围版本解析出 I(v) 与 X(v)（§8.6）。 */
-  async #scopeSets(session: SessionRow): Promise<ScopeSets> {
-    const result = await this.#db.query<ScopeDecisionRow>(
-      `SELECT asset_id, scope_version, decision
-         FROM pentest.asset_scope_versions
-        WHERE engagement_id = $1::uuid AND scope_version = $2::int`,
-      [session.engagement_id, session.scope_version],
-    );
-    return resolveScopeSets(
-      result.rows.map((row) => ({
-        assetId: row.asset_id,
-        scopeVersion: row.scope_version,
-        decision: row.decision as 'included' | 'excluded' | 'pending',
-      })),
-      session.scope_version,
-    );
-  }
 
   // ── 1. 混合检索（§8.6 / §8.7） ──
 
   async search(input: Parameters<WorkerToolDeps['search']>[0]): Promise<WorkerMemorySearchResult> {
-    const session = await this.#session(input.workerSessionId);
-    const scope = await this.#scopeSets(session);
+    const ctx = await enterWorkerSession(this.#ctxDeps, input.workerSessionId);
+    const session = ctx.session;
+    const scope = ctx.scopeSets;
     const limit = Math.min(
       Math.max(Math.trunc(input.limit ?? DEFAULT_RETRIEVAL_LIMIT), 1),
       MAX_RETRIEVAL_LIMIT,
@@ -1070,8 +881,9 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
   // ── 2. 按标识读取（§8.7） ──
 
   async read(input: Parameters<WorkerToolDeps['read']>[0]): Promise<readonly MemoryRecord[]> {
-    const session = await this.#session(input.workerSessionId);
-    const scope = await this.#scopeSets(session);
+    const ctx = await enterWorkerSession(this.#ctxDeps, input.workerSessionId);
+    const session = ctx.session;
+    const scope = ctx.scopeSets;
     const refs = input.refs.slice(0, MAX_READ_REFS).map(parseRef);
     const memoryIds = refs.filter((ref) => ref.kind === 'memory').map((ref) => ref.id);
     const eventIds = refs.filter((ref) => ref.kind === 'event').map((ref) => ref.id);
@@ -1257,8 +1069,9 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
   // ── 3. 读取证据（§9.2 artifacts / §8.7） ──
 
   async readArtifact(input: Parameters<WorkerToolDeps['readArtifact']>[0]): Promise<ArtifactRecord> {
-    const session = await this.#session(input.workerSessionId);
-    const scope = await this.#scopeSets(session);
+    const ctx = await enterWorkerSession(this.#ctxDeps, input.workerSessionId);
+    const session = ctx.session;
+    const scope = ctx.scopeSets;
     if (!UUID_PATTERN.test(input.artifactId)) {
       throw refuse(
         'classification_rejected',
@@ -1539,9 +1352,12 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
   async requestScopeConfirmation(
     input: Parameters<WorkerToolDeps['requestScopeConfirmation']>[0],
   ): Promise<ScopeProposal> {
-    // `allowExpiredLease`：人类回答 intake 问题的时间不受 TTL 约束（见 `#session` 的说明）。
+    // `allowExpiredLease`：人类回答 intake 问题的时间不受 TTL 约束（见 `session-context.ts`
+    // 的 `admitWorkerSession` 说明）。
     // 提案本身不做目标动作，闸门是人类的确认；这里不接受「租约过期 ⇒ 会话卡死」。
-    const session = await this.#session(input.workerSessionId, { allowExpiredLease: true });
+    const session = await admitWorkerSession(this.#ctxDeps, input.workerSessionId, {
+      allowExpiredLease: true,
+    });
     if (session.session_kind !== 'intake' || session.scope_version !== 0) {
       throw refuse(
         'classification_rejected',
@@ -1976,7 +1792,8 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
     subjectRefs: readonly string[],
     requested: number,
   ): Promise<void> {
-    await this.#queryWithRlsContext(
+    await queryWithRlsContext(
+      this.#ctxDeps,
       workerSessionId,
       engagementId,
       `INSERT INTO pentest.memory_access_log
@@ -1990,9 +1807,16 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
    * 事务边界：提交/回滚只包住写路径，异常不吞。
    * 与 `MemoryLedger` 的同名私有方法同形；`txDb` 必须是同一条连接（见文件头注释）。
    */
+  /**
+   * 事务 + 该会话的 RLS 上下文。
+   *
+   * RLS 上下文的设出逻辑在 `session-context.ts`（与读路径同一个实现）——
+   * 写路径与读路径对「这个会话属于哪个作业」的判断必须是同一份，否则会出现
+   * 「读在一个作业、写在另一个作业」这种最坏的错配。
+   */
   async #withTransaction<T>(workerSessionId: string, run: (tx: DbClient) => Promise<T>): Promise<T> {
     return this.#txRunner.run(run, async (tx) => {
-      await this.#withSessionRlsContext(tx, workerSessionId);
+      await withSessionRlsContext(this.#ctxDeps, tx, workerSessionId);
     });
   }
 }

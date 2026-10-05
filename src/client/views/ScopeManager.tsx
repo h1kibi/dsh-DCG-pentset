@@ -34,7 +34,7 @@
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { ANY_PORT } from '../../contracts.ts';
+import { ANY_PORT, SCOPE_DECISIONS } from '../../contracts.ts';
 import type { AssetScopeDecision, ScopeDecision, ScopeTarget } from '../../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { formatCount, formatTimestamp } from '../format.ts';
@@ -69,8 +69,13 @@ const DECISION_TONES: Readonly<Record<ScopeDecision, Tone>> = {
   pending: 'attention',
 };
 
-/** 三选一的呈现顺序：先「纳入」，再「排除」，最后「待确认」。 */
-const DECISION_ORDER: readonly ScopeDecision[] = ['included', 'excluded', 'pending'];
+/**
+ * 三选一的呈现顺序：先「纳入」，再「排除」，最后「待确认」。
+ *
+ * 取值表与契约同源（`SCOPE_DECISIONS`）：本地再写一份列表时，两侧漂移会让某一侧
+ * 把合法取值当成脏数据（或反过来把非法值渲染成选项）。
+ */
+const DECISION_ORDER: readonly ScopeDecision[] = SCOPE_DECISIONS;
 
 /** 范围版本的只读展示形状（`pentest.scope_versions` 一行）。 */
 export interface ScopeVersionView {

@@ -276,7 +276,15 @@ export interface NormalizedTarget {
   readonly resolvedAddresses?: readonly string[];
 }
 
-export type ScopeDecision = 'included' | 'excluded' | 'pending';
+/**
+ * 资产范围裁决的取值域（§8.6）。
+ *
+ * 是常量而不是裸联合类型：读库侧要用它做**运行时收窄**（`narrow(row.decision, SCOPE_DECISIONS)`），
+ * 此前那张列表在 `pg-memory-query.ts` 与客户端 `ScopeManager.tsx` 里各写了一份——
+ * 两份列表漂移时，某一侧会把合法取值当成脏数据拒掉（或反过来放行）。
+ */
+export const SCOPE_DECISIONS = ['included', 'excluded', 'pending'] as const;
+export type ScopeDecision = (typeof SCOPE_DECISIONS)[number];
 
 /** 范围判定结果。拒绝时给出稳定错误码，便于验收与审计分支。 */
 export type ScopeVerdict =

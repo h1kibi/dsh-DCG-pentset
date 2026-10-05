@@ -57,7 +57,6 @@ import type {
   PentestMemoryQueryService,
   LedgerVerificationView,
   Phase,
-  ScopeDecision,
   TrustLevel,
 } from '../contracts.ts';
 import { isPhase } from '../contracts.ts';
@@ -74,15 +73,14 @@ import {
 } from './chunks.ts';
 import { CLASSIFICATIONS, TRUST_LEVELS } from './hash.ts';
 import type { DbClient } from './ledger.ts';
+import { currentScopeVersion, scopeSetsForVersion } from './session-context.ts';
 import {
   DEFAULT_RETRIEVAL_LIMIT,
   MAX_RETRIEVAL_LIMIT,
   buildRetrievalSql,
   isChunkVisibleInScope,
-  resolveScopeSets,
   scopeFilterInput,
   searchMemory,
-  type AssetScopeDecisionRow,
   type MemoryQuery,
   type RetrievalCandidate,
   type ScopeSets,
@@ -182,12 +180,6 @@ export interface LedgerVerifierPort {
 
 // ───────────────────────────── 行形状 ─────────────────────────────
 
-/** 范围决策行（`asset_scope_versions`）。 */
-interface ScopeDecisionRow {
-  readonly asset_id: string;
-  readonly scope_version: number | string;
-  readonly decision: string;
-}
 
 /** 检索候选行：三路排名 + 还原分块种类与事件时间所需的分块元数据。 */
 interface CandidateRow {
@@ -456,29 +448,15 @@ export class PgMemoryQueryService implements PentestMemoryQueryService {
    * 当前范围版本解析出的 I(v) 与 X(v)（§8.6）。
    *
    * 版本取 `max(version)`：与 §5.4 的范围修订一致——控制台看到的是**现在生效**的边界，
-   * 不是某个历史会话冻结的边界。尚无范围版本（v=0）时返回空集，于是
-   * 「有资产归属的分块一律不可见、无归属的分块可见」——fail-closed，与 §8.6 同向。
+   * 不是某个历史会话冻结的边界（Worker 工具走的是冻结版本，见 `session-context.ts` 的口径表）。
+   * 尚无范围版本（v=0）时返回空集，于是「有资产归属的分块一律不可见、无归属的分块可见」
+   * ——fail-closed，与 §8.6 同向。
+   *
+   * 取数与判定走共享原语（C3）：两侧各写一份解析逻辑时，第 3 次改动只会改到一边。
    */
   async #scopeSets(engagementId: string): Promise<ScopeSets> {
-    const versionRow = await this.#db.query<{ v: number | string | null }>(
-      `select max(version) as v from pentest.scope_versions where engagement_id = $1::uuid`,
-      [engagementId],
-    );
-    const version = toSafeCount(versionRow.rows[0]?.v, 'scope_version');
-    if (version === 0) return { included: new Set(), excluded: new Set() };
-
-    const rows = await this.#db.query<ScopeDecisionRow>(
-      `select asset_id, scope_version, decision
-         from pentest.asset_scope_versions
-        where engagement_id = $1::uuid and scope_version = $2::int`,
-      [engagementId, version],
-    );
-    const decisions: AssetScopeDecisionRow[] = rows.rows.map((row) => ({
-      assetId: row.asset_id,
-      scopeVersion: toSafeCount(row.scope_version, 'scope_version'),
-      decision: narrow<ScopeDecision>(row.decision, SCOPE_DECISIONS, 'asset_scope_versions.decision'),
-    }));
-    return resolveScopeSets(decisions, version);
+    const version = await currentScopeVersion(this.#db, engagementId);
+    return scopeSetsForVersion(this.#db, engagementId, version);
   }
 
   /**
@@ -992,8 +970,6 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
   }
 }
 
-/** `scope_versions` 的决策取值域（§8.6：`pending` 与 `excluded` 同等处理）。 */
-const SCOPE_DECISIONS: readonly ScopeDecision[] = ['included', 'excluded', 'pending'];
 
 /** 水位状态取值域（`index_watermarks.status` 的 CHECK，§15.5）。 */
 function narrowWatermarkStatus(value: string): MemoryWatermark['status'] {

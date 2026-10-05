@@ -557,3 +557,53 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 
 - `consumeApproval`：复核特别标注**不要删**（契约面且被测试直接引用）。
 - 报告提到的「328 个导出但在自身文件外无引用」的类型/常量：其中一部分是**刻意的词汇表**（契约类型、稳定码表），删它们要逐个判断语义，不属于「零风险」范畴，本轮不动。
+
+---
+
+## 附十二：C3 `WorkerSessionContext`（2026-10-05，续）
+
+### 唯一入口
+
+新增 `src/memory/session-context.ts`：`enterWorkerSession(deps, workerSessionId, {allowExpiredLease})`
+→ `{engagementId, session, scopeSets, query(), withTx()}`。**拿不到上下文就什么都拿不到**，
+因此工具方法不再各写一遍「先查会话、再查范围、再设 RLS」的顺序。
+
+迁入的实现（原 `PgWorkerTools` 的私有方法）：
+
+| 原私有方法 | 现在 | 语义是否变了 |
+|---|---|---|
+| `#engagementForSession` | `resolveEngagementForSession` | 否（两条拒绝文案逐字保留） |
+| `#session` | `admitWorkerSession` | 否（租约「取最新一行」、到期**两种形态**、intake 豁免、非到期吊销、存活状态——五条拒绝文案逐字保留） |
+| `#queryWithRlsContext` / `#withSessionRlsContext` | `queryWithRlsContext` / `withSessionRlsContext` | 否（含「db 支持 RLS 包装才走包装」的结构判定） |
+| `#scopeSets` / `#withTransaction` | `scopeSetsForVersion` / `withTx()` | 否（`#withTransaction` 保留在类里，但 RLS 上下文设出改用共享实现） |
+
+### 两个设计要点
+
+1. **拒绝类型不上移**：模块不 import 工具层的 `PgWorkerToolRefusal`（那会反向依赖）。它通过
+   `deps.refuse` **工厂**抛错——工具层注入自己的构造函数，于是调用方看到的错误**身份不变**
+   （测试断言的 `instanceof PgWorkerToolRefusal` 仍成立），模块也不必知道工具层存在。
+2. **版本口径是刻意的，不许合并**（模块头部有对照表）：Worker 工具用会话**冻结**的
+   `scope_version`（§8.6：Agent 只能看被授权时的那条边界），控制台查询用**当前** `max(version)`
+   （§5.4：人类看的是现在的边界）。共享的是**机制**（`scopeSetsForVersion` / `currentScopeVersion`），
+   不是策略。
+
+### 顺带修掉的三处重复/一处收紧
+
+- `pg-memory-query.ts` 里那份独立的范围解析（两次查库 + 行映射 + 判定）删除，改走共享原语——
+  这正是复核点名的那处「第二份范围解析」。
+- `['included','excluded','pending']` 此前在三处各写一份（`pg-memory-query`、`ScopeManager.tsx`、
+  以及注释里的取值域）→ 提升为契约的 `SCOPE_DECISIONS`，三处引用同一份。
+- **一处收紧**：工具侧的 `decision` 收窄原先是 `as 'included'|'excluded'|'pending'` 断言
+  （脏值会被当成 `included` 静默放行），现在与库侧一致走 `narrow`——非法取值响亮失败。
+
+### 度量与验证
+
+- `pg-worker-tools.ts` **2023 → 1847 行**（−176，净删 5 个私有方法与本地行形状类型）；
+  `pg-memory-query.ts` 1002 → 978；新增 `session-context.ts` 423 行（含口径表与全部准入文案）。
+- 安全网：`test/pg-worker-tools.test.ts` 24/24、`test/pg-memory-query.test.ts` + `memory-write-contract` 48/48，全量套件零改动通过。
+
+### 残留（明确记录）
+
+`PgWorkerTools` 仍是 1800+ 行的单类：复核建议的「族拆文件」（检索 / 读取与证据 / 提交与放行）
+本轮**未做**——那是纯机械拆分，而**语义单点**（租约、RLS、范围）已经收拢到 `session-context.ts`。
+拆分时只需移动方法体，不再触碰语义。
