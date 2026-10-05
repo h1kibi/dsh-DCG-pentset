@@ -25,7 +25,7 @@ import { Client } from 'pg';
 
 import type { Finding, FindingStatus, ReportSection } from '../src/contracts.ts';
 import { REPORT_SECTIONS } from '../src/contracts.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { sha256Hex } from '../src/memory/chunks.ts';
 import type { FindingProjection, ReportProjection } from '../src/report/pg-report.ts';
 import {

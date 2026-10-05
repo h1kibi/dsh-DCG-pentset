@@ -26,7 +26,7 @@
  */
 
 import type { Phase, SessionStatus } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 
 /**
  * 恢复建议。**只描述结论与所需的人类决定，不执行任何动作**——

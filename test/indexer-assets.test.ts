@@ -27,7 +27,7 @@ import { PgOutboxQueue } from '../src/memory/outbox.ts';
 import { IndexDispatcher } from '../src/memory/dispatcher.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
 import { LedgerIndexEnqueue } from '../src/memory/index-enqueue.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import type { ChunkSourceEvent } from '../src/memory/chunks.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;

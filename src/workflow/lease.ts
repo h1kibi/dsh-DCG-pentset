@@ -23,7 +23,7 @@ import type {
   SessionStatus,
 } from '../contracts.ts';
 import { DEFAULTS, LEASE_REQUIRED_OPERATIONS, LIVE_SESSION_STATUSES } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 
 // ───────────────────────────── 结果与错误 ─────────────────────────────
 

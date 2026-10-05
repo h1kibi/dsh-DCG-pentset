@@ -21,7 +21,7 @@ import { Pool } from 'pg';
 
 import { PgSkillService, SkillServiceError } from '../src/skills/pg-skill.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { cleanupEngagements } from './helpers/cleanup.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;

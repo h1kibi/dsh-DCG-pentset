@@ -17,7 +17,7 @@ import {
   DEFAULT_RENEW_AHEAD_SECONDS,
 } from '../src/workflow/heartbeat.ts';
 import type { TimerHandle } from '../src/workflow/heartbeat.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import type { LeaseStore } from '../src/workflow/lease.ts';
 import { DEFAULTS } from '../src/contracts.ts';
 import type { SessionLease } from '../src/contracts.ts';

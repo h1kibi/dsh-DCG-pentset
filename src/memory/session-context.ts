@@ -27,7 +27,7 @@
  * 两个原语，让调用方各自选口径——**共用机制，不共用策略**。
  */
 
-import type { DbClient } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { LIVE_SESSION_STATUSES, SCOPE_DECISIONS, type ScopeDecision } from '../contracts.ts';
 import { resolveScopeSets, type ScopeSets } from './retrieval.ts';
 

@@ -44,7 +44,7 @@ import type {
   Phase,
   TrustLevel,
 } from '../contracts.ts';
-import type { DbClient } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { checkChunkBatchWritable, planChunks } from './chunks.ts';
 import type { ChunkDraft, ChunkSourceEvent, ChunkingOptions } from './chunks.ts';
 import type { EmbeddingDescriptor, EmbeddingProvider } from './embedding.ts';

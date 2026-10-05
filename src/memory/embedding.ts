@@ -25,7 +25,8 @@
  * 与本地不同（如 1024 vs 1536），那不是配置问题而是 schema 问题：本模块拒绝登记，必须由
  * 迁移引入与维度匹配的新向量列并新建嵌入版本，**不允许在同一列里混放不同维度的向量**。
  */
-import { engagementLockKey, transactionRunnerFor, type DbClient, type DbTransactionRunner } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
+import { engagementLockKey, transactionRunnerFor, type DbTransactionRunner } from './ledger.ts';
 
 // ───────────────────────────── 维度契约 ─────────────────────────────
 

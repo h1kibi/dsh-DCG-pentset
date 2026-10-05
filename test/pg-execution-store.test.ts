@@ -17,7 +17,7 @@ import { after, before, describe, it } from 'node:test';
 import { Pool } from 'pg';
 
 import { EXEC_TOOL_NAME } from '../src/contracts.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { PgExecutionStore } from '../src/execution/pg-store.ts';
 import { derivePlanHash } from '../src/execution/idempotency.ts';
 

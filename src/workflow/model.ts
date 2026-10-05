@@ -13,7 +13,7 @@ import type { NormalizedScope } from '../policy/scope-snapshot.ts';
 import { SKILL_PACKS } from '../skills/skill-pack.ts';
 import type { NormalizedScopeEntry } from '../policy/scope.ts';
 import type { ScopeTarget } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { RECOMMENDED_MOVES } from './phases.ts';
 import type { SessionFactory, ModelRoute, ActionTemplateBrief } from './session-port.ts';
 import type { LeaseStore } from './lease.ts';

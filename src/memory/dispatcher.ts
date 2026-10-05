@@ -40,7 +40,7 @@
  * 只会分叉，因此这里明确分工。
  */
 
-import type { DbClient } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { deriveIdempotencyKey, INDEX_EVENT_JOB, INDEX_MEMORY_ITEM_JOB, REINDEX_ENGAGEMENT_JOB } from './outbox.ts';
 import type { OutboxQueue, ClaimedJob } from './outbox.ts';
 import { INDEX_STRATEGY_VERSION } from './indexer.ts';

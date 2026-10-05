@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { Client } from 'pg';
 
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import {
   DEFAULT_EMBED_BATCH_SIZE,
   EmbeddingError,

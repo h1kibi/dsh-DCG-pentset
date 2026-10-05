@@ -58,7 +58,8 @@ import type {
   Severity,
 } from '../contracts.ts';
 import { sha256Hex } from '../memory/chunks.ts';
-import { engagementLockKey, transactionRunnerFor, type DbTransactionRunner, type DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
+import { engagementLockKey, transactionRunnerFor, type DbTransactionRunner } from '../memory/ledger.ts';
 // ───────────────────────────── 错误 ─────────────────────────────
 
 /**

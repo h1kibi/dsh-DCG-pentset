@@ -22,7 +22,7 @@ import type { ExpandedBehaviorProfile } from '../policy/behavior-profile.ts';
 import { normalizeScope } from '../policy/scope-snapshot.ts';
 import type { NormalizedScope } from '../policy/scope-snapshot.ts';
 import type { ScopeTarget } from '../contracts.ts';
-import type { DbRlsContext, RlsAwareDbClient } from '../memory/ledger.ts';
+import type { DbRlsContext, RlsAwareDbClient } from '../db/port.ts';
 import { isPhase } from '../contracts.ts';
 import { planTransition } from './transition-table.ts';
 import type { TransitionPlan, TransitionPlanOutcome } from './transition-table.ts';

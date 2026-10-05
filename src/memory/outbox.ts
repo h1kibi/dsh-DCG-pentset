@@ -33,7 +33,7 @@
  *     因为它没有事务边界可依附（`pg-lease.ts` 的 `rlsContext` 是挂在事务上的）。
  */
 
-import type { DbClient } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { NOTIFY_CHANNEL } from './notify-listener.ts';
 
 // ───────────────────────────── job_type 取值表 ─────────────────────────────

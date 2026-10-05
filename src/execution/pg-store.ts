@@ -34,7 +34,7 @@
  */
 
 import type { ActionClass, ApprovalDecision, ApprovalRecord, ToolRunResult } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import type {
   ApprovalRequest,
   CommitRunInput,

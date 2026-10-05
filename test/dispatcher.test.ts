@@ -21,7 +21,7 @@ import { INDEX_STRATEGY_VERSION, MemoryIndexer } from '../src/memory/indexer.ts'
 import { MemoryLedger } from '../src/memory/ledger.ts';
 import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 import { LedgerIndexEnqueue } from '../src/memory/index-enqueue.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import type { EmbeddingProvider } from '../src/memory/embedding.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;

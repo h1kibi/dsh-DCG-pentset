@@ -34,7 +34,7 @@ import { Pool } from 'pg';
 import { Client } from 'pg';
 import type { PoolClient } from 'pg';
 
-import type { DbClient, DbRlsContext, RlsAwareDbClient } from './memory/ledger.ts';
+import type { DbClient, DbRlsContext, RlsAwareDbClient } from './db/port.ts';
 import { MemoryLedger, PgAnchorSink, transactionRunnerFor } from './memory/ledger.ts';
 import type { LedgerSecret } from './memory/hash.ts';
 import { PgWorkerTools } from './memory/pg-worker-tools.ts';

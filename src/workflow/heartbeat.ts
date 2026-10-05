@@ -38,7 +38,7 @@
  * 「这个会话已由别人接手」，我方的续租请求本就不该生效。
  */
 
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import type { ExpiredLeaseRef, LeaseStore } from '../workflow/lease.ts';
 import { expireLeases, renewLease } from '../workflow/lease.ts';
 import { DEFAULTS } from '../contracts.ts';

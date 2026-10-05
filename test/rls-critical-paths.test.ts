@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
 
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { PgLeaseStore } from '../src/workflow/pg-lease.ts';
 import { expireLeases } from '../src/workflow/lease.ts';
 import { cleanupEngagements } from './helpers/cleanup.ts';

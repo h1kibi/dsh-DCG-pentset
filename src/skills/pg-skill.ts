@@ -72,7 +72,7 @@ import type {
   SkillUpdateRequest,
 } from '../contracts.ts';
 import { sha256Hex } from '../memory/chunks.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 
 // ───────────────────────────── 错误 ─────────────────────────────
 

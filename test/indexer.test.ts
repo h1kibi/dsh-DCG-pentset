@@ -18,7 +18,7 @@ import {
   toVectorLiteral,
   CHUNK_VECTOR_DIMENSIONS,
 } from '../src/memory/indexer.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import type { EmbeddingProvider } from '../src/memory/embedding.ts';
 import type { ChunkSourceEvent } from '../src/memory/chunks.ts';
 

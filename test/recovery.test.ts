@@ -15,7 +15,7 @@ import { Pool } from 'pg';
 import { StartupRecovery, STALE_CREATION_SECONDS, STALE_TOOL_RUN_SECONDS } from '../src/workflow/recovery.ts';
 import { PgLeaseStore } from '../src/workflow/pg-lease.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import type { Phase } from '../src/contracts.ts';
 import { assertNoResidue, cleanupEngagements } from './helpers/cleanup.ts';
 

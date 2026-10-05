@@ -31,7 +31,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { Client, Pool } from 'pg';
 
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import {
   LEASE_EXPIRED_ERROR,
   OUTBOX_MAX_ERROR_LENGTH,

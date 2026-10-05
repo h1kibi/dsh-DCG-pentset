@@ -20,7 +20,7 @@
  */
 
 import type { AppendEventInput, MemoryLedgerService } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import type { TransactionalLedger } from '../memory/ledger.ts';
 import { transactionRunnerFor } from '../memory/ledger.ts';
 import type { GateFailureSink } from './service.ts';

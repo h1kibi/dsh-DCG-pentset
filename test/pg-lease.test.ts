@@ -20,7 +20,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Pool, type PoolClient } from 'pg';
 
 import type { LeaseRevocationReason } from '../src/contracts.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import {
   LeaseProtocolError,
   expireLeases,

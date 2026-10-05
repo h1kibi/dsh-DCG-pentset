@@ -33,7 +33,7 @@ import { PgLeaseStore } from '../src/workflow/pg-lease.ts';
 import { PgReportService } from '../src/report/pg-report.ts';
 import { MemoryLedger, PgAnchorSink } from '../src/memory/ledger.ts';
 import { planChunks } from '../src/memory/chunks.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { SessionFactoryError } from '../src/workflow/session-port.ts';
 import type { SessionFactory, CreatedSession, FrozenSessionInput } from '../src/workflow/session-port.ts';
 

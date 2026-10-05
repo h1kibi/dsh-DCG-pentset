@@ -20,7 +20,7 @@ import type { PoolClient } from 'pg';
 import { LedgerIndexEnqueue, pendingJobCountOnTx } from '../src/memory/index-enqueue.ts';
 import { PgOutboxQueue, INDEX_EVENT_JOB } from '../src/memory/outbox.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;
 

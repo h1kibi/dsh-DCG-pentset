@@ -21,18 +21,8 @@ import {
   computeEventHash,
   signBatch,
 } from '../src/memory/hash.ts';
-import {
-  EVENT_SCHEMA_VERSION,
-  InMemoryAnchorSink,
-  MemoryLedger,
-  PgAnchorSink,
-  engagementLockKey,
-  type AnchorSink,
-  type ContextEventRow,
-  type DbClient,
-  type DbResult,
-  type LedgerAnchor,
-} from '../src/memory/ledger.ts';
+import type { DbClient, DbResult } from '../src/db/port.ts';
+import { EVENT_SCHEMA_VERSION, InMemoryAnchorSink, MemoryLedger, PgAnchorSink, engagementLockKey, type AnchorSink, type ContextEventRow, type LedgerAnchor } from '../src/memory/ledger.ts';
 
 const SECRET = 'kms://test/ledger-secret';
 const ENGAGEMENT = 'eng-1';

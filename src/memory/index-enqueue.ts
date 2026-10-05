@@ -16,7 +16,8 @@
  * 适配器的实现很短，但它是这条性质的落点，因此值得独立成文件并带测试。
  */
 
-import type { DbClient, IndexEnqueuePort } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
+import type { IndexEnqueuePort } from './ledger.ts';
 import { INDEX_EVENT_JOB } from './outbox.ts';
 import type { OutboxQueue } from './outbox.ts';
 

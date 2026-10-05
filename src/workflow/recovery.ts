@@ -37,7 +37,7 @@
  *    审计事件，链上不会出现重复条目。
  */
 
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { transactionRunnerFor } from '../memory/ledger.ts';
 import type { MemoryLedgerService } from '../contracts.ts';
 import { describeError } from '../contracts.ts';

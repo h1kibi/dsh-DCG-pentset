@@ -72,7 +72,7 @@ import {
   type ChunkSourceEvent,
 } from './chunks.ts';
 import { CLASSIFICATIONS, TRUST_LEVELS } from './hash.ts';
-import type { DbClient } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import { currentScopeVersion, scopeSetsForVersion } from './session-context.ts';
 import {
   DEFAULT_RETRIEVAL_LIMIT,

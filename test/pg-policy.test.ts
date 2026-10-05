@@ -30,7 +30,7 @@ import {
   DEFAULT_DISABLED_CLASSES,
   PER_ACTION_APPROVAL_CLASSES,
 } from '../src/contracts.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { DEFAULT_ACTION_POLICY } from '../src/execution/service.ts';
 import type { ActionTemplateSpec } from '../src/execution/templates.ts';
 import { DEFAULT_TEMPLATES } from '../src/execution/templates.ts';

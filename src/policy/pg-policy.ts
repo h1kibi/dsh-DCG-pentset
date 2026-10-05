@@ -48,7 +48,7 @@ import {
   RUN_MARKERS,
   SESSION_STATUSES,
 } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import type {
   ActionPolicySnapshot,
   ActionPolicySource,

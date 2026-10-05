@@ -17,7 +17,7 @@ import { Pool, Client } from 'pg';
 import { compose, acquireTxClient, createDatabasePool, createTxDb, classifyRlsCombination, inspectRls } from '../src/compose.ts';
 import type { ComposedPlugin } from '../src/compose.ts';
 import { PgExecutionStore } from '../src/execution/pg-store.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { WorkflowRejection } from '../src/workflow/model.ts';
 import type { ActionTemplateSpec } from '../src/execution/templates.ts';
 import { applyPentest, PENTEST_HOST_SERVICES } from '../src/index.ts';

@@ -22,7 +22,7 @@ import { Pool } from 'pg';
 
 import { PgWorkerTools } from '../src/memory/pg-worker-tools.ts';
 import { skillContentHash } from '../src/skills/pg-skill.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 import { cleanupEngagements } from './helpers/cleanup.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;

@@ -21,7 +21,7 @@ import { PgWorkerTools, PgWorkerToolRefusal } from '../src/memory/pg-worker-tool
 import { RRF_K, RRF_UNIT, REASONING_LABEL } from '../src/memory/retrieval.ts';
 import { sha256Hex } from '../src/memory/chunks.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
-import type { DbClient } from '../src/memory/ledger.ts';
+import type { DbClient } from '../src/db/port.ts';
 
 const DATABASE_URL = process.env['PENTEST_DATABASE_URL'];
 

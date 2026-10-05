@@ -62,7 +62,8 @@ import {
   type ChunkKind,
 } from './chunks.ts';
 import { TRUST_LEVELS } from './hash.ts';
-import { transactionRunnerFor, type DbClient, type DbTransactionRunner, type TransactionalLedger } from './ledger.ts';
+import type { DbClient } from '../db/port.ts';
+import { transactionRunnerFor, type DbTransactionRunner, type TransactionalLedger } from './ledger.ts';
 import {
   DEFAULT_RETRIEVAL_LIMIT,
   MAX_RETRIEVAL_LIMIT,

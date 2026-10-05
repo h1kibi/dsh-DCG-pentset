@@ -25,7 +25,7 @@
  */
 
 import type { LeaseRevocationReason, SessionLease } from '../contracts.ts';
-import type { DbClient } from '../memory/ledger.ts';
+import type { DbClient } from '../db/port.ts';
 import type { LeaseLifecycleEvent } from './lease.ts';
 import {
   LeaseProtocolError,

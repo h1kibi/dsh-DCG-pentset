@@ -34,6 +34,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { DbClient } from '../db/port.ts';
 import {
   DOMAIN_EVENT_TYPES,
   type AppendEventInput,
@@ -63,44 +64,10 @@ export const ADVISORY_LOCK_NAMESPACE = 0x4453_4850; // 'DSHP'
 const ENGAGEMENT_ID_PATTERN = /^[0-9a-zA-Z][0-9a-zA-Z-]{0,63}$/;
 
 // ───────────────────────────── 数据库端口 ─────────────────────────────
-
-/** 最小查询结果形状：`pg` 的 `QueryResult` 结构可赋值给它。 */
-export interface DbResult<Row> {
-  readonly rows: readonly Row[];
-  readonly rowCount: number | null;
-}
-
-/**
- * 最小数据库客户端端口。用方法语法（而非属性箭头）让 `pg` 的 Pool / PoolClient
- * 可直接赋值；同一个写客户端由所有需要事务的服务共享。
- */
-export interface DbClient {
-  query<Row = Record<string, unknown>>(
-    sql: string,
-    params?: readonly unknown[],
-  ): Promise<DbResult<Row>>;
-}
-
-/**
- * 事务级 RLS 上下文；worker_session_id 只由服务端从当前会话填充。
- *
- * `engagementId` 为 `null` 表示**租户级**作用域：只按租户定界的操作（作业列表、
- * skill 库）用它；engagement 作用域的查询在租户级下查不到行。
- */
-export interface DbRlsContext {
-  readonly tenantId: string;
-  readonly engagementId: string | null;
-  readonly workerSessionId: string | null;
-}
-
-/** 可在同一条连接上为单次查询绑定事务级 RLS 上下文的客户端。 */
-export interface RlsAwareDbClient extends DbClient {
-  queryWithRlsContext<Row = Record<string, unknown>>(
-    context: DbRlsContext,
-    sql: string,
-    params?: readonly unknown[],
-  ): Promise<DbResult<Row>>;
-}
+//
+// 端口（`DbClient` / `RlsAwareDbClient` / `DbRlsContext` / `DbResult`）已迁到
+// `db/port.ts`：它们与账本语义无关，11 个模块曾为了一个类型而 import 账本。
+// 本模块只保留**账本语义**的部分：事务调度器（共享独占写连接 + RLS + 审计）。
 
 /**
  * 共享独占写连接的事务调度器。
