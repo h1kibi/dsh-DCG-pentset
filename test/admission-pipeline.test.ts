@@ -151,15 +151,23 @@ function state(over: {
   readonly intent?: Partial<ActionIntent>;
   readonly binding?: SessionBinding | undefined;
   readonly ports?: AdmissionPorts;
+  /** 覆盖绑定读取源（惰性语义的用例用它数调用次数）。 */
+  readonly bindingSource?: () => Promise<SessionBinding | undefined>;
 } = {}): AdmissionState {
-  return new AdmissionState({
+  // 用 `in` 判定而不是 `=== undefined`：本组需要能表达「**没有**会话绑定」这个输入
+  // （bindingGate 的拒绝路径），而 `undefined` 恰好是「不覆盖」的默认值。
+  const value = 'binding' in over ? over.binding : binding();
+  const source = over.bindingSource ?? (async () => value);
+  const st = new AdmissionState({
     intent: intent(over.intent ?? {}),
     now: new Date('2026-10-05T00:00:00Z'),
-    // 用 `in` 判定而不是 `=== undefined`：本组需要能表达「**没有**会话绑定」这个输入
-    // （bindingGate 的拒绝路径），而 `undefined` 恰好是「不覆盖」的默认值。
-    binding: 'binding' in over ? over.binding : binding(),
+    bindingSource: source,
     ports: over.ports ?? ports(),
   });
+  // 夹具直接给出「绑定已解析」的状态（除显式覆盖读取源者）：单阶段用例不必先跑一遍
+  // `session_bound` 闸门；**惰性语义**由专门那条用例（数调用次数）钉住。
+  if (over.bindingSource === undefined) st.resolveBinding(value);
+  return st;
 }
 
 // ───────────────────────────── 结构 ─────────────────────────────
@@ -201,6 +209,29 @@ describe('受理闸门管线（结构）', () => {
     const st = state({ binding: undefined });
     assert.throws(() => st.spec, /受理闸门顺序被破坏/);
     assert.throws(() => st.requireBinding(), /受理闸门顺序被破坏/);
+  });
+
+  test('绑定读取是惰性的：审计闸门先拒绝时**一次会话读都不发生**（2026-10-05 独立评审的 P2）', async () => {
+    // 背景：`admit` 曾把 `sessions.binding()` 提到审计闸门之前。读路径若同时故障
+    // （连接池耗尽、语句超时），异常会逃逸成「内部错误」，而 §15.1 要的是结构化的
+    // `audit_unavailable`。惰性化之后，审计闸门拒绝 → 读取源根本不被调用。
+    let reads = 0;
+    const st = state({
+      bindingSource: async () => { reads += 1; return binding(); },
+      ports: ports({ audit: { available: async () => ({ writable: false, detail: '账本只读' }) } }),
+    });
+    const verdict = await runAdmissionGates(st);
+    assert.equal(verdict.kind, 'rejected');
+    assert.equal(verdict.kind === 'rejected' ? verdict.gate : '', 'audit_available');
+    assert.equal(reads, 0, '审计拒绝必须在任何会话读之前生效');
+  });
+
+  test('绑定读取是惰性的：走到会话闸门时**只读一次**（失败记账与闸门共用同一次读）', async () => {
+    let reads = 0;
+    const st = state({ bindingSource: async () => { reads += 1; return binding(); } });
+    const verdict = await runAdmissionGates(st);
+    assert.equal(verdict.kind, 'passed');
+    assert.equal(reads, 1, '同一状态实例里绑定只读一次（记忆化由调用方保证）');
   });
 });
 

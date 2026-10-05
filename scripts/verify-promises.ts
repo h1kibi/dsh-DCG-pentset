@@ -79,6 +79,22 @@ for (const file of files) {
   contents.set(file.replaceAll('\\', '/'), await readFile(file, 'utf8'));
 }
 
+/**
+ * 去掉注释后的代码文本：块注释整体去掉，行内 `//` 之后截断。
+ *
+ * 断言说的是「**代码里**有消费者」，注释里提到符号不算——本仓注释大量引用符号名解释
+ * 「为什么这里不接线」，把注释算作消费者会把这条棘轮变成噪声（2026-10-05 独立评审实测：
+ * 把接线注释掉仍报全绿）。与 `verify-client-bundle.ts` / `verify-style-coverage.mjs`
+ * 同一做法。
+ */
+function codeOnly(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n');
+}
+
 /** 声明文件与转发文件之外，`src/` 中的**调用点**数量（测试不计入消费者）。 */
 function consumersOutside(entry: PromiseEntry): number {
   const ignored = new Set([entry.file, ...(entry.forwarders ?? [])]);
@@ -86,10 +102,10 @@ function consumersOutside(entry: PromiseEntry): number {
   let count = 0;
   for (const [file, text] of contents) {
     if (!file.startsWith('src') || ignored.has(file)) continue;
-    // 逐行判断并跳过注释行：注释里提到符号不算接线。
-    for (const line of text.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('*') || trimmed.startsWith('//')) continue;
+    // **去注释后**再逐行找调用点（2026-10-05 独立评审的 P2）：此前只跳过「整行以 * 或 //
+    // 开头」的行，而行尾注释（`null; // new Foo(`）与行内块注释（`/* new Foo( */`）都会命中
+    // ——把接线注释掉（而非删除）时棘轮仍然全绿，正是它要防的「以为有、实际没有」。
+    for (const line of codeOnly(text).split(/\r?\n/)) {
       if (callSite.test(line)) count += 1;
     }
   }

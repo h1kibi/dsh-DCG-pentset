@@ -77,9 +77,14 @@ for (const file of files) {
 }
 
 // ── 2. 样式表 ──
+//
+// **同样要去注释**（2026-10-05 独立评审的 P2）：值前的实现只对组件侧去注释，
+// 样式表侧直接读原文，于是注释里的 `.pentest-xxx` 被当成「已声明」——
+// 删掉某类唯一规则、只要别处注释提过它，主断言就仍然全绿。
+// 实测：删 `shell.ts` 的 `.pentest-runheader` 规则（`panels.ts:16` 注释里提过它）→ 旧实现 exit=0。
 const stylesDir = join(CLIENT, 'styles');
 const cssFiles = [join(CLIENT, 'styles.ts'), ...walk(stylesDir)].filter((f) => /\.ts$/.test(f));
-const cssText = cssFiles.map((f) => readFileSync(f, 'utf8')).join('\n');
+const cssText = cssFiles.map((f) => codeOnly(readFileSync(f, 'utf8'))).join('\n');
 
 const declared = new Set();
 for (const match of cssText.matchAll(/\.pentest-[A-Za-z0-9_-]+/g)) declared.add(match[0].slice(1));

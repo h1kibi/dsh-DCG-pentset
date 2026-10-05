@@ -625,13 +625,21 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
   async function admit(input: ActionIntent): Promise<AdmissionDecision> {
     const now = clock();
 
-    // 提前取一次会话绑定：闸门失败的记录要 engagementId（账本是 engagement 级的），
-    // 而**分类失败发生在会话准入之前**（§10.2 的顺序：类别判定 → 会话能力校验）。
+    // 会话绑定：**惰性 + 记忆化**。
     //
-    // 只取一次、后面复用，因此**不改变既有报错优先级**——模板未注册仍然报
-    // `classification_rejected` 而不是 `lease_required`。取不到时后续的会话准入
-    // 检查照旧按原顺序拒绝，只是那次失败无法记账（没有 engagementId 可归）。
-    const earlyBinding = await deps.sessions.binding(input.workerSessionId);
+    // 惰性：审计闸门（管线第 0 道）必须在**任何数据库读之前**生效——提前读会让
+    // 「审计不可用」这条路径先发一次 `worker_sessions` 查询，而那次读若抛错
+    // （连接池耗尽、语句超时），调用方看到的是未包装异常，不是结构化的 `audit_unavailable`
+    // （2026-10-05 独立评审实测：探针 A 异常逃逸 / 探针 B 结构化拒绝）。
+    //
+    // 记忆化：闸门失败的记录要以 engagementId 归属（账本是 engagement 级的），
+    // 而**分类失败发生在会话准入之前**——`recordGateFailure` 与 `session_bound` 闸门
+    // 必须共用同一次读（基线就是「只读一次、后面复用」）。
+    let bindingOnce: Promise<SessionBinding | undefined> | null = null;
+    const bindingSource = (): Promise<SessionBinding | undefined> => {
+      bindingOnce ??= deps.sessions.binding(input.workerSessionId);
+      return bindingOnce;
+    };
 
     /**
      * 记录一次闸门失败（§10.2.2），并在范围违规累计到阈值时请求暂停会话。
@@ -647,11 +655,15 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       readonly normalized: NormalizedTarget | null;
     }): Promise<void> => {
       const sink = deps.gateFailures;
-      if (sink === undefined || earlyBinding === undefined) return;
+      if (sink === undefined) return;
+      // 失败归属需要 engagementId：这里才**第一次**真正读绑定（记忆化，与 `session_bound`
+      // 闸门共用同一次读）。读不到时事件无法记账——与基线同形的既有限制。
+      const attributed = await bindingSource();
+      if (attributed === undefined) return;
       try {
         const payload = {
           ...record,
-          engagementId: earlyBinding.engagementId,
+          engagementId: attributed.engagementId,
           workerSessionId: input.workerSessionId,
           rawTarget: input.targetSelector,
         };
@@ -666,7 +678,7 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
           sink.pauseForScopeViolations !== undefined
         ) {
           await sink.pauseForScopeViolations({
-            engagementId: earlyBinding.engagementId,
+            engagementId: attributed.engagementId,
             workerSessionId: input.workerSessionId,
             count,
           });
@@ -692,7 +704,7 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     const state = new AdmissionState({
       intent: input,
       now,
-      binding: earlyBinding,
+      bindingSource,
       ports: {
         registry,
         policy: deps.policy,

@@ -48,6 +48,7 @@
     "lint": "eslint src test scripts",
     "test": "node --import ./test/helpers/tsx-loader.mjs --test --test-concurrency=1 --experimental-strip-types --test-timeout=40000 \"test/**/*.test.ts\"",
     "test:parallel": "node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=40000 \"test/**/*.test.ts\"",
+    "verify": "npm run verify:styles && npm run verify:promises && npm run verify:typert-face && npm run verify:client && npm run verify:forward-migration",
     "verify:client": "node --experimental-strip-types scripts/verify-client-bundle.ts",
     "verify:styles": "node scripts/verify-style-coverage.mjs",
     "verify:forward-migration": "node --experimental-strip-types scripts/verify-forward-migration.ts",

@@ -263,6 +263,12 @@ export class IntakeFlow {
             [found.active_agent_session_id],
           );
           const row = existing.rows[0];
+          // 作业是否**仍在 intake**（`auth_pending`）。这条守卫的语义在两个入口上必须一致：
+          // 已经离开 intake 的作业不能被 staging 拉回来——那会静默改写一个已经推进的作业
+          // （2026-10-05 独立评审真机复现：绑定会话被对账标为 failed、而
+          // `active_agent_session_id` 不被对账清理，于是控制台每次挂载都把作业复位回
+          // `auth_pending`、`state_version` 递增、`current_phase` 被清空）。
+          const leftIntake = found.current_status !== 'auth_pending';
           const reusable =
             row !== undefined
             && row.session_kind === 'intake'
@@ -280,19 +286,28 @@ export class IntakeFlow {
           }
           // 绑定行**仍在运行**却不匹配（另一个 dsh 会话占着，或不是 intake 会话）：
           // 那是调用方路由错了，拒绝比抢占安全。
+          // 文案在「已离开 intake」时用**统一那句**：客户端按「intake + 离开」两个记号把它
+          // 翻译成中性引导（`controller.ts` 的 `draftRejectionMessage`），换文案等于把引导
+          // 变成一条看起来像故障的红错——这是控制台**每次挂载**都会走的路径。
           if (row !== undefined && !TERMINAL_SESSION_STATUSES.has(row.status)) {
             throw new WorkflowRejection(
               'classification_rejected',
-              '本会话已绑定到一个仍在运行的作业（或绑定已被别的会话占用），不能重复发起',
+              leftIntake
+                ? '该作业已离开 intake 阶段，不能重新创建 intake'
+                : '本会话已绑定到一个仍在运行的作业（或绑定已被别的会话占用），不能重复发起',
             );
           }
-          // 绑定行已终结（或行不存在）：为同一个作业**重新绑定**本会话。
+          // 绑定行已终结（或行不存在）：为同一个作业**重新绑定**本会话——但**仅限仍在
+          // intake 的作业**（见上 `leftIntake` 的说明）。
           //
           // 这是幂等重试的自然路径，不是放松边界：上一次 staging 可能在建好作业后
           // 才失败（如签发租约时进程被打断），于是库里留下 `starting` 行，随后被
           // 启动对账判为中断。此时若一律拒绝，本会话就被永久钉死在一个不能用的作业上——
           // 而人类看到的只是「无法开始」。重新绑定产生的仍是同一个作业、同样
           // `auth_pending` + 范围版本 0，能力边界没有任何变化。
+          if (leftIntake) {
+            throw new WorkflowRejection('classification_rejected', '该作业已离开 intake 阶段，不能重新创建 intake');
+          }
         } else if (found.current_status !== 'auth_pending') {
           throw new WorkflowRejection('classification_rejected', '该作业已离开 intake 阶段，不能重新创建 intake');
         }

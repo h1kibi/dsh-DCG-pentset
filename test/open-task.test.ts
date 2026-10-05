@@ -21,6 +21,7 @@ import { Client } from 'pg';
 
 import { compose } from '../src/compose.ts';
 import { HUMAN_QUESTION_TOOL } from '../src/contracts.ts';
+import { WorkflowRejection } from '../src/workflow/model.ts';
 import type { ComposedPlugin } from '../src/compose.ts';
 import type {
   CreatedSession,
@@ -267,6 +268,166 @@ describe('集成：openTask 幂等恢复（真实 PostgreSQL）', {
         [first.workerSessionId],
       );
       assert.equal(old.rows[0]?.status, 'closed');
+    } finally {
+      await plugin.dispose();
+    }
+  });
+
+  /**
+   * 两条回归锁，来自 2026-10-05 的独立评审（真机复现）：
+   *
+   * `#stageIntake` 收敛两个入口时，把基线 `openTask` 的 `current_status !== 'auth_pending'`
+   * 守卫只留在了「active 指针为空」那条分支上，于是「绑定会话已终结 + 作业已离开 intake」
+   * 这个**真实组合**（启动对账把中断会话标 failed，但从不清理 `active_agent_session_id`）
+   * 会落入重新绑定路径：控制台每次挂载都把已推进的作业拖回 `auth_pending`。
+   */
+  it('作业已离开 intake：已终结的绑定不得被拖回 intake（独立评审回归锁）', async () => {
+    const { plugin } = composed();
+    const key = `left-intake-${randomUUID()}`;
+    try {
+      const first = await openAndTrack(plugin, key);
+      // 造出「作业已推进 + 绑定会话被对账判为中断」的组合（对账不改 active 指针）。
+      await client.query(
+        `update pentest.worker_sessions set status = 'failed', ended_at = now() where id = $1::uuid`,
+        [first.workerSessionId],
+      );
+      await client.query(
+        `update pentest.engagements
+            set current_status = 'worker_running', current_phase = 'intelligence-gathering'
+          where id = $1::uuid`,
+        [first.engagementId],
+      );
+      const snapshot = async () =>
+        (await client.query<{ state_version: string; current_status: string; run_marker: string; active: string | null }>(
+          `select state_version::text, current_status, status as run_marker, active_agent_session_id
+             from pentest.engagements where id = $1::uuid`,
+          [first.engagementId],
+        )).rows[0];
+      const before = await snapshot();
+
+      // ── 为什么写成「条件于观测到的前置状态」的不变量 ──
+      //
+      // 本文件头已经说明：兄弟套件（`compose.test.ts`）的 `apply()` 会做**全库对账**，
+      // 它可能改写本文件的现场（活动指针、RunMarker、current_status）。把断言条件化，
+      // 锁就只对**回归**报警，而不会对**另一条合法路径**（对 aborted/failed 的作业走复活）
+      // 报警：现场完好时走最强形式（必须拒绝且状态逐字不变），被改写时退化为真不变量。
+      let rejected = false;
+      try {
+        await plugin.workflow.openTask({
+          clientSessionKey: key,
+          operatorId: 'operator-test',
+          reason: '回归锁：已离开 intake 的作业不得被拖回',
+        });
+      } catch (error) {
+        assert.ok(error instanceof WorkflowRejection, '拒必须是工作流拒绝');
+        assert.equal(error.code, 'classification_rejected');
+        rejected = true;
+      }
+      const after = await snapshot();
+
+      if (rejected) {
+        assert.deepEqual(
+          after,
+          before,
+          '被拒绝的调用不得改写作业：state_version / current_status / RunMarker / 活动会话指针必须原样',
+        );
+        const sessions = await client.query<{ n: string }>(
+          `select count(*)::text as n from pentest.worker_sessions where engagement_id = $1::uuid`,
+          [first.engagementId],
+        );
+        assert.equal(sessions.rows[0]?.n, '1', '不得为被拒绝的调用新建 intake 会话');
+      } else {
+        // 未被拒绝：只有当作业的 RunMarker 已被对账置为 aborted/failed（既有的复活路径）
+        // 或它本就不在 intake 之外时才合法。
+        assert.ok(
+          before?.run_marker !== 'running' || before?.current_status === 'auth_pending',
+          `作业仍在运行（RunMarker=${String(before?.run_marker)}）且调用前不在 intake 外？` +
+            `current_status=${String(before?.current_status)} 时被接受，必须绝无可能`,
+        );
+        assert.ok(
+          before?.current_status === 'auth_pending' || after?.current_status !== 'auth_pending',
+          `作业在调用前是 ${String(before?.current_status)}，调用后不得变成 auth_pending（这就是被拖回 intake）`,
+        );
+      }
+
+      // 现场完好时（作业运行中、指针指向终结会话、已离开 intake）最强断言：必须拒绝。
+      if (before?.current_status === 'worker_running' && before.run_marker === 'running') {
+        assert.equal(rejected, true, '现场完好（作业运行中且已离开 intake）时必须拒绝');
+      }
+    } finally {
+      await plugin.dispose();
+    }
+  });
+
+  it('作业已离开 intake（绑定仍在运行）：拒绝文案保持客户端可识别（intake + 离开）', async () => {
+    // 客户端 `controller.ts` 的 draftRejectionMessage 靠「intake」「离开」两个记号把这条
+    // 拒绝翻译成中性引导；换文案会让控制台每次挂载都透出一条看起来像故障的红错。
+    const { plugin } = composed();
+    const key = `left-intake-msg-${randomUUID()}`;
+    try {
+      const first = await openAndTrack(plugin, key);
+      // 绑定会话变成**仍在运行的非 intake 会话**：关掉原 intake（`session_kind` 是冻结列，
+      // 不可原地改），再插入一个 phase 会话并把活动指针指过去——这正是「另一个阶段会话
+      // 占着这条绑定」的现场。
+      await client.query(
+        `update pentest.worker_sessions set status = 'closed', ended_at = now() where id = $1::uuid`,
+        [first.workerSessionId],
+      );
+      const phaseSessionId = randomUUID();
+      await client.query(
+        `insert into pentest.worker_sessions
+           (id, engagement_id, dsh_session_id, phase, profile_id, profile_revision, attempt, iteration,
+            scope_version, task_prompt, tool_filter, model_route, status, session_kind)
+         values ($1::uuid, $2::uuid, $3, 'intelligence-gathering', 'p', 'r1', 1, 1, 1, 'tp',
+                 '{}'::jsonb, '{}'::jsonb, 'active', 'phase')`,
+        [phaseSessionId, first.engagementId, `dsh-phase-${randomUUID()}`],
+      );
+      await client.query(
+        `update pentest.engagements
+            set current_status = 'worker_running', current_phase = 'intelligence-gathering',
+                active_agent_session_id = $2::uuid
+          where id = $1::uuid`,
+        [first.engagementId, phaseSessionId],
+      );
+
+      // 紧贴调用重设：见上一条用例关于并发对账改写现场的说明。
+      await client.query(
+        `update pentest.engagements
+            set status = 'running', current_status = 'worker_running',
+                current_phase = 'intelligence-gathering', active_agent_session_id = $2::uuid
+          where id = $1::uuid`,
+        [first.engagementId, phaseSessionId],
+      );
+
+      const pre = (await client.query<{ current_status: string }>(
+        `select current_status from pentest.engagements where id = $1::uuid`,
+        [first.engagementId],
+      )).rows[0];
+
+      let message: string | null = null;
+      try {
+        await plugin.workflow.openTask({
+          clientSessionKey: key,
+          operatorId: 'operator-test',
+          reason: '回归锁：拒绝文案必须保持可识别',
+        });
+      } catch (error) {
+        assert.ok(error instanceof WorkflowRejection, '拒必须是工作流拒绝');
+        assert.equal(error.code, 'classification_rejected');
+        message = error.message;
+      }
+
+      // 与上一条锁同样的道理：并发对账会改写现场，因此断言**条件于观测到的前置状态**。
+      if (pre?.current_status !== 'auth_pending' && message !== null) {
+        // 作业已离开 intake 时的拒绝文案必须保持客户端可识别（`controller.ts` 的
+        // `draftRejectionMessage` 靠这两个记号把它翻译成中性引导）。
+        assert.match(message, /intake/, '客户端按「intake」记号识别');
+        assert.match(message, /离开/, '客户端按「离开」记号识别');
+      } else {
+        // 现场被改写（作业已回到 auth_pending）：活着的非 intake 绑定仍必须被拒绝，
+        // 只是文案允许是「绑定被占用」那一句。
+        assert.notEqual(message, null, '活着的非 intake 绑定必须被拒绝，不得静默新建会话');
+      }
     } finally {
       await plugin.dispose();
     }

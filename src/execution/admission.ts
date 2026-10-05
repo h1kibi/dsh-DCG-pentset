@@ -223,34 +223,44 @@ export class AdmissionState {
   readonly now: Date;
   readonly ports: AdmissionPorts;
   /**
-   * 提前读到的会话绑定。
+   * 会话绑定的**惰性**读取源（调用方负责记忆化：同一次受理只读一次）。
    *
-   * 为什么提前：闸门失败的记录要以 engagementId 归属（账本是 engagement 级的），
-   * 而**分类失败发生在会话准入之前**（§10.2 的顺序：类别判定 → 会话能力校验）。
-   * 只读一次、后面复用，因此不改变既有报错优先级——模板未注册仍报
-   * `classification_rejected` 而不是 `lease_required`；取不到时后续闸门照原顺序拒绝，
-   * 只是那次失败无法记账（没有 engagementId 可归）。
+   * 为什么是惰性而不是提前读：审计闸门（第 0 道）必须在**任何数据库读之前**给出结论——
+   * §10.2 的顺序如此，且 §15.1 要的是「根本不受理」。提前读会让「审计不可用」这条路径
+   * 先发一次 `worker_sessions` 查询；那次读若抛错（连接池耗尽、语句超时），调用方看到的是
+   * 未包装异常，而**不是**结构化的 `audit_unavailable`（2026-10-05 独立评审的实测结论：
+   * 探针 A 异常逃逸、探针 B 结构化拒绝）。
+   *
+   * 「只读一次」由调用方的记忆化保证：闸门失败的记录要以 engagementId 归属
+   * （账本是 engagement 级的），而**分类失败发生在会话准入之前**，两处必须共用同一次读。
    */
-  readonly binding: SessionBinding | undefined;
+  readonly bindingSource: () => Promise<SessionBinding | undefined>;
+  #binding?: SessionBinding;
+  #bindingResolved = false;
 
   #spec?: ActionTemplateSpec;
   #params?: ParamBag;
   #purpose?: string;
   #actionClass?: ActionClass;
-  #authorizationExpiry?: Date | null;
   #scope?: Extract<ScopeVerdict, { ok: true }>;
   #addresses?: readonly string[];
 
   constructor(input: {
     readonly intent: ActionIntent;
     readonly now: Date;
-    readonly binding: SessionBinding | undefined;
+    readonly bindingSource: () => Promise<SessionBinding | undefined>;
     readonly ports: AdmissionPorts;
   }) {
     this.intent = input.intent;
     this.now = input.now;
-    this.binding = input.binding;
+    this.bindingSource = input.bindingSource;
     this.ports = input.ports;
+  }
+
+  /** 由 `session_bound` 闸门解析绑定（解析前读 `requireBinding()` 会抛错＝顺序被破坏）。 */
+  resolveBinding(binding: SessionBinding | undefined): void {
+    this.#binding = binding;
+    this.#bindingResolved = true;
   }
 
   resolveSpec(spec: ActionTemplateSpec): void {
@@ -264,9 +274,6 @@ export class AdmissionState {
   }
   resolveActionClass(actionClass: ActionClass): void {
     this.#actionClass = actionClass;
-  }
-  resolveAuthorizationExpiry(expiresAt: Date | null): void {
-    this.#authorizationExpiry = expiresAt;
   }
   resolveScope(scope: Extract<ScopeVerdict, { ok: true }>): void {
     this.#scope = scope;
@@ -291,10 +298,6 @@ export class AdmissionState {
   get actionClass(): ActionClass {
     return this.#require(this.#actionClass, 'actionClass');
   }
-  /** 授权到期时间（闸门 6 之后可用；null = 未声明到期）。 */
-  get authorizationExpiry(): Date | null {
-    return this.#require(this.#authorizationExpiry, 'authorizationExpiry');
-  }
   /** 范围裁决（闸门 7 之后可用）。 */
   get scope(): Extract<ScopeVerdict, { ok: true }> {
     return this.#require(this.#scope, 'scope');
@@ -304,9 +307,12 @@ export class AdmissionState {
     return this.#require(this.#addresses, 'resolvedAddresses');
   }
 
-  /** 会话绑定（闸门 5 之后可用）。 */
+  /** 会话绑定（`session_bound` 闸门之后可用；未解析即顺序被破坏）。 */
   requireBinding(): SessionBinding {
-    return this.#require(this.binding, 'binding');
+    if (!this.#bindingResolved) {
+      throw new Error('受理闸门顺序被破坏：binding 尚未解析。顺序见 ADMISSION_GATES。');
+    }
+    return this.#require(this.#binding, 'binding');
   }
 
   #require<T>(value: T | undefined, what: string): T {
@@ -450,7 +456,10 @@ export const classificationGate: AdmissionGate = {
 export const bindingGate: AdmissionGate = {
   name: 'session_bound',
   async check(state) {
-    if (state.binding === undefined) {
+    // 惰性读取：审计闸门若先拒绝，这次读**根本不会发生**（见 `bindingSource` 的说明）。
+    const binding = await state.bindingSource();
+    state.resolveBinding(binding);
+    if (binding === undefined) {
       return reject(
         blocked(
           'lease_required',
@@ -493,7 +502,8 @@ export const authorizationGate: AdmissionGate = {
         ),
       );
     }
-    state.resolveAuthorizationExpiry(expiry);
+    // 到期值只服务本闸门的判定，没有跨阶段消费者——不写进状态（独立评审的 Nit：
+    // 此前 `resolveAuthorizationExpiry` + getter 是只写不读的死状态，2026-10-05 删除）。
     return pass();
   },
 };
