@@ -1018,3 +1018,55 @@
   剩余 34 个是**刻意保留**的：入口导出（3）、领域词汇常量（12，见报告 §5-E）、
   以及「仅在别处注释里被提到」的保守保留项（脚本把注释出现也算引用）。
 - **验证**：typecheck 0、lint 0、全量测试与门禁见下。
+
+---
+
+## 附录 M：真机实测记录（2026-10-05 晚，改进后首次端到端）
+
+> 目的：改进（Stage 1–6）之后，用**真实 harness + 真实浏览器 + 真实数据库**走一遍，而不是只看测试与门禁。
+> 环境：`node start-personal.mjs`（profile `pentest`、端口 3090、库 `pentest_personal`）；前置检查全过
+> （Docker 29.2.1、工具镜像摘要、`pentest-lab-internal`、`pentest-lab-proxy`）。
+
+### M.1 启动与加载（真实进程）
+
+- 插件加载成功；`compose()` 期自检与**本轮新接线的 `assertGraph()` 启动自检都没有抛**（坏图会在 apply 期即失败）。
+- 插件日志（真实输出）：
+  - `RLS 自检（当前角色 postgres）：连接角色是超级用户/BYPASSRLS：RLS 策略不生效…`（部署事实，非缺陷）
+  - `未配置 skillAuditEngagementId：skill 增删改不会写入审计账本`
+  - **`config.runtime.recovery 不生效：recovery 是插件配置的顶层字段（与 runtime 并列），请把它移出 runtime`** ← 见 M.4 的发现
+- 浏览器（真实 Chromium）加载 `http://127.0.0.1:3090/?token=…`：标题 `DeepSeek Harness`，**无页面错误**（`errors.entries = []`）。
+
+### M.2 控制台渲染（读路径 · 覆盖 Stage 3/6）
+
+| 检查 | 结果 |
+|---|---|
+| 侧栏/标签 | 「渗透作业」入口存在 ✓ |
+| **合并后的样式链** | `<style>` 中出现 `.pentest-*` 规则（`pentestStyleInjected: true`）→ **Stage 2 的 styles 合并 + Stage 6 的收窄在真实浏览器成立** |
+| 控制台外壳 | `.pentest-console` 在场；该帧内 **63 个** `pentest-*` 元素 |
+| 卡片 | 「Engagement 列表」「运行总览」「授权范围 intake」✓；8 个面板标签全部渲染（总览/报告审阅/记忆浏览器/放行队列/交接编辑/Skill 库/范围管理/公共记忆） |
+| **真实数据（读）** | 「**共 23 个**」「显示已归档（21）」、6 行作业表格；诊断卡：连接池 总 3 / 空闲 0、审计写入 可写、索引队列 待办 5 → **全部经 Stage 3 外迁后的 `DbClient` 端口** |
+| 词汇表（Stage 2） | 作业行显示「运行中 / Agent 工作中 / 漏洞分析」✓（主状态与阶段的新单源表）。**说明**：`sessionStatusLabel`（会话级状态）需要真实 Worker 会话才会出现在界面上，本轮一次性作业没有会话，故该表仅由单测覆盖。 |
+
+### M.3 写路径（覆盖 Stage 5 的两个新包装）
+
+净零冒烟：新建一次性作业 → 归档 → 彻底清空（全部走 UI，真实点击；`smoke-live-069717`）。
+
+| 步骤 | 前端证据 | **数据库证据（权威）** |
+|---|---|---|
+| 建作业（范围 `smoke.invalid`、预设「已通知的授权渗透测试」、审批「人工审批」） | 「校验范围」由服务端裁定后提交按钮解禁 → 列表 **23 → 共 24 个** | 作业行写入（`current_status=ready`）+ **2 条 human_decisions** |
+| **归档**（新包装 `archiveEngagement`） | 该行从默认视图消失 | `archived_at = 2026-10-05T16:36:41Z` ✓（human_decisions 增至 2 条） |
+| **彻底清空**（新包装 `purgeEngagement`；先经 `previewEngagementPurge`） | 弹窗显示服务端预览：「将删除 7 行（outbox_jobs 6、scope_versions 1）」「审计账本 15 行保留」→ 输入作业名确认 → 行显示「已清理」 | 逐项对上：`scope_versions 0`、`outbox_jobs 0`（已删）；`context_events 6`、`ledger_anchors 6`、`human_decisions 2`、`policy_versions 1`（**保留**，§9.5 只追加）；作业行保留且 `purged_at` 已写 ✓ |
+
+未做（有意）：`setApprovalMode` 包装未在真机点（它会在**真实作业**上推进 policy epoch 并作废放行凭证，属不可逆的副作用）——该包装与其余两个同形，且已有单测与 UI 渲染覆盖。
+
+### M.4 实测发现（1 条，属**部署配置**而非代码）
+
+- **个人 profile 把 `recovery` 写在了 `runtime` 下面** → 插件在启动时明确告警「`config.runtime.recovery` 不生效：recovery 是插件配置的顶层字段」，即**启动对账（§15.2）在生产/个人环境里被静默关掉**。
+  修法：把 profile 里的 `recovery:` 段从 `runtime:` 下提到顶层（与 `runtime` 并列）。
+- 另两条日志（RLS 超级用户、skillAuditEngagementId 缺失）是**已知部署事实**（RUNBOOK §1 与设计文档有说明），非缺陷。
+
+### M.5 结论
+
+- 六个改进阶段（端口外迁 / 词汇单源 / 类型化包装 / 文档去重 / 导出收窄 / 接线）在**真机**上没有引入可观察回归：
+  加载、渲染、读、写（建/归档/清空）与审计留痕全部正常。
+- 留痕：一次性作业 `smoke-live-069717`（已归档 + 已清空，审计 15 行保留）留在个人库中——按设计，purge **不删**账本行与作业行；如需彻底移除需人工处理（不在代码路径内）。
