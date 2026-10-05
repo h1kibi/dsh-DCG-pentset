@@ -679,23 +679,34 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 |---|---|---|
 | `installDatabase(config)` | `DatabaseInstallation` = `{pool, readDb, txDb, txPort: TxDbPort, rlsContext, rlsScopePort, backgroundScopes: BackgroundScopes}` | 连接池与错误钩子、RLS 作用域（`AsyncLocalStorage`）、惰性写连接、租户级作业列举 |
 | `installIndexing({config, readDb, txDb})` | `IndexingInstallation` = `{outbox, ledger, indexer}` | 队列与写连接同源的理由、锚点与账本共用写连接（避免死锁）、版本登记器与索引器的接线 |
+| `installExecution({config, readDb, txDb, ledger, workflow})` | `ExecutionInstallation` = `{policy, approvalPlanValidator, auditProbe, execution}` | 策略/会话目录/动作策略、沙箱与执行存储、审计探针、闸门失败 sink（见下） |
 
-锚点与版本登记器**不作为产物**给出：它们只服务于这一层内部（`PgAnchorSink` 由账本持有、
-登记器由索引器调用），调用方拿不到也不需要。
+**闸门失败 sink 先独立成模块**（`src/execution/gate-failures.ts`）：它不是接线而是**服务**
+（写账本事件 + 数范围违规 + 达阈值请求系统暂停，约 100 行）。抽出后：
+- 锁序（engagement 行锁 → 账本 advisory lock）与「判据同源」的理由写在模块头，不再埋在 `compose()` 中段；
+- 账本端口具名为 `GateFailureLedger`（服务面 `appendEvent` ∩ 事务面 `appendBatchInTransaction`），
+  组合根与 sink 共用同一个类型，不再各写一遍交集；
+- 系统暂停出口用 **getter**（`workflow: () => workflowRef`）打破「workflow 晚于本层构造」的先后，
+  接线处一眼能看出这是晚绑定而不是顺序 bug。
 
-顺带具名化两处此前只能靠内联形状表达的类型：`TxDbPort`（`createTxDb` 的产物）与
-`BackgroundScopes`（后台循环的作用域端口）。
+**产物只给调用方真正要的**：`PgSessionDirectory` 与 `DockerSandbox` 在这一层内部被
+`createExecutionService` 消费，组合根不需要——因此不做成产物（否则调用方会拿到一组
+「看着像公共面」的内部件）。
 
-**度量**：`compose()` **880 → 769 行**；`compose.test.ts` **48/48**、全量套件通过。
+锚点与版本登记器同样不作为产物给出（只服务该层内部装配）。
+
+顺带具名化三处此前只能靠内联形状表达的类型：`TxDbPort`（`createTxDb` 的产物）、
+`BackgroundScopes`（后台循环的作用域端口）、`GateFailureLedger`（闸门 sink 的账本端口）。
+
+**度量**：`compose()` **880 → 605 行**；`compose.test.ts` **48/48**
+（其中一条覆盖本次搬动的暂停路径：`system_auto_pause:scope_violation_threshold`）；
+全量套件通过。
 
 ### 未完成（明确记录，不冒充完成）
 
-复核的目标是「安装器表 + 组合根 ≈ 200 行编排」——本轮只完成 **2/5**：
-
 | 剩余安装器 | 为什么本轮没做 |
 |---|---|
-| `installExecution`（策略/会话/动作策略 + 沙箱/store + `GateFailureSink` + `createExecutionService`，~180 行） | 其中「闸门失败 sink」不是纯接线而是**服务构造**（写账本 + 计数 + 触发暂停，约 100 行），且与 `ledger`/`workflowRef`/`policy` 交叉引用。它应当先像 `admission.ts` 那样**独立成模块**，再作为安装器接线——顺手搬会把它埋进安装器的参数表里 |
-| `installWorkflow`（会话工厂 + 报告/记忆/诊断面 + `PgWorkflowService`） | 与 leases/workerTools 双向引用（`workflowRef`），边界要先想清 |
-| `installConsole`（控制台方法表 + 客户端面） | 依赖上面两项的产物，最后做 |
+| `installWorkflow`（会话工厂 + 报告/记忆/诊断面 + `PgWorkflowService`，含 leases/workerTools 的双向引用 `workflowRef`） | 边界要先想清：workflow 与 leases/workerTools 相互引用，拆之前得决定 `workflowRef` 是「getter 注入」还是「两段安装 + 显式回填」 |
+| `installConsole`（控制台方法表 + 客户端面） | 依赖上面那项的产物，最后做 |
 
-模式已经立住（具名产物 + 单点装配），后续三个安装器是机械延展。
+模式已经立住（具名产物 + 单点装配 + 服务先独立成模块），`compose()` 已从 880 行降到 605 行。

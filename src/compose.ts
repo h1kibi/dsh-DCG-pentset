@@ -61,6 +61,8 @@ import {
   type EgressScopeTarget,
 } from './execution/egress-allowlist.ts';
 import { createExecutionService } from './execution/service.ts';
+import type { AuditProbe } from './execution/service.ts';
+import { createGateFailureSink, type GateFailureLedger, type SystemPausePort } from './execution/gate-failures.ts';
 import type { ActionTemplateSpec, ParamBag } from './execution/templates.ts';
 import { buildNormalizedCommand, createRegistry, portForScope, validateParams } from './execution/templates.ts';
 import { canonicalTargetString, derivePlanHash } from './execution/idempotency.ts';
@@ -70,7 +72,7 @@ import { PgLeaseStore } from './workflow/pg-lease.ts';
 import { PgPolicyService, PgSessionDirectory, PgActionPolicySource } from './policy/pg-policy.ts';
 import { PgWorkflowService } from './workflow/pg-workflow.ts';
 import { SYSTEM_OPERATOR_ID } from './workflow/model.ts';
-import type { ActionPolicySource, GateFailureSink } from './execution/service.ts';
+import type { ActionPolicySource } from './execution/service.ts';
 import type { AppendEventInput } from './contracts.ts';
 import { DEFAULTS } from './contracts.ts';
 import { BudgetMeter, LivenessMonitor, projectionOf } from './workflow/budget.ts';
@@ -1151,18 +1153,35 @@ export function installIndexing(input: {
   return { outbox, ledger, indexer };
 }
 
-/** 装配全部服务。 */
-export function compose(config: ComposeConfig): ComposedPlugin {
-  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
-  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
-  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
-    throw new Error(
-      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
-    );
-  }
-  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
-  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+/**
+ * `installExecution` 的产物：**只给调用方真正要用的**。
+ *
+ * 会话目录（`PgSessionDirectory`）与沙箱（`DockerSandbox`）在这一层内部被
+ * `createExecutionService` 消费，组合根不需要它们——因此不做成产物（否则调用方会
+ * 拿到一组「看着像公共面」的内部件）。需要时再加，一行的事。
+ */
+export interface ExecutionInstallation {
+  readonly policy: PgPolicyService;
+  readonly approvalPlanValidator: ApprovalPlanValidator;
+  readonly auditProbe: AuditProbe;
+  readonly execution: ExecutionService;
+}
 
+/**
+ * 安装策略面与执行服务（§10.2、§10.3）：动作策略、沙箱、执行存储、闸门失败 sink、审计探针。
+ *
+ * 只有这些**产物**给出去：`actions`（动作策略源）与 `store`（执行存储）只在这一层内部被使用；
+ * 闸门失败 sink 由本安装器内部构造（它的实现已独立成 `execution/gate-failures.ts`）。
+ */
+export function installExecution(input: {
+  readonly config: ComposeConfig;
+  readonly readDb: DbClient;
+  readonly txDb: DbClient;
+  readonly ledger: GateFailureLedger;
+  /** 系统暂停的出口（工作流服务晚于本层构造，因此传 getter）。 */
+  readonly workflow: () => SystemPausePort | null;
+}): ExecutionInstallation {
+  const { config, readDb, txDb, ledger } = input;
   // ── 策略与会话 ──
   const policy = new PgPolicyService(readDb, {
     ...(config.templates === undefined ? {} : { templates: config.templates }),
@@ -1178,103 +1197,11 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     config.sandboxRunner === undefined ? {} : { runner: config.sandboxRunner },
   );
   const store = new PgExecutionStore(readDb);
-
-  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
-  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
-  // 那时赋值早已完成。比把两个服务的构造顺序调换来换去清晰。
-  let workflowRef: PgWorkflowService | null = null;
-  const gateFailureRunner = transactionRunnerFor(txDb);
-  /**
-   * 闸门失败的记录与处置（§10.2.2）。
-   *
-   * 两件事在这里合起来做，因为它们必须同源：
-   *   1. 写 `scope_violation` / `classification_rejected` 事件进账本；
-   *   2. 数出「自上次成功执行以来」该会话的范围违规次数，达阈值时暂停。
-   *
-   * 计数与事件写入放在同一处：判据（账本事件 + tool_runs 终态）分散两处必然漂移，
-   * 而漂移的表现是「暂停了但说不清为什么」或「该停没停」。
-   */
-  const gateFailures: GateFailureSink = {
-    async record(input) {
-      return this.recordAndPause!({ ...input, threshold: Number.MAX_SAFE_INTEGER });
-    },
-    async recordAndPause(input) {
-      const sourceId = `${input.eventType}:${crypto.randomUUID()}`;
-      const appendInput: AppendEventInput = {
-        engagementId: input.engagementId,
-        workerSessionId: input.workerSessionId,
-        eventType: input.eventType,
-        sourceSystem: 'pentest-execution',
-        sourceId,
-        sourceSeq: 1,
-        occurredAt: new Date(),
-        payload: {
-          rawTarget: input.rawTarget,
-          normalized: input.normalized,
-          rule: input.rule,
-          detail: input.detail,
-        },
-        rawPayload: new TextEncoder().encode(JSON.stringify(input)),
-        classification: 'engagement',
-        trustLevel: 'tool_observation',
-      };
-      if (input.eventType !== 'scope.violation') {
-        await ledger.appendEvent(appendInput);
-        return 0;
-      }
-
-      let count = 0;
-      await gateFailureRunner.run(async (tx) => {
-        // 与工作流及其他状态写路径保持同一锁序：先锁 engagement，再进入账本的
-        // engagement advisory lock，避免「账本锁 → engagement 行锁」与工作流
-        // 「engagement 行锁 → 账本锁」形成死锁。
-        await tx.query(
-          `select id from pentest.engagements where id = $1::uuid for update`,
-          [input.engagementId],
-        );
-        await ledger.appendBatchInTransaction(tx, [appendInput]);
-        const counted = await tx.query<{ readonly n: number | string }>(
-          `select count(*)::int as n
-             from pentest.context_events e
-            where e.engagement_id = $1::uuid
-              and e.worker_session_id = $2::uuid
-              and e.event_type = 'scope.violation'
-              and e.occurred_at > coalesce(
-                    (select max(r.finished_at) from pentest.tool_runs r
-                      where r.worker_session_id = $2::uuid and r.status = 'completed'),
-                    '-infinity'::timestamptz)`,
-          [input.engagementId, input.workerSessionId],
-        );
-        count = Number(counted.rows[0]?.n ?? 0);
-        if (count < input.threshold) return;
-        const state = await tx.query<{ readonly status: string; readonly state_version: number | string }>(
-          `select status, state_version from pentest.engagements where id = $1::uuid`,
-          [input.engagementId],
-        );
-        const row = state.rows[0];
-        if (row === undefined || row.status === 'paused') return;
-        if (workflowRef === null) {
-          throw new Error('系统暂停工作流尚未装配');
-        }
-        await workflowRef.pauseForSystem({
-          engagementId: input.engagementId,
-          expectedStateVersion: Number(row.state_version),
-          cause: 'scope_violation_threshold',
-          detail:
-            `同一会话自上次成功执行以来连续 ${String(count)} 次范围违规（阈值 ${String(input.threshold)}）。` +
-            '这通常意味着任务描述有歧义，而不是偶发失误——交人类判断（§10.2.2）。',
-        });
-      });
-      return count;
-    },
-    async pauseForScopeViolations() {
-      // 生产路径使用 recordAndPause；保留接口以兼容测试替身与旧调用者。
-    },
-  };
+  const gateFailures = createGateFailureSink({ ledger, txDb, workflow: input.workflow });
   /**
    * 审计可用性探针（§15.1）：走**真实的审计写路径**（`txDb` → 独占写连接）。
    *
-   * 为什么探测 `txDb` 而不是别的：账本只在独占写连接上写（见上面 `txDb` 的说明）。
+   * 为什么探测 `txDb` 而不是别的：账本只在独占写连接上写（见 `installDatabase` 的说明）。
    * 那条路径失败正是 §15.1 要防的情形——连接池耗尽、独占连接被回收、写权限被撤。
    * 探一条只读查询会「通过」但审计写仍会失败，那是假的绿灯。
    *
@@ -1286,7 +1213,7 @@ export function compose(config: ComposeConfig): ComposedPlugin {
    * 这个探针同时供执行闸门（每次受理动作）与诊断面（人工查看）使用——
    * 两处必须是**同一个**实现，否则诊断面的绿灯不代表闸门会放行。
    */
-  const auditProbe = {
+  const auditProbe: AuditProbe = {
     async available() {
       try {
         await txDb.query('select 1 as ok');
@@ -1320,14 +1247,14 @@ export function compose(config: ComposeConfig): ComposedPlugin {
      * （裁决结果、施加的节奏、停止原因、目标侧迹象），不是人类决定。
      */
     executionAudit: {
-      async record(input) {
-        const payload = input.payload;
+      async record(eventInput) {
+        const payload = eventInput.payload;
         await ledger.appendEvent({
-          engagementId: input.engagementId,
-          workerSessionId: input.workerSessionId,
-          eventType: input.eventType,
+          engagementId: eventInput.engagementId,
+          workerSessionId: eventInput.workerSessionId,
+          eventType: eventInput.eventType,
           sourceSystem: 'pentest-execution',
-          sourceId: `${input.eventType}:${crypto.randomUUID()}`,
+          sourceId: `${eventInput.eventType}:${crypto.randomUUID()}`,
           sourceSeq: 1,
           occurredAt: new Date(),
           payload,
@@ -1337,6 +1264,33 @@ export function compose(config: ComposeConfig): ComposedPlugin {
         });
       },
     },
+  });
+
+  return { policy, approvalPlanValidator, auditProbe, execution };
+}
+
+/** 装配全部服务。 */
+export function compose(config: ComposeConfig): ComposedPlugin {
+  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
+  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
+  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
+    throw new Error(
+      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
+    );
+  }
+  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
+  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+
+  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
+  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
+  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
+  let workflowRef: PgWorkflowService | null = null;
+  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
+    config,
+    readDb,
+    txDb,
+    ledger,
+    workflow: () => workflowRef,
   });
 
   // ── 租约 ──
