@@ -418,3 +418,29 @@ recomputed = 452a422db96206d98ad598f51938d03605995247ec27bc2e5a968f73ca8cb149
 | `evaluateRedirectChain` | 保留实现，注释如实降级：容器 `http_get` 每跳只做**地址固定**，缺的是**带范围/资产裁决语义**的那一层判定。 |
 
 `verify:promises` 的两条 `pending` 条目保留（判定「未接线」的结论不因注释修正而改变）；`pg-policy.ts` 中一处**错位的文档注释**（`evaluateRedirectChain` 的说明挂在 `listActionTemplates` 上方）一并归位。
+
+---
+
+## 附八：REQ-10 重建可续跑 + REQ-11 后半生产端（2026-10-05，续）
+
+### REQ-10：>`5000` 事件的 engagement 此前永远建不完
+
+| 缺陷 | 修法 |
+|---|---|
+| `#reindex` **每次运行都** `resetWatermark → 0` | 只在「记录在案的 `strategy_version` ≠ 当前策略」时重置。策略一致 ⇒ 从水位处继续：**重试即续跑**，不再回到起点 |
+| 批预算用满（50 批 × 100 事件）后**报 `done`** | 用满即**抛错**：走失败路径（退避 → 死信）→ `stats().state === 'failed'` 可见。水位已推进到断点，重试从断点继续 |
+| 预算数字是魔法 `50` | `REINDEX_BATCH_BUDGET` 常量，注释写明「这是一个回合的上限，**不是**建完了的判据」 |
+
+失败消息如实说明处置（`本回合已用满 50 批预算…水位已推进到断点，重试会从断点继续（不是从 0 重扫）`），因此控制台/死信里看到的是可执行的信息，而不是一句「重建失败」。
+
+### REQ-11 后半：`reindex_engagement` 的生产端
+
+- 新增 `IndexDispatcher.enqueueStaleStrategyRebuilds()`：查 `index_watermarks.strategy_version <> INDEX_STRATEGY_VERSION` 的 engagement，**入队重建**；幂等键的判别值取**目标策略版本**，因此「同一版本每作业一次、`INDEX_STRATEGY_VERSION` 再变时自然拿到新键」。
+- `drainAll` **先补入队、再发现**：策略落后的作业在入队前没有任何待办任务，永远进不了 `engagementsWithWork` 的结果——生产者必须走在发现之前（这是此前那条链路真正断掉的地方）。
+- **作用域**：`index_watermarks` 是 FORCE RLS 表（006），无作用域时按租户级查询会**静默返回零行**（与 `outbox_jobs` 同一类陷阱）。有 `rlsScope` 时逐作业进入作用域，与 `engagementsWithWork` 同构。
+- 另一条版本轴（**嵌入版本**）改为**响亮拒绝**：检索侧只读生效版本的分块，而换提供方后新版本登记为**非生效**（首个登记版本才自动生效）——继续索引等于写出谁也看不见的内容，且索引状态看起来完全正常。现在索引器在登记时检查 `isActive`，非生效即 `IndexerError('embedding_revision_inactive')`，消息给出两步处置（先重建、再切换生效版本；期间回退提供方配置）。
+- **残留（明确记录）**：`EmbeddingRevisionRegistry.activate` 仍无生产调用方——「切换生效版本」这个运维动作没有控制台端点。本轮把它从**静默降级**变成**可见失败 + 明确处置**，但真正的入口仍是下一步（要么加一个运维端点，要么在重建完成路径里自动激活，后者涉及产品决策，本轮不擅自发明）。
+
+### 验证
+
+`test/dispatcher.test.ts` 16/16（新增 4 条单元用例：预算耗尽不报 done / 旧策略才重置 / 追平报 done / 水位 failed 必须失败；1 条 PG 用例：策略落后自动入队 + 每版本一次幂等）；`test/indexer.test.ts` 17/17（新增：非生效版本拒绝索引、零分块残留）。

@@ -288,8 +288,10 @@ describe('索引器（真实 PostgreSQL）', { skip: DATABASE_URL === undefined 
       db: db(),
       txDb: db(),
       embeddings: fakeEmbeddings(),
+      // 首个登记版本即生效版本（登记器的语义），因此这里回报 isActive: true。
       ensureEmbeddingRevision: async (registeredEngagementId, descriptor) => {
         registered.push({ engagementId: registeredEngagementId, ...descriptor });
+        return { isActive: true };
       },
     });
     const first = await insertEvent({ eventType: 'human.input', chainSeq: 4201, payload: { text: '第一条' } });
@@ -314,6 +316,30 @@ describe('索引器（真实 PostgreSQL）', { skip: DATABASE_URL === undefined 
     const third = await insertEvent({ eventType: 'human.input', chainSeq: 4203, payload: { text: '第三条' } });
     const lexicalResult = await lexical.indexEvent(engagementId, sourceEvent(third));
     assert.equal(lexicalResult.lexicalOnly, true);
+  });
+
+  test('提供方版本不是生效版本时拒绝索引：写出检索看不见的分块等于静默丢失（REQ-11 后半）', async () => {
+    // 换提供方/换模型后，登记会把新版本写成**非生效**（首个登记版本才自动生效）；
+    // 检索侧只读生效版本的分块，因此继续索引会写出谁也看不见的内容，
+    // 而索引状态看起来一切正常。这里钉住「响亮拒绝 + 给出两步处置」。
+    const indexer = new MemoryIndexer({
+      db: db(),
+      txDb: db(),
+      embeddings: fakeEmbeddings(),
+      ensureEmbeddingRevision: async () => ({ isActive: false }),
+    });
+    const eventId = await insertEvent({ eventType: 'human.input', chainSeq: 4301, payload: { text: '换模型后的第一条' } });
+    const before = await countChunks();
+    await assert.rejects(
+      () => indexer.indexEvent(engagementId, sourceEvent(eventId)),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'embedding_revision_inactive');
+        assert.match(String((error as Error).message), /重建索引/);
+        assert.match(String((error as Error).message), /生效版本/);
+        return true;
+      },
+    );
+    assert.equal(await countChunks(), before, '被拒绝的事件不得留下任何分块');
   });
 
   test('幂等：同一事件索引两次，第二次全部命中跳过且不重复落库', async () => {

@@ -67,8 +67,10 @@ export const INDEX_STRATEGY_VERSION = 'index-v1';
  * `target_not_adjudicated` 是契约里的稳定码（§8.6 写入侧义务）：它的处置不是
  * 「等基础设施恢复」而是「去登记资产」，因此必须与网络/嵌入故障区分开。
  * `invalid_session_phase` 是索引器自身的完整性故障（见 {@link toPhase}）。
+ * `embedding_revision_inactive` 见 {@link MemoryIndexer} 的版本登记：写出检索面
+ * 看不见的分块等于静默丢失，必须响亮拒绝。
  */
-export type IndexerErrorCode = ErrorCode | 'invalid_session_phase';
+export type IndexerErrorCode = ErrorCode | 'invalid_session_phase' | 'embedding_revision_inactive';
 
 /**
  * 索引器故障：携带稳定码，供调度器与观测分支，而不是靠解析文本。
@@ -98,11 +100,14 @@ export interface IndexerDeps {
   /**
    * 嵌入版本登记（§9.1）。首次索引某个版本时登记它，使检索侧的「只取生效版本」
    * 过滤真正生效；不接时那道过滤是空转（没有活跃版本 → 不过滤），跨版本混比防护不存在。
+   *
+   * 必须回报 `isActive`：生效版本决定检索面读哪些分块，因此「本次要写的这个版本
+   * 是不是生效版本」是索引能不能落库的前提（见 {@link #registerRevision}）。
    */
   readonly ensureEmbeddingRevision?: (
     engagementId: string,
     descriptor: EmbeddingDescriptor,
-  ) => Promise<void>;
+  ) => Promise<{ readonly isActive: boolean }>;
   readonly chunking?: ChunkingOptions;
   /**
    * 检索文本投影（§8.6「中文内容在应用层做分词与双字词投影，不把特定扩展
@@ -436,18 +441,33 @@ export class MemoryIndexer {
    * 不登记时检索侧的「只取活跃版本」过滤是空转的（没有活跃行就不加过滤），
    * 跨版本混比防护从未生效（事故 2026-10-05：登记器生产零调用）。
    * 每个 engagement 只在进程内登记一次；登记器本身也是幂等的。
+   *
+   * **非生效版本必须拒绝索引**（2026-10-05 复核 REQ-11 后半）：检索侧只读生效
+   * 版本的分块，因此「登记成功但未生效」时继续写分块 = 写出谁也看不见的内容，
+   * 而且**没有任何地方会报错**——索引状态看着正常，检索面悄悄少内容。
+   * 换提供方/换模型后必须先重建索引、再切换生效版本（§15.5「切换版本后触发
+   * 全量重建」，设计 §3850），因此这里的失败消息直接给出这两步。
    */
   async #registerRevision(engagementId: string): Promise<void> {
     const register = this.#ensureEmbeddingRevision;
     const provider = this.#embeddings;
     if (register === undefined || provider === undefined) return;
     if (this.#registeredRevisions.has(engagementId)) return;
-    await register(engagementId, {
+    const record = await register(engagementId, {
       model: provider.model,
       dimensions: provider.dimensions,
       revision: provider.revision,
     });
     this.#registeredRevisions.add(engagementId);
+    if (!record.isActive) {
+      throw new IndexerError(
+        'embedding_revision_inactive',
+        `嵌入版本 ${provider.revision} 已登记但不是本 engagement 的生效版本`,
+        '继续索引会写出检索面（只读生效版本）看不见的分块，因此拒绝；' +
+          '处置：先用当前提供方重建索引（reindex_engagement），重建完成后再把生效版本切到 ' +
+          `${provider.revision}；在那之前请把提供方配置回退到原版本`,
+      );
+    }
   }
 
   /**
@@ -951,6 +971,11 @@ export class MemoryIndexer {
     readonly detail: string | null;
     /** 与账本最大序号之差，即「可能遗漏多少条」。 */
     readonly lagEvents: number;
+    /**
+     * 记录在案的索引策略版本（§9.1 版本分离）。与 {@link INDEX_STRATEGY_VERSION}
+     * 不一致即「这份索引由旧策略生成」，需要重建——调度器据此入队重建任务。
+     */
+    readonly strategyVersion: string;
   }> {
     const r = await this.#db.query<WatermarkRow & { indexed_through_occurred_at: string | null; status: 'ready' | 'lagging' | 'failed'; last_error: string | null }>(
       `select last_chain_seq, indexed_through_occurred_at, status, last_error, strategy_version
@@ -970,6 +995,8 @@ export class MemoryIndexer {
       status: row?.status ?? 'ready',
       detail: row?.last_error ?? null,
       lagEvents: Math.max(0, max - last),
+      // 没有水位行时给出当前常量：那表示「还没建过索引」，不是「按旧策略建的」。
+      strategyVersion: row?.strategy_version ?? INDEX_STRATEGY_VERSION,
     };
   }
 }

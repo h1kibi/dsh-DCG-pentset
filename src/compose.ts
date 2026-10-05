@@ -1087,9 +1087,10 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     txDb,
     ...(config.embeddings === undefined ? {} : { embeddings: config.embeddings }),
     ...(embeddingRevisions === undefined ? {} : {
-      ensureEmbeddingRevision: async (engagementId, descriptor) => {
-        await embeddingRevisions.ensureRevision(engagementId, descriptor);
-      },
+      // 直接把记录交回索引器：`isActive` 决定这批分块会不会被检索面读到，
+      // 因此索引器必须看到它（非生效版本要拒绝写入，见 indexer.ts 的版本登记）。
+      ensureEmbeddingRevision: async (engagementId, descriptor) =>
+        embeddingRevisions.ensureRevision(engagementId, descriptor),
     }),
     ...(config.projectForSearch === undefined ? {} : { projectForSearch: config.projectForSearch }),
   });

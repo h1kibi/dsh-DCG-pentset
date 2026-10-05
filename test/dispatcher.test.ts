@@ -16,10 +16,11 @@ import {
   IndexDispatcher,
   INDEX_EVENT_JOB,
   INDEX_MEMORY_ITEM_JOB,
+  REINDEX_BATCH_BUDGET,
   REINDEX_ENGAGEMENT_JOB,
 } from '../src/memory/dispatcher.ts';
 import { PgOutboxQueue } from '../src/memory/outbox.ts';
-import { MemoryIndexer } from '../src/memory/indexer.ts';
+import { INDEX_STRATEGY_VERSION, MemoryIndexer } from '../src/memory/indexer.ts';
 import { MemoryLedger } from '../src/memory/ledger.ts';
 import { LedgerIndexEnqueue } from '../src/memory/index-enqueue.ts';
 import type { DbClient } from '../src/memory/ledger.ts';
@@ -529,5 +530,181 @@ describe('索引调度器（真实 PostgreSQL）', { skip: DATABASE_URL === unde
     assert.equal(wm.lastChainSeq, 2, '重建应把水位推到账本头部');
     assert.equal(wm.lagEvents, 0);
     assert.equal(wm.status, 'ready');
+  });
+
+  test('策略版本落后的 engagement 自动入队重建；每个策略版本只入队一次（REQ-11 后半的生产端）', async () => {
+    // `reindex_engagement` 此前只有消费者没有生产者：整条「策略变更后重建」的
+    // 承诺没有落点（2026-10-05 复核）。这里钉住生产端的行为与幂等性。
+    const { engagementId } = await seed();
+    const d = db();
+    const outbox = new PgOutboxQueue(d);
+    const indexer = new MemoryIndexer({ db: d, txDb: d, embeddings: fakeEmbeddings });
+    const dispatcher = new IndexDispatcher({ outbox, indexer, db: d });
+
+    // 一条「按旧策略建过」的水位行。
+    await pool.query(
+      `insert into pentest.index_watermarks (engagement_id, last_chain_seq, status, strategy_version)
+       values ($1::uuid, 0, 'ready', 'index-v0')`,
+      [engagementId],
+    );
+    const jobCount = async (): Promise<string> => {
+      const r = await pool.query<{ n: string }>(
+        `select count(*)::text as n from pentest.outbox_jobs
+          where engagement_id = $1::uuid and job_type = 'reindex_engagement'`,
+        [engagementId],
+      );
+      return r.rows[0]!.n;
+    };
+
+    assert.deepEqual(await dispatcher.enqueueStaleStrategyRebuilds(10), [engagementId], '策略落后必须入队重建');
+    assert.equal(await jobCount(), '1');
+    // 幂等：同一个目标策略版本再扫多少次都只有一条任务
+    assert.deepEqual(await dispatcher.enqueueStaleStrategyRebuilds(10), []);
+    assert.equal(await jobCount(), '1', '重复扫描不得产生重复任务');
+
+    // 水位升到当前策略后不再入队（重建跑过一批就会这样）
+    await pool.query(
+      `update pentest.index_watermarks set strategy_version = $2 where engagement_id = $1::uuid`,
+      [engagementId, INDEX_STRATEGY_VERSION],
+    );
+    assert.deepEqual(await dispatcher.enqueueStaleStrategyRebuilds(10), []);
+    assert.equal(await jobCount(), '1');
+  });
+});
+
+// ───────────────────── 重建的续跑语义（单元：不起数据库） ─────────────────────
+
+/**
+ * 这一组只钉两件事，都是 2026-10-05 复核发现的行为缺陷（REQ-10）：
+ *   1. 预算耗尽**不得**报 done——否则「建完了」是假的：队列与索引状态看着正常，
+ *      水位却停在半路；
+ *   2. 重试**不得**重置水位——每次都从 0 重扫的话，>5000 事件的 engagement 在这套
+ *      代码下永远建不完。
+ *
+ * 假件只实现本组走到的方法（`as unknown as` 是本仓既有约定，见
+ * `test/client-gate-views.test.ts` 的说明）。
+ */
+describe('重建的续跑语义（单元）', () => {
+  function fakeDeps(input: {
+    readonly recordedStrategyVersion?: string;
+    /** `runOnce` 的返回值序列；用尽后重复最后一个。 */
+    readonly runStatus?: readonly ('ready' | 'lagging' | 'failed')[];
+  } = {}) {
+    const resets: number[] = [];
+    const runs: string[] = [];
+    const completed: string[] = [];
+    const failed: string[] = [];
+    const statuses = input.runStatus ?? ['lagging'];
+    let call = 0;
+
+    const indexer = {
+      async watermark() {
+        return {
+          lastChainSeq: 0,
+          occurredAt: null,
+          status: 'ready' as const,
+          detail: null,
+          lagEvents: 0,
+          strategyVersion: input.recordedStrategyVersion ?? INDEX_STRATEGY_VERSION,
+        };
+      },
+      async resetWatermark() {
+        resets.push(resets.length);
+      },
+      async runOnce() {
+        const status = statuses[Math.min(call, statuses.length - 1)]!;
+        call += 1;
+        runs.push(status);
+        return {
+          engagementId: 'e1',
+          fromChainSeq: 0,
+          toChainSeq: 0,
+          eventsProcessed: status === 'ready' ? 0 : 100,
+          chunksInserted: 0,
+          status,
+          detail: status === 'lagging' ? '本批已满 100 条，仍有未索引事件' : null,
+        };
+      },
+      async indexEventById(): Promise<never> {
+        throw new Error('本组不该走按事件索引');
+      },
+    };
+
+    const outbox = {
+      async claim() {
+        return [
+          {
+            id: '1',
+            engagementId: 'e1',
+            jobType: REINDEX_ENGAGEMENT_JOB,
+            entityId: 'e1',
+            idempotencyKey: 'k',
+            status: 'leased' as const,
+            attempts: 0,
+            availableAt: new Date(),
+            leaseUntil: new Date(),
+            lastError: null,
+            createdAt: new Date(),
+          },
+        ];
+      },
+      async complete(id: string) {
+        completed.push(id);
+        return true;
+      },
+      async fail(id: string, error: string) {
+        failed.push(error);
+        return null;
+      },
+      async enqueue(): Promise<never> {
+        throw new Error('本组不该入队');
+      },
+    };
+
+    const db = {
+      async query(): Promise<never> {
+        throw new Error('本组不该查库');
+      },
+    };
+
+    const dispatcher = new IndexDispatcher({
+      outbox: outbox as unknown as PgOutboxQueue,
+      indexer: indexer as unknown as MemoryIndexer,
+      db: db as unknown as DbClient,
+    });
+    return { dispatcher, resets, runs, completed, failed };
+  }
+
+  test('预算耗尽：不报 done、走失败路径，且水位不重置（重试从断点续跑）', async () => {
+    const h = fakeDeps({ runStatus: ['lagging'] });
+    const batch = await h.dispatcher.dispatchBatch('e1');
+    assert.equal(batch.completed, 0, '预算耗尽不得算完成');
+    assert.equal(batch.failed, 1, '未完成必须落到失败路径（退避→死信，从而可见）');
+    assert.match(h.failed[0]!, /未完成/);
+    assert.match(h.failed[0]!, /从断点继续/);
+    assert.equal(h.resets.length, 0, '策略版本一致时不得重置水位——那会让重试从 0 重扫');
+    assert.equal(h.runs.length, REINDEX_BATCH_BUDGET, '一个回合用满批预算');
+  });
+
+  test('索引由旧策略生成：重置水位一次（从头重建）', async () => {
+    const h = fakeDeps({ recordedStrategyVersion: 'index-v0', runStatus: ['ready'] });
+    await h.dispatcher.dispatchBatch('e1');
+    assert.equal(h.resets.length, 1, '旧策略的索引必须从 0 重建');
+    assert.equal(h.completed.length, 1);
+  });
+
+  test('追平账本：报 done，且不重置水位', async () => {
+    const h = fakeDeps({ runStatus: ['ready'] });
+    const batch = await h.dispatcher.dispatchBatch('e1');
+    assert.equal(batch.completed, 1);
+    assert.equal(h.failed.length, 0);
+    assert.equal(h.resets.length, 0);
+  });
+
+  test('水位卡在 failed：任务失败（不得因「循环结束」而报 done）', async () => {
+    const h = fakeDeps({ runStatus: ['failed'] });
+    const batch = await h.dispatcher.dispatchBatch('e1');
+    assert.equal(batch.completed, 0);
+    assert.match(h.failed[0]!, /重建未完成/);
   });
 });

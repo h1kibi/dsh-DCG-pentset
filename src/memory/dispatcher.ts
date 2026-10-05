@@ -41,13 +41,22 @@
  */
 
 import type { DbClient } from './ledger.ts';
+import { deriveIdempotencyKey } from './outbox.ts';
 import type { OutboxQueue, ClaimedJob } from './outbox.ts';
+import { INDEX_STRATEGY_VERSION } from './indexer.ts';
 import type { MemoryIndexer, IndexEventResult } from './indexer.ts';
 
 /** 任务类型常量（与 `outbox.ts` 的取值表一致）。 */
 export const INDEX_EVENT_JOB = 'index_event';
 export const INDEX_MEMORY_ITEM_JOB = 'index_memory_item';
 export const REINDEX_ENGAGEMENT_JOB = 'reindex_engagement';
+
+/**
+ * 单次重建的批预算：`REINDEX_BATCH_BUDGET` 批 × `runOnce` 的 100 事件上限
+ * = 一个回合最多处理 5000 个事件。**不是**「建完了」的判据——用满即抛错走重试，
+ * 重试从水位断点续跑（见 `#reindex`）。
+ */
+export const REINDEX_BATCH_BUDGET = 50;
 
 /**
  * 单个任务的处理结论。
@@ -258,10 +267,76 @@ export class IndexDispatcher {
     return r.rows.map((row) => row.engagement_id);
   }
 
-  /** 对所有有待办任务的 engagement 各排空一轮。 */
+  /**
+   * 为「索引由旧策略生成」的 engagement 入队全量重建（§9.1 版本分离、§15.5）。
+   *
+   * ── 这是 `reindex_engagement` 的**生产端**（2026-10-05 复核 REQ-11 后半）──
+   *
+   * 此前该任务类型只有消费者没有生产者：「策略变更后重建」这句话没有落点，
+   * 水位里的 `strategy_version` 也就只是一个好看的时间戳——旧策略生成的索引
+   * 不会自行重建，而 §9.1 的版本分离正要求「识别哪些 engagement 按旧策略建过」。
+   *
+   * 幂等：幂等键的判别值取**目标策略版本**，同一版本每 engagement 只入队一次；
+   * 将来 `INDEX_STRATEGY_VERSION` 再变时自然拿到新键，不必人工清任务。
+   * 若那一版重建最终死信（例如坏事件），键已存在 ⇒ 不再重复入队，
+   * 但队列状态会显示 failed——可见的卡点优于静默的重试风暴。
+   *
+   * **只入队重建，不动分块**：重建自己按幂等推进（不删除、不切换嵌入版本）。
+   *
+   * 作用域：`index_watermarks` 是 FORCE RLS 表（006），无作用域时按租户级查询
+   * 会**静默返回零行**——因此有 `rlsScope` 时逐作业进入作用域，与
+   * `engagementsWithWork` 同一套做法。
+   */
+  async enqueueStaleStrategyRebuilds(limit = 50): Promise<readonly string[]> {
+    const scopes = this.#scopes;
+    if (scopes === undefined) return this.#enqueueStaleFor(null, limit);
+    const engagementIds = await scopes.listEngagementIds();
+    const enqueued: string[] = [];
+    for (const engagementId of engagementIds) {
+      if (enqueued.length >= limit) break;
+      enqueued.push(...(await scopes.run({ engagementId }, () => this.#enqueueStaleFor(engagementId, 1))));
+    }
+    return enqueued;
+  }
+
+  /** 在给定作用域内挑出策略版本落后的 engagement 并各入队一个重建任务。 */
+  async #enqueueStaleFor(engagementId: string | null, limit: number): Promise<readonly string[]> {
+    const rows = await this.#db.query<{ engagement_id: string }>(
+      `select engagement_id
+         from pentest.index_watermarks
+        where strategy_version <> $1
+          and ($2::uuid is null or engagement_id = $2::uuid)
+        order by updated_at
+        limit $3`,
+      [INDEX_STRATEGY_VERSION, engagementId, limit],
+    );
+    const enqueued: string[] = [];
+    for (const row of rows.rows) {
+      const result = await this.#outbox.enqueue({
+        engagementId: row.engagement_id,
+        jobType: REINDEX_ENGAGEMENT_JOB,
+        entityId: row.engagement_id,
+        idempotencyKey: deriveIdempotencyKey({
+          jobType: REINDEX_ENGAGEMENT_JOB,
+          entityId: row.engagement_id,
+          discriminator: INDEX_STRATEGY_VERSION,
+        }),
+      });
+      if (result.created) enqueued.push(row.engagement_id);
+    }
+    return enqueued;
+  }
+
+  /**
+   * 对所有有待办任务的 engagement 各排空一轮。
+   *
+   * **先补入队**：策略版本落后的 engagement 在入队前是「没有待办任务」的，
+   * 永远进不了 `engagementsWithWork` 的结果——生产者必须走在发现之前。
+   */
   async drainAll(
     options: { readonly maxEngagements?: number; readonly maxBatches?: number; readonly limit?: number } = {},
   ): Promise<readonly DrainResult[]> {
+    await this.enqueueStaleStrategyRebuilds(options.maxEngagements ?? 50);
     const engagements = await this.engagementsWithWork(options.maxEngagements ?? 50);
     const out: DrainResult[] = [];
     for (const engagementId of engagements) {
@@ -313,15 +388,29 @@ export class IndexDispatcher {
    * 重置水位后按批推进，直到水位追平账本或耗尽预算。**不删除已有分块**——
    * 理由见 `MemoryIndexer.resetWatermark` 的注释：先删后建会让检索面在重建
    * 期间完全为空，而保留旧分块的降级是「内容略旧」，后者更可接受。
+   *
+   * ── 两条被复核改掉的语义（2026-10-05 复核 REQ-10）──
+   *
+   * 1. **只在「索引由旧策略生成」时重置水位**，而不是每次尝试都重置。
+   *    每次重置 = 每次都从 0 重扫，于是预算耗尽后的重试永远回到起点，
+   *    >5000 个事件的 engagement 在这套代码下**永远建不完**（水位停在半路，
+   *    任务却报 done）。判定用记录在案的 `strategy_version`：与当前策略一致
+   *    就从水位处继续（重试即续跑），不一致才从头重建。
+   * 2. **预算耗尽不得报 done**。50 批 × 100 事件只是一个回合的上限，
+   *    不是「建完了」的证据；继续返回 done 会让队列与索引状态看起来正常，
+   *    而水位停在半路。改为抛错 → 走重试（退避→死信），并因第 1 条而从断点续跑。
    */
   async #reindex(job: ClaimedJob): Promise<JobOutcome> {
-    await this.#indexer.resetWatermark(job.engagementId);
+    const recorded = await this.#indexer.watermark(job.engagementId);
+    if (recorded.strategyVersion !== INDEX_STRATEGY_VERSION) {
+      await this.#indexer.resetWatermark(job.engagementId);
+    }
     let events = 0;
     let chunks = 0;
     let lastStatus: 'ready' | 'lagging' | 'failed' = 'ready';
     let lastDetail: string | null = null;
-    // 上限防止单个任务无限占用：剩余部分由下一次 reindex 任务或定期 drain 继续。
-    for (let i = 0; i < 50; i += 1) {
+    // 上限防止单个任务无限占用：剩余部分由重试或下一个 reindex 任务继续（续跑）。
+    for (let i = 0; i < REINDEX_BATCH_BUDGET; i += 1) {
       const run = await this.#indexer.runOnce(job.engagementId);
       events += run.eventsProcessed;
       chunks += run.chunksInserted;
@@ -344,9 +433,17 @@ export class IndexDispatcher {
       );
     }
 
+    // 预算耗尽（仍是 lagging）= 还没建完。水位已推进到断点，因此重试从断点继续。
+    if (lastStatus === 'lagging') {
+      throw new Error(
+        `全量重建未完成（本回合已用满 ${String(REINDEX_BATCH_BUDGET)} 批预算，处理 ${String(events)} 个事件）：` +
+          `${lastDetail ?? '仍有未索引事件'}。水位已推进到断点，重试会从断点继续（不是从 0 重扫）。`,
+      );
+    }
+
     return {
       kind: 'done',
-      detail: `全量重建：处理 ${events} 个事件、写入 ${chunks} 块，水位状态 ${lastStatus}`,
+      detail: `全量重建：处理 ${events} 个事件、写入 ${chunks} 块，水位已追平账本`,
       chunksInserted: chunks,
     };
   }
