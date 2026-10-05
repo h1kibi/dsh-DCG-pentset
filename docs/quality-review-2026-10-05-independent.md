@@ -681,6 +681,7 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 | `installIndexing({config, readDb, txDb})` | `IndexingInstallation` = `{outbox, ledger, indexer}` | 队列与写连接同源的理由、锚点与账本共用写连接（避免死锁）、版本登记器与索引器的接线 |
 | `installExecution({config, readDb, txDb, ledger, workflow})` | `ExecutionInstallation` = `{policy, approvalPlanValidator, auditProbe, execution}` | 策略/会话目录/动作策略、沙箱与执行存储、审计探针、闸门失败 sink（见下） |
 | `installWorkflow({config, pool, readDb, txDb, rlsContext, rlsScopePort, ledger, execution, policy, approvalPlanValidator, workflow})` | `WorkflowInstallation` = `{leases, workflow, workerTools, reportFace, leaseRlsContextForSession}` | 租约（含逐会话的作业反查）、Worker 工具面、工作流服务；报告面因被工作流与控制台**共用**而作为产物给出 |
+| `installConsole({config, pool, readDb, ledger, outbox, auditProbe, workflow, reportFace, leaseRlsContextForSession, rlsContext, rlsScopePort})` | `ConsoleInstallation` = `{consoleRpc, memoryFace, diagnosticsFace, skillFace}` | 四个服务面（分开构造：各自依赖不同）、出口白名单同步（人类确认范围的机械投影，属控制台动作）、RPC 入口与其内部错误落日志 |
 
 **闸门失败 sink 先独立成模块**（`src/execution/gate-failures.ts`）：它不是接线而是**服务**
 （写账本事件 + 数范围违规 + 达阈值请求系统暂停，约 100 行）。抽出后：
@@ -699,15 +700,14 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 顺带具名化三处此前只能靠内联形状表达的类型：`TxDbPort`（`createTxDb` 的产物）、
 `BackgroundScopes`（后台循环的作用域端口）、`GateFailureLedger`（闸门 sink 的账本端口）。
 
-**度量**：`compose()` **880 → 449 行**（4/5 安装器）；`compose.test.ts` **48/48**
+**度量**：`compose()` **880 → 349 行**（5/5 安装器）；`compose.test.ts` **48/48**
 （其中一条覆盖本次搬动的暂停路径：`system_auto_pause:scope_violation_threshold`）；
 全量套件通过。
 
-### 未完成（明确记录，不冒充完成）
+### 复核清单已全部落地（5/5）
 
-| 剩余 | 状态 |
-|---|---|
-| `installConsole`（记忆/诊断/skill 四个服务面 + 控制台 RPC） | **边界已定**：输入 `{config, pool, readDb, txDb, ledger, outbox, auditProbe, workflow, reportFace, leaseRlsContextForSession, rlsContext, rlsScopePort}`，产物 `{consoleRpc, memoryFace, diagnosticsFace, skillFace}`（`consoleServices` 只在内部用）。~116 行，纯机械延展 |
-| 预算与活性块（§10.5，~228 行） | 复核的安装器清单里**没有**它，但它是 `compose()` 剩余长度的主体——真正到「≈200 行编排」还需要第 6 个安装器（`installBudget`），边界要单独设计 |
+`installDatabase` / `installIndexing` / `installExecution` / `installWorkflow` / `installConsole`——每个都有具名输入与产物，内部细节（为什么共用写连接、为什么晚绑定、为什么报告面共享实例、为什么四个面分开构造）都随代码移动。
 
-模式已立住（具名产物 + 单点装配 + 服务先独立成模块）：`compose()` 880 → **449** 行，4/5 安装器落地。
+### 剩余（复核清单之外，明确记录）
+
+`compose()` 仍是 349 行——剩下的主体是**预算与活性块**（§10.5，~228 行：dsh-budget 端口绑定、步骤累计、预算告警与系统暂停）与对账/心跳入口（~40 行）。复核的安装器清单里**没有**预算这一项，且它不是纯接线（它持有状态：绑定表、链式队列、观察器），要继续压缩需要第 6 个安装器（`installBudget`），边界要单独设计——已记入待办，不在本轮冒充完成。

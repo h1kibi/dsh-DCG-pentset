@@ -1492,44 +1492,42 @@ export function installWorkflow(input: {
   return { leases, workflow, workerTools, reportFace, leaseRlsContextForSession };
 }
 
-/** 装配全部服务。 */
-export function compose(config: ComposeConfig): ComposedPlugin {
-  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
-  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
-  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
-    throw new Error(
-      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
-    );
-  }
-  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
-  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+/** `installConsole` 的产物：控制台 RPC 与它背后的四个服务面。 */
+export interface ConsoleInstallation {
+  readonly consoleRpc: ConsoleRpc;
+  readonly memoryFace: PgMemoryQueryService;
+  readonly diagnosticsFace: PgDiagnosticsService;
+  readonly skillFace: PgSkillService;
+}
 
-  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
-  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
-  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
-  let workflowRef: PgWorkflowService | null = null;
-  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
-    config,
-    readDb,
-    txDb,
-    ledger,
-    workflow: () => workflowRef,
-  });
-
-  const { leases, workflow, workerTools, reportFace, leaseRlsContextForSession } = installWorkflow({
-    config,
-    pool,
-    readDb,
-    txDb,
-    rlsContext,
-    rlsScopePort,
-    ledger,
-    execution,
-    policy,
-    approvalPlanValidator,
-    workflow: () => workflowRef,
-  });
-  workflowRef = workflow;
+/**
+ * 安装控制台层（§6）：四个服务面 + 出口白名单同步 + RPC 入口。
+ *
+ * ── 边界 ──
+ *
+ * * 四个面分开构造而不是一个大对象（每个面的依赖不同：报告要 txDb、记忆要嵌入查询钩子、
+ *   skill 要审计归属、诊断要连接池与审计探针）——混在一起会让「谁依赖什么」变模糊。
+ * * 报告面**不由本层构造**：工作流的签字/取代要用同一个实例，它已经在
+ *   `installWorkflow` 里建好并作为产物给出。
+ * * 出口白名单同步（`withEgressSyncFor`）随本层移动：它是「人类确认范围」这条**控制台**动作的
+ *   附带投影（白名单 = 已确认范围的机械投影），不属于工作流本身。
+ * * `resolveEngagement` 用 `installWorkflow` 给出的同一条会话→作业反查：
+ *   控制台与租约两条路径对归属的判断必须一致。
+ */
+export function installConsole(input: {
+  readonly config: ComposeConfig;
+  readonly pool: Pool;
+  readonly readDb: DbClient;
+  readonly ledger: MemoryLedger;
+  readonly outbox: PgOutboxQueue;
+  readonly auditProbe: AuditProbe;
+  readonly workflow: PgWorkflowService;
+  readonly reportFace: PgReportService;
+  readonly leaseRlsContextForSession: LeaseRlsResolver | undefined;
+  readonly rlsContext: RuntimeRlsContext | undefined;
+  readonly rlsScopePort: RlsScopePort;
+}): ConsoleInstallation {
+  const { config, pool, readDb, ledger, outbox, auditProbe, workflow, reportFace, leaseRlsContextForSession, rlsContext, rlsScopePort } = input;
 
   const memoryFace = new PgMemoryQueryService(readDb, {
     ledger,
@@ -1645,6 +1643,62 @@ export function compose(config: ComposeConfig): ComposedPlugin {
     ...(leaseRlsContextForSession === undefined
       ? {}
       : { resolveEngagement: async (workerSessionId: string) => (await leaseRlsContextForSession(workerSessionId))?.engagementId ?? null }),
+  });
+
+  return { consoleRpc, memoryFace, diagnosticsFace, skillFace };
+}
+
+/** 装配全部服务。 */
+export function compose(config: ComposeConfig): ComposedPlugin {
+  // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
+  // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。
+  if (typeof config.ledgerSecret !== 'string' || config.ledgerSecret === '') {
+    throw new Error(
+      'ledgerSecret 未配置：账本签名密钥必须由部署注入（环境变量 PENTEST_LEDGER_SECRET），不再提供仓库内默认值',
+    );
+  }
+  const { pool, readDb, txDb, txPort, rlsContext, rlsScopePort, backgroundScopes } = installDatabase(config);
+  const { outbox, ledger, indexer } = installIndexing({ config, readDb, txDb });
+
+  // 系统暂停需要 workflow，而 workflow 在本文件后面才构造（它依赖 leases/ledger）。
+  // 用一个可变引用打破这个先后：sink 只在**运行时**（检测到阈值时）读它，
+  // 那时赋值早已完成。比把两个服务的构造顺序调换来调换去清晰。
+  let workflowRef: PgWorkflowService | null = null;
+  const { policy, approvalPlanValidator, auditProbe, execution } = installExecution({
+    config,
+    readDb,
+    txDb,
+    ledger,
+    workflow: () => workflowRef,
+  });
+
+  const { leases, workflow, workerTools, reportFace, leaseRlsContextForSession } = installWorkflow({
+    config,
+    pool,
+    readDb,
+    txDb,
+    rlsContext,
+    rlsScopePort,
+    ledger,
+    execution,
+    policy,
+    approvalPlanValidator,
+    workflow: () => workflowRef,
+  });
+  workflowRef = workflow;
+
+  const { consoleRpc, memoryFace, diagnosticsFace, skillFace } = installConsole({
+    config,
+    pool,
+    readDb,
+    ledger,
+    outbox,
+    auditProbe,
+    workflow,
+    reportFace,
+    leaseRlsContextForSession,
+    rlsContext,
+    rlsScopePort,
   });
 
   // ── 预算与活性（§10.5）──
