@@ -52,6 +52,7 @@
     "verify:styles": "node scripts/verify-style-coverage.mjs",
     "verify:forward-migration": "node --experimental-strip-types scripts/verify-forward-migration.ts",
     "verify:promises": "node --experimental-strip-types scripts/verify-promises.ts",
+    "verify:typert-face": "node --experimental-strip-types scripts/verify-typert-face.ts",
     "db:verify": "node --experimental-strip-types scripts/verify-schema.ts"
   },
   "peerDependencies": {
