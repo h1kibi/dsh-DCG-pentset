@@ -17,7 +17,7 @@
  * 纯逻辑：不碰数据库、不创建会话、不调用模型。
  */
 
-import { HANDOFF_TRANSITION_TYPES, TRANSITION_TYPES } from '../contracts.ts';
+import { HANDOFF_TRANSITION_TYPES, TRANSITION_TYPES, advancesIteration } from '../contracts.ts';
 import type { ErrorCode, HandoffTransitionType, MainStatus, TransitionType } from '../contracts.ts';
 import { isLegalStatusEdge, statusEdgesFor } from './phases.ts';
 
@@ -227,7 +227,9 @@ export function validateDispatchTable(
     }
 
     const advances = row.iterationDelta > 0;
-    if (advances !== (key === 'loop')) {
+    // 规则的单源在 `contracts.ts` 的 `advancesIteration()`（「只有回环递增迭代」）：
+    // 这里改为**消费它**而不是再写一遍字面量，避免两处对「哪个转移递增」产生分歧。
+    if (advances !== advancesIteration(row.type)) {
       problems.push({
         kind: 'iteration_not_only_loop',
         type: row.type,

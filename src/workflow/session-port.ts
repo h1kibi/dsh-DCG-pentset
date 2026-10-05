@@ -34,7 +34,7 @@
 
 import type { ActionClass, BehaviorProfile, BudgetLimits, Phase } from '../contracts.ts';
 
-/** 冻结到会话的能力快照。与 `agents/capability.ts` 的 `CapabilitySnapshot` 对齐。 */
+/** 冻结到会话的能力快照；来源是 `workflow/model.ts` 的 `ResolvedCapabilities`，经人类确认收窄后固化。 */
 export interface FrozenSessionInput {
   /** 工作流服务分配的会话标识（也是我们数据库里的 worker_sessions.id）。 */
   readonly workerSessionId: string;

@@ -39,7 +39,8 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "build": "npm run build:host && npm run build:client",
+    "clean": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\"",
+    "build": "npm run clean && npm run build:host && npm run build:client",
     "build:host": "tsc -p tsconfig.build.json",
     "prebuild:client": "node scripts/embed-font.mjs",
     "build:client": "tsdown",

@@ -10,7 +10,7 @@
  * 人类看到的、库里存的、事后复算的三者永远对不上（2026-10-05 实测：交接草稿
  * `stored ≠ recomputed`）。
  *
- * 本模块此前以两份复制存在（`agents/capability.ts` 的技能内容哈希与
+ * 本模块此前以两份复制存在（`agents/capability.ts`（该文件已删除）的技能内容哈希与
  * `workflow/handoff.ts` 的交接哈希）；合并到一处后，差异只有调用点。
  *
  * ── 与 `memory/hash.ts` 的 `canonicalize()` 的区别（**不要**混用）──

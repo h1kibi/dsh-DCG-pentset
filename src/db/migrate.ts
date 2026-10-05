@@ -94,10 +94,6 @@ export interface MigrateResult {
   readonly codeVersion: number;
 }
 
-export interface CountRow {
-  readonly n: number;
-}
-
 /**
  * 把迁移文件切成可独立执行的语句。
  * 追踪单引号、双引号、行注释、块注释（支持嵌套）与 dollar-quote，

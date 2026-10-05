@@ -48,13 +48,14 @@ import type { HostRpcResult } from '../console/rpc.ts';
 import { ConsoleController } from './controller.ts';
 import type { ConsoleSnapshot } from './controller.ts';
 import { useConsoleSnapshot, useInitialLoad } from './hooks.ts';
-import { buildPanels, buildRunControls, toMemoryHits } from './panels.ts';
+import { buildPanels, toMemoryHits } from './panels.ts';
 import { ConsoleShell } from './views/ConsoleShell.tsx';
 import { ErrorBar } from './ui.tsx';
 import type { ConsolePanel } from './views/ConsoleShell.tsx';
 import { SessionChat } from './views/SessionChat.tsx';
 import { AgentTrace } from './views/AgentTrace.tsx';
 import { DiagnosticsCard } from './views/DiagnosticsCard.tsx';
+import { RunControls } from './views/RunControls.tsx';
 import { activeWorkerSessionOf } from './session-chat.ts';
 import {
   IntakePrompt,
@@ -778,7 +779,7 @@ function ConsoleApp(props: {
   );
 
   const runControls = useMemo(
-    () => buildRunControls({ controller: props.controller, snapshot, now: new Date() }),
+    () => createElement(RunControls, { controller: props.controller, snapshot, now: new Date() }),
     [props.controller, snapshot],
   );
 

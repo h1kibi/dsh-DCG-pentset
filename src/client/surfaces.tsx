@@ -269,16 +269,6 @@ export function PentestStatusPill(props: {
 
 // ───────────────────────────── 数据接入 ─────────────────────────────
 
-/** 判定「宿主正在问人」需要的最小 DOM 视图；用结构类型是为了让它能被纯函数测试。 */
-export interface HostDomNodeLike {
-  readonly getClientRects?: () => { readonly length: number };
-  /** 用于排除插件自家 UI。测试替身可以不给（不给即视为「不在自家 UI 里」）。 */
-  readonly closest?: (selector: string) => unknown;
-}
-export interface HostDomRootLike {
-  querySelectorAll(selector: string): ArrayLike<HostDomNodeLike>;
-}
-
 export function StatusPillSurface(props: {
   readonly controller: ConsoleController;
   readonly onOpen: () => void;

@@ -119,7 +119,7 @@ export type TransitionType = (typeof TRANSITION_TYPES)[number];
 export const HANDOFF_TRANSITION_TYPES = ['advance', 'retry', 'loop', 'rollback'] as const;
 export type HandoffTransitionType = (typeof HANDOFF_TRANSITION_TYPES)[number];
 
-/** 递增迭代与范围版本的转移：只有回环。 */
+/** 递增迭代与范围版本的转移：只有回环。**规则的单源**——分派表校验器（`transition-table.ts`）消费它，不要另行硬编码。 */
 export function advancesIteration(t: TransitionType): boolean {
   return t === 'loop';
 }

@@ -50,6 +50,61 @@ const PROMISES: readonly PromiseEntry[] = [
     status: 'wired',
     note: '索引器首次索引时登记（compose 注入），检索侧的活跃版本过滤依赖它',
   },
+  // ── 2026-10-05 删除测试复核登记的未接线项（附录 E.1 / G）──
+  // 这些不是死代码：它们是**已实现、已测试、但没有运行时消费者**的能力。删它们会
+  // 连「能力存在过」的唯一证据一起删掉，所以登记为 pending（处置方向写进 note）。
+  {
+    symbol: 'LivenessMonitor',
+    file: 'src/workflow/budget.ts',
+    status: 'pending',
+    note:
+      '§10.5 进度活性（检查点 / 连续工具失败 / 上下文压力）已实现，唯一构造点是 compose.ts 的 createLiveness 导出，'
+      + '无任何调用者；设计文档 doc:3750 的 liveness: 配置段在代码中不存在。'
+      + '接线形态：由持有会话回合边界的调用方按会话构造并驱动检查点',
+    forwarders: ['src/compose.ts'],
+  },
+  {
+    symbol: 'planCompaction',
+    file: 'src/memory/compaction.ts',
+    status: 'pending',
+    note:
+      '§8.10 压缩算法（保留集 / 截断 / 压缩区间 / 逐级压缩链）1226 行仅被 test/compaction.test.ts 消费；'
+      + '阻塞在宿主侧能力（回合边界 effect 点、模型客户端、SessionPort 的 replace 追加写），'
+      + '最小接线路径见设计文档 §8.10.0（doc:2243）——「只写 context.compacted 事件是假接线」',
+  },
+  {
+    symbol: 'enrichContextRefs',
+    file: 'src/workflow/handoff.ts',
+    status: 'pending',
+    note:
+      'doc:1670/1683 要求交接视图显示引用的来源与可信度、并允许人工补充引用；'
+      + '该纯函数（把 chunk 的 classification/trust_level/provisional 补回引用，匹配不到不猜）零调用，'
+      + '级联 ContextChunkMeta 只出现在它的签名里',
+  },
+  {
+    symbol: 'assertGraph',
+    file: 'src/workflow/phases.ts',
+    status: 'pending',
+    note:
+      '注释自称「启动自检」，但 src 内除定义外无调用（仅 test/phases.test.ts 用它）；'
+      + '即状态图合法性（含「只有回环递增迭代」）在运行期没有被校验。接线形态：在 apply/启动路径调用一次',
+  },
+  {
+    symbol: 'assertLeaseValid',
+    file: 'src/workflow/lease.ts',
+    status: 'pending',
+    note:
+      '**文档承诺未接线的安全规则**：doc:3607/4374 要求「跨任务提交被拒」，该检查（taskRef 比对，lease.ts:248）只在这里实现；'
+      + '生产三条租约判定路径（execution/admission.ts 的 leaseViolation、execution/pg-store.ts 的 leaseFailure、'
+      + 'renewLease 显式传 taskRef=null）都不比对任务绑定。接线前提：先定义「提交所属任务」的来源'
+      + '（当前 ExecutionPlan 与审批都不携带任务标识）',
+  },
+  {
+    symbol: 'validateLeaseForOperation',
+    file: 'src/workflow/lease.ts',
+    status: 'pending',
+    note: '同上：提交准入路径未接线（其 taskRef 比对是「跨任务提交被拒」的唯一实现，doc:3607/4374）',
+  },
 ];
 
 const SCAN_DIRS = ['src', 'scripts', 'test'] as const;

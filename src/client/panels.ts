@@ -48,7 +48,6 @@ import { ReportReview } from './views/ReportReview.tsx';
 import { ScopeManager } from './views/ScopeManager.tsx';
 import { SkillLibrary } from './views/SkillLibrary.tsx';
 import { PublicMemoryPanel } from './views/PublicMemoryPanel.tsx';
-import { RunControls } from './views/RunControls.tsx';
 import type { DispositionAction, DispositionInput, DispositionOutcome } from './views/ReportReview.tsx';
 import type {
   SkillAddInput,
@@ -254,24 +253,6 @@ export interface BuildPanelsInput {
   readonly onMemorySearch: (params: MemorySearchParams) => void;
   /** 人类点开一条命中的原文。 */
   readonly onMemoryExpand: (ref: MemoryExpandRef) => void;
-}
-
-/**
- * 构造运行控制节点。
- *
- * 与面板分开导出：它渲染在「总览与时间轴」**面板内部**（`ConsoleShellProps.runControls`），
- * 而不是作为一个独立面板——因为它不是「一块可切换的视图」，而是主线本身的一部分。
- */
-export function buildRunControls(input: {
-  readonly controller: ConsoleController;
-  readonly snapshot: ConsoleSnapshot;
-  readonly now: Date;
-}): ReactNode {
-  return createElement(RunControls, {
-    controller: input.controller,
-    snapshot: input.snapshot,
-    now: input.now,
-  });
 }
 
 /**

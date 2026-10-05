@@ -54,8 +54,6 @@ import {
   type LedgerSecret,
 } from './hash.ts';
 
-export { LedgerError } from './hash.ts';
-
 /** 事件 schema 版本（协议版本，§9.1）。改变哈希覆盖字段集时必须递增。 */
 export const EVENT_SCHEMA_VERSION = 1;
 

@@ -1,10 +1,15 @@
 /**
- * 控制台样式表：**入口与注入**。
+ * 控制台样式表：**入口、令牌层、装配与注入**。
  *
- * 样式本身按域拆在 `styles/` 下（令牌 / 基座 / 外壳 / 面板 / 会话），本文件只做三件事：
- *   1. 装配并导出 `PENTEST_CSS`（测试直接读它断言，见 `test/client-surfaces.test.ts`）；
- *   2. 幂等注入（模块工厂在同一页面生命周期里可能执行两次——HMR 或重复挂载）；
- *   3. 提供 `installConsoleStyles` 的降级语义（没有 DOM 时不抛，服务端渲染与测试都能用）。
+ * 样式按域拆在 `styles/` 下（基座 / 外壳 / 面板 / 会话）；本文件承担四件事：
+ *   1. **令牌层**：`@font-face`（随包发的 Cascadia Mono，base64 内联见 `./fontAssets.ts`）
+ *      与令牌块（挂在插件每个根元素上，选择器清单出自 `./design.ts`）——本目录下
+ *      **唯一**注入字面颜色的地方；
+ *   2. 装配并导出 `PENTEST_CSS`（测试直接读它断言，见 `test/client-surfaces.test.ts`）；
+ *   3. 幂等注入（模块工厂在同一页面生命周期里可能执行两次——HMR 或重复挂载）；
+ *   4. 提供 `installConsoleStyles` 的降级语义（没有 DOM 时不抛，服务端渲染与测试都能用）。
+ *
+ * 装配顺序固定：令牌 → 基座 → 外壳 → 面板 → 会话（后者可以覆盖前者）。
  *
  * ── 视觉方向（2026-10-04 人类确认）──
  *
@@ -14,9 +19,31 @@
  * `scripts/verify-style-coverage.mjs`（类名覆盖与令牌定义）两道闸门锁住。
  */
 
-import { PENTEST_CSS } from './styles/index.ts';
+import { tokenCss } from './design.ts';
+import { FONT_FAMILY, FONT_SRC } from './fontAssets.ts';
+import { BASE_CSS } from './styles/base.ts';
+import { SHELL_CSS } from './styles/shell.ts';
+import { PANELS_CSS } from './styles/panels.ts';
+import { CHAT_CSS } from './styles/chat.ts';
 
-export { PENTEST_CSS };
+/**
+ * 内联字体。
+ *
+ * `font-display:swap`：字体没就绪时先用等宽回退栈渲染，不做不可见文本占位——
+ * 这是本地面板，字节已经到了，swap 只会让首帧更快。
+ */
+export const FONT_FACE_CSS =
+  `@font-face{font-family:"${FONT_FAMILY}";` +
+  `src:url(${FONT_SRC}) format("truetype");` +
+  `font-weight:400;font-style:normal;font-display:swap}`;
+
+/** 令牌块。 */
+export const TOKENS_CSS = tokenCss();
+
+/** 注入到页面的完整样式表。 */
+export const PENTEST_CSS = [FONT_FACE_CSS, TOKENS_CSS, BASE_CSS, SHELL_CSS, PANELS_CSS, CHAT_CSS]
+  .filter((part) => part.length > 0)
+  .join('\n');
 
 /** 样式节点标记：同一个文档只插一次。 */
 const STYLE_MARKER = 'data-pentest-style';

@@ -114,8 +114,11 @@ const literalColors = [...cssText.matchAll(/(#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsl
 // ── 4. CSS 模板里不得出现反引号 ──
 // CSS 是模板字符串，注释里写一个反引号就把模板截断了：构建报的是「语法错误」，
 // 而行号指向注释——实测同一个人为此连踩两次。这里提前说清。
+//
+// 扫描面 = `styles/` 目录 + `styles.ts`（后者的令牌层也是模板字符串；跨域装配
+// 合并到这里之后，若不纳入就会有一段 CSS 逃出这条守卫）。
 const templateProblems = [];
-for (const file of walk(stylesDir)) {
+for (const file of [join(CLIENT, 'styles.ts'), ...walk(stylesDir)]) {
   const lines = readFileSync(file, 'utf8').split(/\r?\n/);
   let inside = false;
   for (const [index, line] of lines.entries()) {
