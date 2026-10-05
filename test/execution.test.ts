@@ -200,6 +200,14 @@ interface Harness {
   waitForSandboxCall(): Promise<void>;
 }
 
+/** 故障/窗口注入点（只为 GAP-3 / GAP-5 这类「时序窗口」回归测试存在）。 */
+interface HarnessHooks {
+  /** `commitRun` 成功之后、`execute` 继续之前调用（模拟等待窗口内的外部状态变化）。 */
+  readonly afterCommit?: () => void;
+  /** 返回 true 表示本次 `finishRun` 抛错。 */
+  readonly failFinishRun?: () => boolean;
+}
+
 function lease(overrides: Partial<SessionLease> = {}): SessionLease {
   return {
     id: 'lease-1',
@@ -241,6 +249,7 @@ function makeHarness(
   audit?: { available(): Promise<{ writable: boolean; detail: string }> },
   gateFailures?: GateFailureSink,
   executionAudit?: ExecutionAuditSink,
+  hooks?: HarnessHooks,
 ): Harness {
   let nowMs = Date.parse('2026-01-01T00:00:00Z');
   let actionPolicy: ActionPolicySnapshot = {
@@ -352,9 +361,13 @@ function makeHarness(
         approvals.set(input.approvalId, { ...record, consumedAt: new Date(nowMs) });
       }
       pending.set(input.toolRunId, { planHash: input.planHash, idempotencyKey: input.idempotencyKey });
+      // 窗口注入点：commitRun 与 sandbox.run 之间（GAP-3 的等待窗口回归测试用）。
+      hooks?.afterCommit?.();
       return { ok: true, executionToken: `tok-${input.toolRunId}` };
     },
     finishRun: async (toolRunId, result) => {
+      // 故障注入点：结算回写失败（GAP-5 回归测试用）。
+      if (hooks?.failFinishRun?.() === true) throw new Error('模拟结算回写失败（测试注入）');
       const entry = pending.get(toolRunId);
       if (entry === undefined) throw new Error(`未登记的运行：${toolRunId}`);
       finished.set(entry.idempotencyKey, {
@@ -1845,4 +1858,75 @@ test('沙箱启动前必写第二条 execution.policy.checked（带 toolRunId）
   assert.equal(blockedResult.error?.code, 'audit_unavailable');
   assert.equal(failing.sandbox.calls.length, 0, '审计不可用时不得触及目标（§15.1）');
   assert.equal(failing.store.finished.get(second.plan.idempotencyKey)?.result.status, 'blocked');
+});
+
+// ─────────────── 等待窗口（GAP-3）与结算回写（GAP-5）的回归锁 ───────────────
+
+test('等待窗口后复核：commitRun 之后租约被吊销，绝不启动沙箱（GAP-3 回归锁）', async () => {
+  const h = makeHarness(undefined, undefined, undefined, {
+    afterCommit: () => {
+      // 模拟「等待窗口内租约被吊销」：commit 已成功、沙箱尚未启动。
+      h.sessions.binding = binding({
+        lease: lease({ revokedAt: h.now(), revokedReason: 'human_revoke' }),
+      });
+    },
+  });
+  const decision = await h.admit();
+  if (decision.kind !== 'admitted') throw new Error('unreachable');
+  const result = await h.service.execute(decision.plan, new AbortController().signal);
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.error?.code, 'lease_revoked', '第二次复核必须看到被吊销的租约');
+  assert.equal(h.sandbox.calls.length, 0, '租约已失效就不得接触目标');
+  assert.equal(
+    h.store.finished.get(decision.plan.idempotencyKey)?.result.status,
+    'blocked',
+    '运行必须结算为 blocked，而不是停在 running',
+  );
+});
+
+test('等待窗口后复核：作业在窗口内被暂停，同样不启动沙箱（GAP-3 回归锁）', async () => {
+  const h = makeHarness(undefined, undefined, undefined, {
+    afterCommit: () => {
+      h.sessions.binding = binding({ engagementStatus: 'paused' });
+    },
+  });
+  const decision = await h.admit();
+  if (decision.kind !== 'admitted') throw new Error('unreachable');
+  const result = await h.service.execute(decision.plan, new AbortController().signal);
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.error?.code, 'engagement_halted');
+  assert.equal(h.sandbox.calls.length, 0, '作业已暂停就不得接触目标');
+});
+
+test('结算回写瞬时失败：重试成功即照常返回沙箱结果（GAP-5 回归锁）', async () => {
+  let failedOnce = false;
+  const h = makeHarness(undefined, undefined, undefined, {
+    failFinishRun: () => {
+      const fail = !failedOnce;
+      failedOnce = true;
+      return fail;
+    },
+  });
+  const decision = await h.admit();
+  if (decision.kind !== 'admitted') throw new Error('unreachable');
+  const result = await h.service.execute(decision.plan, new AbortController().signal);
+  assert.equal(result.status, 'completed', '瞬时失败必须靠重试救回来');
+  assert.equal(h.sandbox.calls.length, 1);
+});
+
+test('结算回写持续失败：有限重试后返回带运行 id 的结构化 blocked，而不是抛错（GAP-5 回归锁）', async () => {
+  let attempts = 0;
+  const h = makeHarness(undefined, undefined, undefined, {
+    failFinishRun: () => {
+      attempts += 1;
+      return attempts <= 3;
+    },
+  });
+  const decision = await h.admit();
+  if (decision.kind !== 'admitted') throw new Error('unreachable');
+  const result = await h.service.execute(decision.plan, new AbortController().signal);
+  assert.equal(attempts, 3, '必须恰好重试三次');
+  assert.equal(result.status, 'blocked');
+  assert.match(result.error?.message ?? '', /已执行/, '必须说清动作已执行，避免被误当成「没跑」');
+  assert.match(result.error?.message ?? '', /run-1/, '必须带上运行 id 供人工核查');
 });

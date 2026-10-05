@@ -198,6 +198,14 @@ export function buildDockerArgs(input: {
 /** docker 可执行文件名；要换 podman 之类只需改这一处（argv 自足，runner 不做假设）。 */
 export const DOCKER_BIN = 'docker';
 
+/**
+ * 超时/中止后 `docker rm -f` 的等待上限（毫秒）。
+ *
+ * 取 5s：守护进程正常时删除是毫秒级；卡住时说明运行时本身有问题，继续等只会拖长
+ * 调用链——而清理失败已经会打日志，操作者据此人工收口。
+ */
+const FORCE_REMOVE_TIMEOUT_MS = 5_000;
+
 /** 在 allowedImages 里按显式动作模板映射找唯一镜像。 */
 export function resolveImage(
   plan: ExecutionPlan,
@@ -418,17 +426,47 @@ export class DockerSandbox implements SandboxExecutor {
     }
 
     const timeoutMs = Math.min(plan.timeoutMs, { ...DEFAULT_LIMITS, ...this.config.limits }.maxWallClockMs);
+    const containerName = this.containerName(plan);
     const argv = buildDockerArgs({
       image,
       plan,
       config: this.config,
-      containerName: this.containerName(plan),
+      containerName,
       executionToken,
     });
 
     const outcome = await this.runner.run(argv, { signal, timeoutMs });
 
+    if (outcome.timedOut || outcome.aborted) {
+      // 兜底删除（2026-10-05 复核 GAP-6）：`spawnRunner` 只能杀掉宿主侧的 docker CLI
+      // 进程组；容器内进程可能仍在跑（源码注释自认这一点）。容器名是确定性的，
+      // 因此这里补一次 `docker rm -f`——宿主已判「已停止」之后，目标不该继续被扫。
+      await this.#forceRemoveContainer(containerName);
+    }
+
     return mapOutcome(outcome, plan.maxOutputBytes);
+  }
+
+  /**
+   * 超时/中止后的容器兜底删除。
+   *
+   * best-effort：失败只记日志——清理失败不该把一个已经判定的 `timed_out`/`cancelled`
+   * 变成另一种结论；但必须可见，否则操作者不知道容器可能还在跑。
+   */
+  async #forceRemoveContainer(containerName: string): Promise<void> {
+    const controller = new AbortController();
+    try {
+      await this.runner.run([DOCKER_BIN, 'rm', '-f', containerName], {
+        signal: controller.signal,
+        timeoutMs: FORCE_REMOVE_TIMEOUT_MS,
+      });
+    } catch (error) {
+      console.warn(
+        `[dsh-pentest] 超时/中止后删除容器失败（${containerName}）：` +
+          `${error instanceof Error ? error.message : String(error)}。` +
+          '容器可能仍在运行，请人工 `docker rm -f` 清理',
+      );
+    }
   }
 }
 
@@ -475,9 +513,14 @@ export function mapOutcome(
     };
   }
   if (outcome.code === null) {
+    // 与其余三个分支同规则截断（2026-10-05 复核 GAP-7）：容器没起来时 stderr 里
+    // 可能有整段 docker 报错，宿主缓冲上限是 8MiB——不截断就会原样进库、回给模型，
+    // 而模板声明的 `maxOutputBytes` 在这里形同虚设。
+    const err = truncate(outcome.stderr, maxOutputBytes);
     return {
       status: 'runtime_error',
-      stderr: outcome.stderr,
+      stderr: err.text,
+      ...(err.truncated ? { truncated: true } : {}),
       error: {
         status: 'blocked',
         code: 'sandbox_unavailable',

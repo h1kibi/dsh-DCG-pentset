@@ -331,3 +331,27 @@ P3  lint/CI → verify 脚本族 → 单一来源 → 测试纪律 → git init 
 
 - 一条服务端操作可以横跨两条边（如范围确认：`auth_pending → ready` 未记账 + `ready → worker_running` 记账）。账本只记**可记账的那条**，另一条由 `human_decisions` 与快照/领域事件留痕——这是状态图 `recorded` 语义的本来含义。
 - 裸写入 `recordTransition` 在迁移后已无外部调用者，**已降为类私有**（`#recordTransition`）：旁路在类型层封死，`recordPlannedTransition` 是唯一出口。
+
+---
+
+## 附五：B4 执行等待窗口与结算稳定性（2026-10-05，续）
+
+> 目标：消灭执行路径上"失败会静默"和"已判停止却仍在跑"的点。
+
+| 项 | 落地 |
+|---|---|
+| GAP-3（Required）| 抽出 `revalidateBeforeTarget(plan, now)`（策略/授权时效、会话绑定、engagement 状态、租约、范围/epoch 版本；**不含凭证复核**——commitRun 后凭证已消费）。调用点两处：`commitRun` 之前，以及**取得 pacing 槽位之后、沙箱启动之前**。第二次复核失败 → 运行结算为 `blocked`，并写 `execution.stopped`（reason `rejected_after_wait`） |
+| GAP-5（Optional P2）| `finishRunWithRetry`：3 次尝试 + 线性退避（`node:timers/promises`，不改全局 lib）。仍失败则**不抛错**，返回带运行 id 的结构化 `blocked`（消息明确"动作已执行、结果未入库"，指引人工核查）；停止审计按**沙箱原始结论**记录（`sandboxOutcome`），不被结算失败改写 |
+| GAP-6（Optional P2）| 超时/中止后补一次 `docker rm -f <确定性容器名>`（上限 5s，best-effort，失败 `console.warn` 提示人工清理）：宿主杀掉 CLI ≠ 容器内进程已停 |
+| GAP-7（Optional P2）| `runtime_error` 分支同样按 `maxOutputBytes` 截断并带 `truncated`（此前唯一不截断的分支，最多 8MiB 原样进库/回传） |
+
+### 回归锁（+7）
+
+- `execution.test.ts` +4：**窗口注入**（`afterCommit`）后租约被吊销 → `lease_revoked`、沙箱 0 调用、运行结算为 blocked；窗口内作业被暂停 → `engagement_halted`；结算回写瞬时失败 → 重试后照常返回 `completed`；持续失败 → 恰好 3 次尝试 + 结构化 blocked（含运行 id 与"已执行"字样）。
+- `docker-sandbox.test.ts` +3：超时/中止各触发一次 `docker rm -f <确定性名>`；正常退出与 runtime_error **不**触发；runtime_error 的 stderr 截断带 `truncated`。
+
+### 说明与遗留
+
+- 测试夹具新增两个**注入点**（`HarnessHooks.afterCommit` / `failFinishRun`）——这类"时序窗口"缺陷只能在窗口处注入故障才测得到，纯黑盒调用测不出来。
+- 容器清理只覆盖 `timedOut`/`aborted`：正常退出由 `--rm` 回收，运行期错误说明容器根本没起来。
+- 未做：宿主 deadline 与容器 `PENTEST_TIMEOUT_MS` 的对齐（相差镜像启动延迟，属已知小窗口）；结算失败用的是既有 `execution.stopped` 事件类型 + 精确 reason，而不是新增事件类型（审计词汇表受控，新增值的成本高于收益）。

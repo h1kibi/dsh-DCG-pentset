@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delayMs } from 'node:timers/promises';
 import type {
   ActionClass,
   ActionPacing,
@@ -1288,6 +1289,88 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
   }
 
   /**
+   * 结算回写：有限重试。`SQL_FINISH_RUN` 是 `update ... where id = $1`，running → 终态
+   * 是合法边，因此重试幂等。返回失败详情而不是抛出——调用方要把它翻译成**结构化
+   * blocked**（2026-10-05 复核 GAP-5：抛错会让结果只存在于内存、行停在 running，
+   * 同键重试被 `idempotent_replay` 死锁到对账窗口之后）。
+   */
+  async function finishRunWithRetry(
+    toolRunId: string,
+    result: ToolRunResult,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly detail: string }> {
+    let detail = '';
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await deps.store.finishRun(toolRunId, result);
+        return { ok: true };
+      } catch (error) {
+        detail = error instanceof Error ? error.message : String(error);
+        if (attempt < 3) {
+          // 线性退避：给瞬时故障（连接被回收、网络抖动）一次机会，又不拖长调用链。
+          await delayMs(attempt * 50);
+        }
+      }
+    }
+    return { ok: false, detail };
+  }
+
+  /**
+   * 执行前对**外部状态**的重裁决：策略/授权时效（`validateExecution`）、会话绑定、
+   * engagement 状态、租约、范围版本、策略 epoch。
+   *
+   * 返回拒绝原因或当前绑定。**不含凭证复核**——`commitRun` 之后凭证已被消费，
+   * 复核它必然报「已消费」；凭证只在 commit 前那一次由调用方另做。
+   *
+   * 调用点有两处：`commitRun` 之前，以及**取得 pacing 槽位之后**（2026-10-05 复核 GAP-3：
+   * 等待可能是分钟级，期间租约吊销/到期、作业暂停/终止、授权到期都不经过
+   * 「策略 epoch 前进」这条线，`abortInFlight` 看不到在途动作）。
+   */
+  async function revalidateBeforeTarget(
+    plan: ExecutionPlan,
+    now: Date,
+  ): Promise<{ readonly ok: true; readonly binding: SessionBinding } | { readonly ok: false; readonly error: ToolError }> {
+    const policyCheck = await deps.policy.validateExecution(plan);
+    if (!policyCheck.ok) return { ok: false, error: policyCheck.error };
+
+    const binding = await deps.sessions.binding(plan.workerSessionId);
+    if (binding === undefined) {
+      return {
+        ok: false,
+        error: blocked(
+          'lease_required',
+          `执行前复核失败：会话 ${plan.workerSessionId} 没有会话绑定`,
+          '重新申请会话与放行凭证',
+        ),
+      };
+    }
+    const engagementError = engagementViolation(binding, plan.workerSessionId);
+    if (engagementError !== undefined) return { ok: false, error: engagementError };
+    const leaseError = leaseViolation(binding, plan.leaseGeneration, now, plan.workerSessionId);
+    if (leaseError !== undefined) return { ok: false, error: leaseError };
+    if (binding.scopeVersion !== plan.scopeVersion) {
+      return {
+        ok: false,
+        error: blocked(
+          'stale_state_version',
+          `执行前复核失败：会话绑定的范围版本已变化（计划 ${plan.scopeVersion}，当前 ${binding.scopeVersion}）`,
+          '范围修订后旧凭证与旧计划失效，重新申请放行',
+        ),
+      };
+    }
+    if (binding.policyEpoch !== plan.policyEpoch) {
+      return {
+        ok: false,
+        error: blocked(
+          'stale_state_version',
+          `执行前复核失败：策略 epoch 已前进（计划 ${plan.policyEpoch}，当前 ${binding.policyEpoch}）`,
+          '策略或范围变更后在途动作必须停止，重新申请放行',
+        ),
+      };
+    }
+    return { ok: true, binding };
+  }
+
+  /**
    * 执行（§10.3.1）：先幂等重放判定，再执行前重新裁决，最后原子消费凭证并下发令牌。 */
   async function execute(plan: ExecutionPlan, signal: AbortSignal): Promise<ToolRunResult> {
     const now = clock();
@@ -1337,44 +1420,9 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
         ),
       };
     }
-    const policyCheck = await deps.policy.validateExecution(plan);
-    if (!policyCheck.ok) return { status: 'blocked', error: policyCheck.error };
-
-    const binding = await deps.sessions.binding(plan.workerSessionId);
-    if (binding === undefined) {
-      return {
-        status: 'blocked',
-        error: blocked(
-          'lease_required',
-          `执行前复核失败：会话 ${plan.workerSessionId} 没有会话绑定`,
-          '重新申请会话与放行凭证',
-        ),
-      };
-    }
-    const engagementError = engagementViolation(binding, plan.workerSessionId);
-    if (engagementError !== undefined) return { status: 'blocked', error: engagementError };
-    const leaseError = leaseViolation(binding, plan.leaseGeneration, now, plan.workerSessionId);
-    if (leaseError !== undefined) return { status: 'blocked', error: leaseError };
-    if (binding.scopeVersion !== plan.scopeVersion) {
-      return {
-        status: 'blocked',
-        error: blocked(
-          'stale_state_version',
-          `执行前复核失败：会话绑定的范围版本已变化（计划 ${plan.scopeVersion}，当前 ${binding.scopeVersion}）`,
-          '范围修订后旧凭证与旧计划失效，重新申请放行',
-        ),
-      };
-    }
-    if (binding.policyEpoch !== plan.policyEpoch) {
-      return {
-        status: 'blocked',
-        error: blocked(
-          'stale_state_version',
-          `执行前复核失败：策略 epoch 已前进（计划 ${plan.policyEpoch}，当前 ${binding.policyEpoch}）`,
-          '策略或范围变更后在途动作必须停止，重新申请放行',
-        ),
-      };
-    }
+    const preTarget = await revalidateBeforeTarget(plan, now);
+    if (!preTarget.ok) return { status: 'blocked', error: preTarget.error };
+    const binding = preTarget.binding;
 
     // C. 凭证复核（若该计划绑定凭证）。
     const approvalId = plan.approvalId;
@@ -1532,43 +1580,55 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       }
     }
     let result: ToolRunResult;
-    // 从**取得槽位之后**的全部步骤（含 pacing 审计、沙箱运行）都必须落在这一个
+    // 是否因「取得槽位后的第二次复核」被拦下：用于停止审计的 reason（见下）。
+    let rejectedAfterWait = false;
+    // 从**取得槽位之后**的全部步骤（含第二次复核、pacing 审计、沙箱运行）都必须落在这一个
     // try/finally 里：否则任何一步抛错都会让槽位永不释放，该作业后续动作会在
     // 并发等待循环里无限卡住（无自愈路径）。
     try {
-      let auditFailure: string | null = null;
-      if (pacing !== null && pacingImposesWait(pacing)) {
-        try {
-          await recordExecutionEvent({
-            eventType: 'execution.pacing.applied',
-            engagementId: binding.engagementId,
-            workerSessionId: plan.workerSessionId,
-            payload: {
-              phase: 'admit_before_sandbox',
-              planHash: plan.planHash,
-              scopeVersion: plan.scopeVersion,
-              policyEpoch: plan.policyEpoch,
-              policyVersion: plan.policyVersion ?? null,
-              pacing,
-            },
-          });
-        } catch (error) {
-          auditFailure = error instanceof Error ? error.message : String(error);
-        }
-      }
-      if (auditFailure !== null) {
-        // 审计写不进去就**不执行**（§15.1）：一条记录不下来的节奏事实，
-        // 等于这次动作的约束没有留下可回放的证据。处置是恢复审计，而不是查沙箱。
-        result = {
-          status: 'blocked',
-          error: blocked(
-            'audit_unavailable',
-            `策略节奏审计写入失败：${auditFailure}`,
-            '恢复审计写入后重新提交；在此之前不要重试',
-          ),
-        };
+      // 取得槽位后、接触目标前的**第二次**复核（2026-10-05 复核 GAP-3）：
+      // pacing 等待可能是分钟级，而等待期间租约吊销/到期、作业暂停/终止、授权到期
+      // 都不会经过「策略 epoch 前进」这条线（`abortInFlight` 只认它），因此必须重读
+      // 外部状态。凭证已在 commitRun 被消费，这一步**不复核凭证**。
+      const postWait = await revalidateBeforeTarget(plan, clock());
+      if (!postWait.ok) {
+        rejectedAfterWait = true;
+        result = { status: 'blocked', error: postWait.error };
       } else {
-        result = await deps.sandbox.run({ plan, executionToken: commit.executionToken }, combined);
+        let auditFailure: string | null = null;
+        if (pacing !== null && pacingImposesWait(pacing)) {
+          try {
+            await recordExecutionEvent({
+              eventType: 'execution.pacing.applied',
+              engagementId: binding.engagementId,
+              workerSessionId: plan.workerSessionId,
+              payload: {
+                phase: 'admit_before_sandbox',
+                planHash: plan.planHash,
+                scopeVersion: plan.scopeVersion,
+                policyEpoch: plan.policyEpoch,
+                policyVersion: plan.policyVersion ?? null,
+                pacing,
+              },
+            });
+          } catch (error) {
+            auditFailure = error instanceof Error ? error.message : String(error);
+          }
+        }
+        if (auditFailure !== null) {
+          // 审计写不进去就**不执行**（§15.1）：一条记录不下来的节奏事实，
+          // 等于这次动作的约束没有留下可回放的证据。处置是恢复审计，而不是查沙箱。
+          result = {
+            status: 'blocked',
+            error: blocked(
+              'audit_unavailable',
+              `策略节奏审计写入失败：${auditFailure}`,
+              '恢复审计写入后重新提交；在此之前不要重试',
+            ),
+          };
+        } else {
+          result = await deps.sandbox.run({ plan, executionToken: commit.executionToken }, combined);
+        }
       }
     } catch (error) {
       if (combined.aborted) {
@@ -1588,16 +1648,32 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
       inFlight.delete(toolRunId);
       if (slotHeld) pacingGate.release(binding.engagementId);
     }
-    await deps.store.finishRun(toolRunId, result);
+    // 结算回写必须**稳定**（2026-10-05 复核 GAP-5）：抛错会让结果只存在于内存、行停在
+    // running，而同键重试会被 `idempotent_replay` 死锁到对账窗口（>16 分钟）之后。
+    const sandboxOutcome = result;
+    const settlement = await finishRunWithRetry(toolRunId, result);
+    if (!settlement.ok) {
+      result = {
+        status: 'blocked',
+        error: blocked(
+          'audit_unavailable',
+          `运行结果回写失败：${settlement.detail}。动作**已执行**（运行 ${toolRunId}），但结果未能入库`,
+          '人工核查该运行的实际情况后再决定是否重试；不要直接重跑同一动作',
+        ),
+      };
+    }
     // 停止与检测迹象进审计（§6.2.0.5）：不记这两个事实，事后无法回答
     // 「动作是被谁停的」与「目标是否已经在限速我们」。
-    if (result.status === 'cancelled' || result.status === 'timed_out') {
+    if (sandboxOutcome.status === 'cancelled' || sandboxOutcome.status === 'timed_out' || rejectedAfterWait) {
+      const stopReason = rejectedAfterWait
+        ? 'rejected_after_wait'
+        : sandboxOutcome.status === 'timed_out' ? 'timeout' : 'aborted';
       await recordExecutionEvent({
         eventType: 'execution.stopped',
         engagementId: binding.engagementId,
         workerSessionId: plan.workerSessionId,
         payload: {
-          reason: result.status === 'timed_out' ? 'timeout' : 'aborted',
+          reason: stopReason,
           phase: 'sandbox',
           planHash: plan.planHash,
           policyEpoch: plan.policyEpoch,

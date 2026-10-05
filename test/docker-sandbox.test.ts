@@ -257,6 +257,37 @@ test('中止经沙箱执行路径一路传到结果（不是只在纯函数里�
   assert.equal(out.status, 'cancelled');
 });
 
+// ─────────────────────── 超时/中止后的容器兜底（GAP-6） ───────────────────────
+
+test('超时/中止后必须补一次 docker rm -f 兜底：宿主杀了 CLI ≠ 容器已停', async () => {
+  // 回归锁（2026-10-05 复核 GAP-6）：`spawnRunner` 只杀 docker CLI 的进程组，
+  // 容器内进程可能继续跑；容器名是确定性的，因此必须显式删除。
+  for (const result of [
+    { code: null, stdout: '', stderr: '', timedOut: true, aborted: false },
+    { code: null, stdout: '', stderr: '', timedOut: false, aborted: true },
+  ]) {
+    const { runner, calls } = fakeRunner(result);
+    const sandbox = new DockerSandbox(CONFIG, { runner });
+    await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+    const removal = calls.find((argv) => argv[1] === 'rm');
+    assert.ok(removal !== undefined, `必须尝试删除容器（${JSON.stringify(result)}）`);
+    assert.deepEqual(removal.slice(0, 3), ['docker', 'rm', '-f']);
+    assert.ok(removal[3]?.startsWith('pentest-'), '删除的是确定性容器名');
+  }
+});
+
+test('正常退出与运行期错误**不**做兜底删除：那可能删掉别人的容器', async () => {
+  for (const result of [
+    { code: 0, stdout: 'ok', stderr: '', timedOut: false },
+    { code: null, stdout: '', stderr: 'docker not found', timedOut: false },
+  ]) {
+    const { runner, calls } = fakeRunner(result);
+    const sandbox = new DockerSandbox(CONFIG, { runner });
+    await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+    assert.equal(calls.filter((argv) => argv[1] === 'rm').length, 0, '非超时/中止不得触发删除');
+  }
+});
+
 // ─────────────────────── 真实 runner（此前完全没测过） ───────────────────────
 
 /**
@@ -341,6 +372,17 @@ test('输出超限时截断并带 truncated 标记（不返回看起来完整的
   assert.equal(out.truncated, true);
   assert.ok(out.stdout!.includes('已截断'));
   assert.ok(out.stdout!.length < big.length);
+});
+
+test('runtime_error 的 stderr 同样按 maxOutputBytes 截断（GAP-7 回归锁）', () => {
+  // 其余三个分支都截断，只有这条曾经把最多 8MiB 的 docker 报错原样返回——
+  // 模板声明的 maxOutputBytes 在这条路径上形同虚设。
+  const big = 'e'.repeat(2000);
+  const out = mapOutcome({ code: null, stdout: '', stderr: big, timedOut: false, aborted: false }, 100);
+  assert.equal(out.status, 'runtime_error');
+  assert.equal(out.truncated, true);
+  assert.ok(out.stderr!.includes('已截断'));
+  assert.ok(out.stderr!.length < big.length);
 });
 
 test('未超限时不带 truncated 标记', () => {
