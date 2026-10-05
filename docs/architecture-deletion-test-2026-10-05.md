@@ -813,3 +813,32 @@
 - **D 组合并项未做**（`describe` 三副本、`'index_event'` 三处、`RUNTIME_MARKER_*` 同值双导出、`PUBLIC_MEMORY_MAX_CHARS` 单源）：不在本次授权的 A/C 清单内，且都是**跨模块**改动，建议单独一批；
 - **保留 3 项**（`TYPE_SCALE`/`SPACE`、`CONSOLE_ONLY_PHASES`、`HandoffEdit`/`HandoffDraftRequest`）按附录 E.5-E 不动；
 - **`lib/types/**` 非导出化**（E.5 之外的大面积收窄）未做：需按次要版本发布 + CHANGELOG 记录，建议单独决策。
+
+---
+
+## 附录 H：对本次执行（提交 493b034 / d299b18）的质检
+
+> 对象：A 组 7 项 + C 组 6 条登记。方法与前几轮一致——**先去证伪，再下结论**。
+
+### H.1 检验项与结果
+
+| 检验 | 方法 | 结果 |
+|---|---|---|
+| **悬空引用（非代码面）** | 对 `buildRunControls` / `HostDomNodeLike` / `HostDomRootLike` / `CountRow` / `styles/index.ts` / `styles/tokens.ts` / `capability.ts|.js` 扫 `docs/`（含设计文档）、`RUNBOOK.md`、`presets/`、`skills/`、`docker/`、根 `*.md` | **设计文档 0、RUNBOOK 0、presets 0、skills 0、docker 0**（仅 `docker/tools/Dockerfile` 两处 Linux capability 注释，与已删模块无关）；`src/test/scripts` 内亦为 **0** |
+| **迁移代码逐字等价** | `git show HEAD~1:` 取旧 `styles/tokens.ts` / `styles/index.ts`，与新 `styles.ts` 的对应片段逐字比对 | `FONT_FACE_CSS` ✓ `TOKENS_CSS` ✓ `PENTEST_CSS` 装配式 ✓ **三者全部 `true`** |
+| **守卫扩展的红/绿变异** | 向 `styles.ts` 注入一个多行模板 + 注释里的反引号，跑 `verify:styles`；再 `git checkout` 还原后重跑 | 注入 → **exit 1**，报 `src\client\styles.ts:81 CSS 模板里出现反引号：…`；还原 → **exit 0**；还原后逐字一致（差异仅 CRLF/LF，归一化后 `true`） |
+| **定向验证** | `lint` / `typecheck` / `verify:styles` / `verify:promises` / 三个客户端相关测试文件 | 全绿：退出码 0 / 0 / 0；承诺检查 9 项（8 告警，0 失败）；测试 **61/61** |
+| **A5 语义等价（`key` → `row.type`）** | 读校验器：`type_field_mismatch`（key≠type 已报错）先于迭代检查；规则测试在 `test/phases.test.ts:540` | 良构表行为不变；畸变表两处都会报；规则测试在全量套件中通过 ✓ |
+
+### H.2 发现并修复的两处「合并自伤」
+
+1. **新孤儿导出**：合并后 `FONT_FACE_CSS` / `TOKENS_CSS` 变成 **0 处外部消费**（唯一消费者是刚被删的 `styles/index.ts`）。若不处理，它们会成为报告里被批评的那类零引用导出。→ **去掉 `export`**（提交 `d299b18`）。
+2. **知识丢失**：旧 `styles/index.ts` 头注释解释了**为什么按样式域拆分**（「变更半径」：改放行队列排版不该碰到阶段轨道、也不该两人同编一份 700 行字符串）。合并时未迁移 → **已恢复到新 `styles.ts` 头部**（提交 `d299b18`）。
+
+> 第二处正是本报告反复强调的那类问题：删除测试关心的是**代码行为**，而「为什么这么写」的知识只活在注释里——合并文件时必须把它一起搬走，否则下一次评审就会看到一段无从解释的拆分。
+
+### H.3 未发现问题的项（确认）
+
+- **`verify:client` 的行为级证明**：在 Node VM 里 materialize 新 bundle 并渲染出真实 HTML（`<section class="pentest-card">…`）→ styles 链合并未破坏类名/装配；
+- **陈旧产物**：`lib/agents/` 只剩 `dsh-session-factory.js`；`npm pack` 中 `capability` 命中 0；
+- **登记质量**：6 条 `pending` 的 note 均带出处（doc 行号 / 符号 / 文件行）与接线形态，门禁输出与预期一致（9 项 / 8 告警 / 0 失败）。
