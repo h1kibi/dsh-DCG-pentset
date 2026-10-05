@@ -23,6 +23,7 @@ import {
   capContextRefs,
   HANDOFF_MAX_CONTEXT_REFS,
   computeHandoffHash,
+  computeDraftHash,
   isHandoffTransitionType,
   resolveHandoffKeys,
   validateHandoff,
@@ -415,6 +416,40 @@ test('内容哈希区分阶段与任务提示词', () => {
     computeHandoffHash(makePackage({ approvedToPhase: 'post-exploitation' as Phase }), makeScope()),
   );
   assert.notEqual(base, computeHandoffHash(makePackage({ forced: true }), makeScope()));
+});
+
+/**
+ * 递归反转对象的键序——模拟 `jsonb` 读回时的「另一种键序」。
+ *
+ * PostgreSQL 的 jsonb **不保留对象键序**（按「长度 + 字节序」重排，还会去重），
+ * 因此写入时的 JS 插入顺序与读回时的顺序必然可能不同。这里只要求「不同」，不要求
+ * 复刻 PG 的具体排法。
+ */
+function withReversedKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => withReversedKeys(item)) as unknown as T;
+  if (value === null || typeof value !== 'object') return value;
+  const source = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(source).reverse()) out[key] = withReversedKeys(source[key]);
+  return out as T;
+}
+
+test('内容哈希只取决于值，不取决于键序（jsonb 会重排键：2026-10-05 实测）', () => {
+  // 这条性质是「哈希可自证」的全部理由：写入时按 JS 键序序列化、读回时按 jsonb 键序
+  // 序列化，若把键序算进摘要，同一份内容就会有**两个**合法哈希——人类看到的、
+  // 库里存的、事后复算的三者永远对不上（首版正是这样，实测 stored ≠ recomputed）。
+  assert.equal(
+    computeDraftHash(withReversedKeys({ prompt: 'p', objective: 'o', skills: ['s1', 's2'] })),
+    computeDraftHash({ prompt: 'p', objective: 'o', skills: ['s1', 's2'] }),
+    '草稿哈希不随键序变（draft_json 是 jsonb 列）',
+  );
+  assert.equal(
+    computeHandoffHash(withReversedKeys(makePackage()), makeScope()),
+    computeHandoffHash(makePackage(), makeScope()),
+    '确认哈希不随键序变（approved_json 是 jsonb 列）',
+  );
+  // 数组顺序**有**语义（§7.4 按引用优先级截断）：排序反而会抹掉事实，必须仍然敏感。
+  assert.notEqual(computeDraftHash({ skills: ['s1', 's2'] }), computeDraftHash({ skills: ['s2', 's1'] }));
 });
 
 // ─────────────────────── 可空键 vs 内容必需键（§2.2 与 §7.2 的调和） ───────────────────────

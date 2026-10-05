@@ -366,7 +366,9 @@ export function validateHandoffForConfirmation(input: HandoffConfirmationInput):
  *
  * 覆盖字段与 `handoffs` 表的已确认列一致（`content_hash` 自身除外），并含新会话绑定的
  * 范围版本号——同一份内容在不同范围版本下是两次不同的交接，回放确认时必须能分辨。
- * 数组按给定顺序参与哈希：顺序变了就是不同内容（§7.4 按引用优先级截断，顺序有语义）。
+ * 数组按给定顺序参与哈希：顺序变了就是不同内容（§7.4 按引用优先级截断，顺序有语义）；
+ * 对象的键序**不**参与（见 `canonicalJsonForHash`：`approved_json` 是 jsonb 列，
+ * 读回的键序与写入时不同，不消掉这个自由度就会「同一份内容两个摘要」）。
  */
 export function computeHandoffHash(
   pkg: HandoffPackage,
@@ -387,5 +389,45 @@ export function computeHandoffHash(
     human_decision_ref: pkg.humanDecisionRef,
     scope_version: boundScopeVersion?.version ?? null,
   };
-  return createHash(algorithm).update(JSON.stringify(payload), 'utf8').digest('hex');
+  return createHash(algorithm).update(canonicalJsonForHash(payload), 'utf8').digest('hex');
+}
+
+/**
+ * 递归按键排序后序列化——内容哈希**必须**是「值」的函数，不是「谁序列化、按什么顺序」的函数。
+ *
+ * 为什么非它不可：`draft_json` / `approved_json` 都是 `jsonb` 列，PostgreSQL 会重排
+ * （并去重）对象的键。写入时按 JS 插入顺序序列化、读回时按 jsonb 的「长度 + 字节序」
+ * 顺序序列化，同一份内容会算出两个摘要——「同一份草稿同一个哈希」这条性质在读回的
+ * 那一刻就断了（2026-10-05 实测：手工对比 stored 与 recomputed 得到两个值）。
+ * 排序后序列化把键序这个自由度消掉，两边算出的字符串必然一致。
+ *
+ * 注意**数组顺序保留**：§7.4 的引用优先级、工具允许列表的顺序都有语义，不能排序。
+ */
+function canonicalJsonForHash(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJsonForHash(item)).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJsonForHash(item)}`).join(',')}}`;
+}
+
+/**
+ * 草稿阶段的内容哈希（§6.5 第 1 块）：对**落库的 `draft_json`** 取真摘要。
+ *
+ * 草稿也要真摘要，理由有两条（2026-10-05 复核 REQ-9）：
+ * 1. 此前写的是 `'sha256:' + base64url(json).slice(0, 43)`——base64url 可逆，等于把草稿正文
+ *    （含提示词）编码后存在哈希列里，而且截断到 43 字符（丢掉了尾部）；
+ * 2. 人类在确认页看到的「内容哈希」应当是能自证来源的指纹：给同一份草稿能算出同一个值，
+ *    给不同的草稿算出不同的值；可逆前缀两类都做不到。
+ *
+ * 与 {@link computeHandoffHash} 的分工：草稿期还没有批准包（没有 `approved_*` 字段、
+ * 没有人类决策 id），所以只摘要草稿自身；确认时改摘要**最终批准包**。
+ */
+export function computeDraftHash(draftJson: unknown, algorithm: string = DEFAULT_HANDOFF_HASH_ALGORITHM): string {
+  return createHash(algorithm).update(canonicalJsonForHash(draftJson), 'utf8').digest('hex');
 }

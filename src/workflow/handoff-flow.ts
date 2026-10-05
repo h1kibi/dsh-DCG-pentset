@@ -11,7 +11,7 @@ import { planTransition } from './transition-table.ts';
 import { PHASE_DEFINITIONS, planPhaseMove } from './phases.ts';
 import { SKILL_PACKS } from '../skills/skill-pack.ts';
 import { DEFAULT_PHASE_TOOL_ALLOW } from './model.ts';
-import { capContextRefs, validateHandoff } from './handoff.ts';
+import { capContextRefs, computeDraftHash, computeHandoffHash, validateHandoff } from './handoff.ts';
 import type { HandoffPackage } from '../contracts.ts';
 import { issueLease, revokeLease } from './lease.ts';
 import { DEFAULTS } from '../contracts.ts';
@@ -77,7 +77,10 @@ export class HandoffFlow {
     });
 
     const handoffId = this.#core.id();
-    const contentHash = `sha256:${Buffer.from(JSON.stringify(seeded.draftJson)).toString('base64url').slice(0, 43)}`;
+    // 草稿哈希 = 对落库 `draft_json` 的真摘要（REQ-9）：此前是 base64url 前缀——可逆，
+    // 等于把草稿正文（含提示词）编码后放回哈希列。人类确认页显示的「内容哈希」必须是
+    // 能自证来源的指纹，可逆前缀做不到（见 `computeDraftHash` 的说明）。
+    const contentHash = computeDraftHash(seeded.draftJson);
     await this.#core.tx(async () => {
       const engagement = await this.#core.lockEngagement(
         session.engagement_id,
@@ -161,6 +164,8 @@ export class HandoffFlow {
       toolCapabilitySuggestion: { allowed: seeded.allowed, approvalRequired: seeded.approvalRequired },
       limitations: seeded.limitations,
       revision: 1,
+      // 与刚写进库里那一行是同一个值：人类拿到草稿的同时就能看到权威哈希（REQ-9）。
+      contentHash,
     };
   }
 
@@ -183,13 +188,15 @@ export class HandoffFlow {
       excluded_refs: readonly string[];
       revision: number | string;
       current_status: string;
+      content_hash: string;
     }>(
       // **必须联合作业状态判定**：草稿行可能"孤儿复活"——交接被取消后作业回到
       // `waiting_human_review`，而那行 `status='draft'` 还在库里（取消会标 rejected，
       // 但历史数据、并发路径都可能留下漏网的一份）。只看行状态的话，界面会为一个**已经结束**
       // 的交接重新摆出编辑器，人类点下去只会被服务端拒（2026-10-05 真机实测）。
       `select h.id, h.from_worker_session_id, h.suggested_to_phase, h.suggested_skill_ids,
-              h.draft_json, h.context_refs, h.excluded_refs, h.revision, e.current_status
+              h.draft_json, h.context_refs, h.excluded_refs, h.revision, e.current_status,
+              h.content_hash
          from pentest.handoffs h
          join pentest.engagements e on e.id = h.engagement_id
         where h.engagement_id = $1::uuid
@@ -220,6 +227,8 @@ export class HandoffFlow {
       toolCapabilitySuggestion: stored.toolCapabilitySuggestion,
       limitations: stored.limitations,
       revision: toInt(row.revision, 'revision'),
+      // 库里那一行的哈希（草稿期由 `computeDraftHash` 写入）——UI 展示的必须是它。
+      contentHash: row.content_hash,
     };
   }
 
@@ -375,7 +384,10 @@ export class HandoffFlow {
       contentHash: 'pending',
     };
     const requiredKeys = this.#core.deps.requiredHandoffKeys?.(input.approvedToPhase) ?? ['scope_version'];
-    const validation = validateHandoff(handoffPackage, requiredKeys, await this.#core.boundScopeVersion(engagement.id));
+    // 绑定的范围版本只取一次：既用于必需键校验，也进确认哈希——两处必须是同一个版本，
+    // 分开读会给出「校验用一个版本、哈希另一个版本」的窗口。
+    const boundScopeVersion = await this.#core.boundScopeVersion(engagement.id);
+    const validation = validateHandoff(handoffPackage, requiredKeys, boundScopeVersion);
     if (!validation.ok) {
       throw new WorkflowRejection(
         'handoff_incomplete',
@@ -394,7 +406,13 @@ export class HandoffFlow {
       editedPayload: handoffPackage,
     });
 
-    // 交接转 approved（人类编辑后的内容在此固化）
+    // 交接转 approved（人类编辑后的内容在此固化）。内容哈希取**最终批准包**的真摘要
+    // （§6.5 第 6 块）：人类决策 id 已在上一行落库，因此这里重建一次包、把
+    // `humanDecisionRef` 指向它自己——摘要于是覆盖「谁、以什么内容、在哪个范围版本下」
+    // 批准了这次交接，回放与定责都得据此判定。
+    // 此前写的是提示词的可逆 base64 前缀（2026-10-05 复核 REQ-9）。
+    const approvedPackage: HandoffPackage = { ...handoffPackage, humanDecisionRef: decisionId };
+    const approvedContentHash = computeHandoffHash(approvedPackage, boundScopeVersion);
     await this.#core.deps.txDb.query(
       `update pentest.handoffs
           set approved_json = $2::jsonb, approved_to_phase = $3, approved_skill_ids = $4::jsonb,
@@ -403,13 +421,14 @@ export class HandoffFlow {
         where id = $1::uuid`,
       [
         input.draftId,
-        JSON.stringify(handoffPackage),
+        // 批准包内也写上自己的哈希：落库列与包内字段指向同一份事实，读哪一处都一致。
+        JSON.stringify({ ...approvedPackage, contentHash: approvedContentHash }),
         input.approvedToPhase,
         JSON.stringify(input.approvedSkillIds),
         decisionId,
         input.forced,
-        handoffPackage.transitionType,
-        `sha256:${Buffer.from(input.approvedPrompt).toString('base64url').slice(0, 43)}`,
+        approvedPackage.transitionType,
+        approvedContentHash,
       ],
     );
 

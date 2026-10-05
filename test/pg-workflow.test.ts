@@ -24,6 +24,7 @@ import { policyContentHash } from '../src/policy/behavior-profile.ts';
 import { TERMINAL_SESSION_STATUSES } from '../src/contracts.ts';
 import type { MainStatus, ScopeTarget, TransitionType } from '../src/contracts.ts';
 import { isLegalStatusEdge } from '../src/workflow/phases.ts';
+import { computeDraftHash, computeHandoffHash } from '../src/workflow/handoff.ts';
 
 import { PgWorkflowService } from '../src/workflow/pg-workflow.ts';
 import { WorkflowRejection } from '../src/workflow/model.ts';
@@ -1056,7 +1057,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
 
     assert.equal(result.transitionType, 'advance');
     const row = await pool.query(
-      `select approved_json, excluded_refs, context_refs, status
+      `select approved_json, excluded_refs, context_refs, status, content_hash, human_decision_id
          from pentest.handoffs where id = $1::uuid`,
       [draftId],
     );
@@ -1082,6 +1083,25 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       row.rows[0]!.context_refs,
       [{ memoryId: 'memory:aaa', reason: '资产清单' }],
       'context_refs 是冻结列，不得被确认改写',
+    );
+
+    // 确认哈希取**最终批准包**的真摘要（REQ-9）：此前是提示词的可逆 base64 前缀。
+    // 用批准包复算一遍——人类决策 id 也在覆盖范围内，因此「谁批的」也进摘要。
+    assert.equal(
+      row.rows[0]!.approved_json.humanDecisionRef,
+      row.rows[0]!.human_decision_id,
+      '批准包里的决策引用必须指向本次决策（哈希覆盖它，写 pending 会让摘要与事实不符）',
+    );
+    assert.equal(
+      row.rows[0]!.content_hash,
+      computeHandoffHash(row.rows[0]!.approved_json, { version: 1 }),
+      '确认写入的哈希必须等于批准包在绑定范围版本下的摘要（回放与定责据此判定）',
+    );
+    assert.match(row.rows[0]!.content_hash, /^[0-9a-f]{64}$/, '确认哈希是 sha256 十六进制摘要');
+    assert.equal(
+      row.rows[0]!.approved_json.contentHash,
+      row.rows[0]!.content_hash,
+      '批准包内的 contentHash 必须与落库列一致（同一条事实不要两处写法）',
     );
   });
 
@@ -1276,9 +1296,26 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
 
   test('起稿：省略目标阶段时按状态机的推荐推进（人类只说「进入下一阶段」）', async () => {
     // 阶段是预设状态机，下一阶段由当前阶段唯一确定——人类不该被反问「哪个阶段」。
-    const { sessionId } = await newWaitingHumanSession();
+    const { id, sessionId } = await newWaitingHumanSession();
     const draft = await service.beginHandoff({ workerSessionId: sessionId, operatorId: 'op' });
     assert.equal(draft.suggestedToPhase, 'threat-modeling', '情报收集 → 威胁建模');
+
+    // 草稿哈希必须是**真摘要**、且等于落库 `draft_json` 的摘要（REQ-9）：
+    // 此前写的是 `'sha256:' + base64url(json).slice(0,43)`——可逆且截断，
+    // 既泄露草稿正文、又无法自证（同一列两种含义的字符串）。
+    const row = await pool.query<{ content_hash: string; draft_json: unknown }>(
+      `select content_hash, draft_json from pentest.handoffs
+        where engagement_id = $1::uuid and status = 'draft'`,
+      [id],
+    );
+    assert.match(row.rows[0]!.content_hash, /^[0-9a-f]{64}$/, '草稿哈希是 sha256 十六进制摘要');
+    assert.equal(
+      row.rows[0]!.content_hash,
+      computeDraftHash(row.rows[0]!.draft_json),
+      '草稿哈希必须等于库里那份 draft_json 的摘要（人能据此核对看到的草稿）',
+    );
+    // 读端点带回的必须是**库里那一行**的哈希：UI 显示的值不能来自客户端复算。
+    assert.equal(draft.contentHash, row.rows[0]!.content_hash, '读端点必须返回权威哈希');
   });
 
   test('confirmTransition：状态不符时拒绝（不能在非交接确认阶段切换）', async () => {

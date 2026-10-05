@@ -832,6 +832,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
                 controller={controller}
                 engagementId={facts.engagementId}
                 draft={handoffDraft}
+                contentHash={handoffDraft.contentHash}
                 expectedStateVersion={facts.stateVersion}
                 onClose={() => {
                   setHandoffDraft(null);
@@ -869,6 +870,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
               controller={controller}
               engagementId={facts.engagementId}
               draft={handoffDraft}
+              contentHash={handoffDraft.contentHash}
               expectedStateVersion={facts.stateVersion}
               onClose={() => {
                 setHandoffDraft(null);

@@ -1486,6 +1486,14 @@ export interface HandoffDraft {
   };
   readonly limitations: readonly string[];
   readonly revision: number;
+  /**
+   * 草稿内容哈希（§6.5「显示内容哈希」）：服务端对**落库的 `draft_json`** 取的真摘要。
+   *
+   * 客户端**不自己算**这个值：草稿一旦被服务端重新生成（`beginHandoff`），哈希随之改变，
+   * 客户端手里的副本算出来的会与库里那一份不一致。人类在确认页看到的必须是
+   * **权威来源**的那个值，因此由读端点带回（REQ-9）。
+   */
+  readonly contentHash: string;
 }
 export interface HandoffEdit {
   readonly draftId: string;

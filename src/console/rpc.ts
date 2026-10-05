@@ -246,9 +246,9 @@ export type ConsoleResponse = ConsoleOk | ConsoleFailure;
  *   由服务在**它自己的转移事务内**做比对——真正的乐观锁，
  *   §15.4「两个界面同时提交切换，只有一个能成功」由它保证。
  * - `envelope`：信封必须携带，但**该方法的输入契约里没有这个字段**，服务读的是
- *   数据库里的当前版本（`requestHandoffDraft` / `interject` 内部自取版本；
- *   `editHandoff` 只写草稿行）。本层只能强制"必须显式给出"，无法替服务比对——
- *   声称已加锁会是假的。这是**服务契约的缺口**，要真正闭合需在那三个方法上加锚点。
+ *   数据库里的当前版本（当前只有 `interject` 属于这一类：它在服务内部自取版本）。
+ *   本层只能强制"必须显式给出"，无法替服务比对——声称已加锁会是假的。
+ *   这是**服务契约的缺口**：要真正闭合，得让该方法的输入带上锚点。
  * - `none`：不参与版本比对。纯读（`getState`）与审批决策
  *   （`decideApproval` / `revokeApproval` 的输入类型里没有 `expectedStateVersion`；
  *   审批的一次性由 `approvals.decision` 的状态迁移与 `consumeApproval` 保证）。

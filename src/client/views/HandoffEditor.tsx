@@ -21,11 +21,13 @@
  *
  * ── 内容哈希的事实（报告里有对应条目） ──
  *
- * §6.5 第 6 块要求「显示最终内容的差异与内容哈希」。服务端的 `computeHandoffHash` 覆盖
- * 了确认时才分配的 `handoff_id` 与 `human_decision_ref`，客户端**无法复算该值**，
- * 而现有端点（`requestHandoffDraft` / `editHandoff`）都只返回 `HandoffDraft`——
- * 没有哈希。因此这里显示的是**服务端给出的预览哈希**（props `contentHash`），
- * 缺它时明确说明“尚未计算”，而不是自己拼一个看起来像哈希的字符串。
+ * §6.5 第 6 块要求「显示最终内容的差异与内容哈希」。两个哈希都由**服务端**给出，
+ * 客户端一律不复算：确认后的哈希（`computeHandoffHash`）覆盖确认时才分配的
+ * `handoff_id` 与 `human_decision_ref`；草稿哈希（`computeDraftHash`）覆盖落库的
+ * `draft_json`——客户端手里那份副本算出来可能已经不是库里那一行。
+ * 因此这里显示的是读端点带回的**权威哈希**（props `contentHash`，REQ-9 起由
+ * `currentHandoffDraft` 带回），缺它时明确说明「尚未计算」，而不是自己拼一个
+ * 看起来像哈希的字符串。
  */
 
 import { useState } from 'react';
@@ -235,11 +237,13 @@ export function HandoffEditor(props: HandoffEditorProps): ReactNode {
       {notice === null ? null : <p className="pentest-handoff__notice">{notice}</p>}
       {props.contentHash !== undefined && props.contentHash !== null ? (
         <p className="pentest-handoff__hash">
-          内容哈希 <code>{props.contentHash}</code>
+          {/* 卡片窄：64 位摘要直接铺开会把行撑断，但值不能截——完整哈希放进 `title`
+              （与报告导出页同一套呈现约定：人看得见的是前缀，核对得到的是全文）。 */}
+          内容哈希 <code title={props.contentHash}>{`${props.contentHash.slice(0, 16)}…`}</code>
         </p>
       ) : (
         <p className="pentest-handoff__hash">
-          内容哈希：尚未由服务端计算（确认时写入 handoff 记录，§7.3）；当前端点不返回预览值
+          内容哈希：调用方没有提供（服务端在读草稿时一并带回，缺它说明这条数据没走读端点）
         </p>
       )}
 

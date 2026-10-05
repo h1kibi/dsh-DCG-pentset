@@ -294,6 +294,7 @@ test('HandoffPanel：把回环前置状态透传给编辑器（界面闸门与�
         toolCapabilitySuggestion: { allowed: [], approvalRequired: [] },
         limitations: [],
         revision: 1,
+        contentHash: 'f'.repeat(64),
       },
       onDraft: () => {},
       scopeAmendment: { completed: false, newVersion: null },

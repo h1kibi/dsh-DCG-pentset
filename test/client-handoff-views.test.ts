@@ -103,6 +103,7 @@ function draft(over: Partial<HandoffDraft> = {}): HandoffDraft {
     },
     limitations: ['未验证：边界防火墙的默认拒绝规则'],
     revision: 2,
+    contentHash: 'f'.repeat(64),
     ...over,
   };
 }
@@ -310,6 +311,10 @@ test('交接编辑器展示可编辑的初始内容、引用与「不继承 tran
   assert.ok(html.includes('memory:aaa'), '应显示上下文引用');
   // §6.5 第 6 块：内容哈希
   assert.ok(html.includes('sha256:9f2c1d'), '应显示服务端给出的内容哈希');
+  assert.ok(
+    html.includes('title="sha256:9f2c1d"'),
+    '完整哈希放在 title 上（前缀显示、全文可核对，与报告导出页同一约定）',
+  );
   // §7.4：新会话的上下文隔离
   assert.ok(html.includes('不会继承旧 transcript'), '应提示不继承旧 transcript');
   // 草稿概念已经删干净：界面上不该再出现「草稿」字样的区块标题或按钮。
@@ -397,6 +402,9 @@ test('交接编辑器：给了原文就渲染出来（人类确认新会话会�
 });
 
 test('交接编辑器：没有哈希预览值时如实说明，不伪造', () => {
+  // 草稿哈希现在由读端点带回（REQ-9：`currentHandoffDraft` → `HandoffDraft.contentHash`），
+  // 因此「缺哈希」只可能意味着调用方没把读端点的结果传进来。这一支要说清这一点，
+  // 并且**绝不**自己拼一个像哈希的字符串。
   const html = renderToStaticMarkup(
     createElement(HandoffEditor, {
       controller: inertController(),
@@ -404,7 +412,7 @@ test('交接编辑器：没有哈希预览值时如实说明，不伪造', () =>
       draft: draft(),
     }),
   );
-  assert.ok(html.includes('尚未由服务端计算'), '应说明哈希尚未计算');
+  assert.ok(html.includes('调用方没有提供'), '应说明缺失原因（读端点未提供/未透传）');
   assert.ok(!html.includes('sha256:'), '不得编造一个像哈希的字符串');
 });
 
