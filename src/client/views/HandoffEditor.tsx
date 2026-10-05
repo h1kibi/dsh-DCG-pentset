@@ -38,6 +38,7 @@ import type { ConsoleController } from '../controller.ts';
 import { planPhaseMove } from '../../workflow/phases.ts';
 import { actionClassLabel, needsPerActionApproval, phaseLabel } from '../format.ts';
 import { Badge, Button, Card, ErrorBar, Field, List, TextArea, TextInput, toneClass } from '../ui.tsx';
+import { GateList } from './GateList.tsx';
 
 // ───────────────────────────── 文案（集中在此，便于将来接入 locale） ─────────────────────────────
 
@@ -161,8 +162,7 @@ export function HandoffEditor(props: HandoffEditorProps): ReactNode {
   if (approvalRequired.length === 0 && !approvalVotedEmpty) {
     gates.push('放行类别为空但尚未表决：勾选「确认该阶段没有需逐次放行的类别」或选回至少一个（§7.2）');
   }
-  const uniqueGates = [...new Set(gates)];
-  const blocked = uniqueGates.length > 0 || busy;
+  const blocked = gates.length > 0 || busy;
 
   const confirm = (): void => {
     setBusy(true);
@@ -449,13 +449,7 @@ export function HandoffEditor(props: HandoffEditorProps): ReactNode {
         )}
       </section>
 
-      {uniqueGates.length === 0 ? null : (
-        <ul className="pentest-handoff__gates">
-          {uniqueGates.map((gate) => (
-            <li key={gate}>{gate}</li>
-          ))}
-        </ul>
-      )}
+      <GateList blockers={gates} label="确认前置条件" />
 
       <div className="pentest-handoff__actions">
         <Button
@@ -463,7 +457,7 @@ export function HandoffEditor(props: HandoffEditorProps): ReactNode {
           kind="primary"
           onClick={confirm}
           disabled={blocked}
-          reason={busy ? '正在提交' : uniqueGates.join('；')}
+          reason={busy ? '正在提交' : gates.join('；')}
         />
         {/* 取消同样**不要求理由**（2026-10-05 人类明确要求）：审计照记操作者与时间。 */}
         <Button label="取消（不创建新会话）" onClick={cancel} disabled={busy} reason={busy ? '正在提交' : ''} />

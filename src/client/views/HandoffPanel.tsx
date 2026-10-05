@@ -25,6 +25,7 @@ import type { HandoffDraft, Phase } from '../../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { HandoffEditor } from './HandoffEditor.tsx';
 import { Button, Card, Empty, Field, TextArea, TextInput } from '../ui.tsx';
+import { GateList } from './GateList.tsx';
 
 export interface HandoffPanelProps {
   /** 唯一写入路径（§4.2）。 */
@@ -183,11 +184,7 @@ export function HandoffPanel(props: HandoffPanelProps): ReactNode {
         <TextArea value={reason} onChange={setReason} placeholder="例如：本轮情报收集已交报告，准备进入威胁建模" />
       </Field>
 
-      {gates.length === 0 ? null : (
-        <ul className="pentest-handoff__gates">
-          {gates.map((gate) => <li key={gate}>{gate}</li>)}
-        </ul>
-      )}
+      <GateList blockers={gates} label="生成前置条件" />
 
       <Button
         label={busy ? '正在生成…' : '进入下一阶段（生成可编辑内容）'}

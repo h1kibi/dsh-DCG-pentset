@@ -50,6 +50,7 @@ import type { ChunkKind } from '../../memory/chunks.ts';
 import type { RetrievalRoute } from '../../memory/retrieval.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { formatCount, formatTimestamp, phaseLabel, trustLabel, truncate } from '../format.ts';
+import { GateList } from './GateList.tsx';
 import type { Tone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextInput } from '../ui.tsx';
 
@@ -503,6 +504,10 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
         <p className="pentest-memory-explorer__hint">
           {form.includeReasoning ? REASONING_SWITCH_ON_NOTE : REASONING_SWITCH_OFF_NOTE}
         </p>
+
+        {/* 人类要能看到**全部**前置条件，而不是只看到第一条（C4）：清单在按钮上方，
+            按钮的 reason 仍只给第一条（交互不变）。 */}
+        <GateList blockers={blockers} label="检索前置条件" />
 
         <Button
           label="检索"

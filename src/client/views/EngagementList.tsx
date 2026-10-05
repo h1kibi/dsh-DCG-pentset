@@ -34,6 +34,7 @@ import {
   runMarkerTone,
 } from '../format.ts';
 import { Badge, Button, Card, Empty, Field, Table, TextInput } from '../ui.tsx';
+import { GateList } from './GateList.tsx';
 
 /** 列表列定义（顺序即展示顺序）。 */
 const COLUMNS: readonly { readonly key: string; readonly header: string }[] = [
@@ -331,13 +332,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
                 .map(([table, n]) => `${table} ${formatCount(n)}`)
                 .join('、')}）连同作业行一起保留——作业在列表里显示为「已清理」，不再有内容可读。`}
           </p>
-          {purge.blockers.length === 0 ? null : (
-            <ul className="pentest-engagement-list__purge-warn">
-              {purge.blockers.map((blocker) => (
-                <li key={blocker}>{blocker}</li>
-              ))}
-            </ul>
-          )}
+          <GateList blockers={purge.blockers} />
           <Field
             label="确认：原样输入作业名"
             hint="前端只是辅助；服务端也会逐字比对，不一致一律拒绝。"

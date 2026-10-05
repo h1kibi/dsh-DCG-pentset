@@ -41,6 +41,7 @@ import type { PentestReportService } from '../../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import { formatCount, mainStatusLabel, runMarkerLabel, truncate } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat } from '../ui.tsx';
+import { GateList, type GateBlocker } from './GateList.tsx';
 
 // ─────────────── 常量与端点现状 ───────────────
 
@@ -110,11 +111,13 @@ const FORMAT_LABELS: Readonly<Record<ExportFormat, string>> = {
 
 // ─────────────── 纯规则（可独立测试） ───────────────
 
-/** 一条闸门：`code` 供分支与测试使用，`message` 是给人看的原因。 */
-export interface ExportGateBlocker {
-  readonly code: string;
-  readonly message: string;
-}
+/**
+ * 一条闸门：`code` 供分支与测试使用（渲染成 `data-blocker`），`message` 是给人看的原因。
+ *
+ * 形状与共享组件同源（见 `GateList.tsx`）；别名保留是因为这个面**导出**了它
+ * （`signBlockers` / `exportBlockers` 的返回类型），调用方按这个面取类型。
+ */
+export type ExportGateBlocker = GateBlocker;
 
 /** 签字按钮的前置条件。 */
 export interface SignGateInput {
@@ -369,7 +372,6 @@ export function ReportExport(props: ReportExportProps): ReactNode {
         <GateList blockers={signGate} label="签字前置条件" />
         <GateList blockers={exportGate} label="导出前置条件" />
       </div>
-
       <div className="pentest-report-export__actions">
         <Button
           label="签字"
@@ -425,22 +427,5 @@ export function ReportExport(props: ReportExportProps): ReactNode {
         <ErrorBar code={props.snapshot.lastError.code} message={props.snapshot.lastError.message} />
       )}
     </Card>
-  );
-}
-
-/** 闸门清单：把所有禁用原因一次列全，而不是只解释第一个。 */
-function GateList(props: { readonly blockers: readonly ExportGateBlocker[]; readonly label: string }): ReactNode {
-  if (props.blockers.length === 0) return null;
-  return (
-    <div className="pentest-report-export__gate">
-      <span className="pentest-report-export__gate-label">{props.label}</span>
-      <ul className="pentest-report-export__gate-items">
-        {props.blockers.map((blocker) => (
-          <li key={blocker.code} data-blocker={blocker.code}>
-            {blocker.message}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }

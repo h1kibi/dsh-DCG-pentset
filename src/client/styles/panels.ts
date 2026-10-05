@@ -107,13 +107,14 @@ export const PANELS_CSS = `
 .pentest-report-export__limitation{color:var(--pt-fg-dim);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .pentest-report-export__hint{max-width:88ch;margin:0;color:var(--pt-fg-faint);font-size:11px;line-height:1.6;overflow-wrap:anywhere}
 
-/* 签字 / 导出闸门：人类决策点——实底 + 3px 左侧琥珀条 */
 .pentest-report-export__gates{display:flex;flex-direction:column;gap:8px;min-width:0}
-.pentest-report-export__gate{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 11px;border:1px solid var(--pt-wait-line);border-left-width:3px;background:var(--pt-wait-wash)}
-.pentest-report-export__gate-label{color:var(--pt-wait);font:600 10px/1.4 var(--pt-font-mono);letter-spacing:.14em;text-transform:uppercase}
-.pentest-report-export__gate-items{display:flex;flex-direction:column;gap:5px;margin:0;padding:0;list-style:none}
-.pentest-report-export__gate-items>li{position:relative;padding-left:13px;color:var(--pt-fg-dim);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
-.pentest-report-export__gate-items>li::before{content:"▸";position:absolute;left:0;color:var(--pt-wait);font-size:10px}
+/* 闸门清单（共享族，见 client/views/GateList.tsx）：人类决策点——实底 + 3px 左侧琥珀条。
+   此前三组样式（report-export / handoff / engagement-list）各写一遍，视觉已经漂移。 */
+.pentest-gate{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 11px;border:1px solid var(--pt-wait-line);border-left-width:3px;background:var(--pt-wait-wash)}
+.pentest-gate__label{color:var(--pt-wait);font:600 10px/1.4 var(--pt-font-mono);letter-spacing:.14em;text-transform:uppercase}
+.pentest-gate__items{display:flex;flex-direction:column;gap:5px;margin:0;padding:0;list-style:none}
+.pentest-gate__item{position:relative;padding-left:13px;color:var(--pt-fg-dim);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
+.pentest-gate__item::before{content:"▸";position:absolute;left:0;color:var(--pt-wait);font-size:10px}
 .pentest-report-export__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
 
 /* 导出回执：与签字哈希比对用的读数 */
@@ -175,10 +176,7 @@ export const PANELS_CSS = `
 /* 闸门：单条闸门说明（琥珀）与危险闸门（红） */
 .pentest-handoff__gate{margin:0;padding:7px 10px;border:1px solid var(--pt-wait-line);border-left-width:3px;background:var(--pt-wait-wash);color:var(--pt-wait);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
 .pentest-handoff__gate--danger{border-color:var(--pt-danger-line);border-left-color:var(--pt-danger);background:var(--pt-danger-wash);color:var(--pt-danger)}
-/* 闸门清单：一次列全所有未满足条件（只报第一条会让人来回试） */
-.pentest-handoff__gates{display:flex;flex-direction:column;gap:5px;margin:0;padding:9px 11px;list-style:none;border:1px solid var(--pt-wait-line);border-left-width:3px;background:var(--pt-wait-wash)}
-.pentest-handoff__gates>li{position:relative;padding-left:13px;color:var(--pt-fg-dim);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
-.pentest-handoff__gates>li::before{content:"▸";position:absolute;left:0;color:var(--pt-wait);font-size:10px}
+
 .pentest-handoff__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
 
 /* ═════════════════ 范围管理（§5.5 回环修订 + 历史版本） ═════════════════ */
@@ -258,8 +256,8 @@ export const PANELS_CSS = `
 .pentest-engagement-list__archived{display:inline-flex;align-items:center;gap:6px;color:var(--pt-fg-dim);font:400 11.5px/1.5 var(--pt-font-mono)}
 .pentest-engagement-list__actions{display:inline-flex;gap:6px;align-items:center}
 .pentest-engagement-list__error{margin:8px 0 0;color:var(--pt-danger);font:400 11.5px/1.6 var(--pt-font-mono)}
-.pentest-engagement-list__purge{margin:10px 0 0;border:1px solid var(--pt-danger-line);background:var(--pt-danger-wash);padding:10px;display:flex;flex-direction:column;gap:8px}
 .pentest-engagement-list__purge-warn{margin:0;color:var(--pt-danger);font:400 11.5px/1.6 var(--pt-font-sans)}
+.pentest-engagement-list__purge{margin:10px 0 0;border:1px solid var(--pt-danger-line);background:var(--pt-danger-wash);padding:10px;display:flex;flex-direction:column;gap:8px}
 .pentest-engagement-list__purge-note{margin:0;color:var(--pt-fg-dim);font:400 11.5px/1.6 var(--pt-font-sans)}
 .pentest-engagement-list__purge-actions{display:flex;gap:8px;align-items:center}
 /* 名称是人写的标签，不是命令：在按钮外观之上还原正文排版，并允许折行 */

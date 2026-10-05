@@ -40,10 +40,29 @@ function walk(dir) {
 const files = walk(CLIENT);
 
 // ── 1. 组件里用到的类名 ──
+
+/**
+ * 去掉注释后的代码文本。
+ *
+ * 为什么必须去注释：断言说的是「**代码里用到**的类名都有规则」，而注释里出现类名是
+ * 正常的——本仓的注释大量解释「此前这里挂的是 `pentest-xxx__yyy`」这类历史
+ * （2026-10-05 实测：共享闸门清单的文档表格把两个已删除的类名写进注释，
+ * 覆盖检查因此报了两个假失败）。把注释算作使用点会让这条门禁变成噪声，
+ * 而噪声门禁的下场是被忽略——与 `verify-client-bundle.ts` 的同一条教训。
+ *
+ * 保守起见只处理块注释与整行行注释；行尾注释（`foo(); // pentest-x`）仍算命中，
+ * 那种写法本来就少见，且失败方向是「更严」。
+ */
+function codeOnly(text) {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/[^\n]*$/gm, '');
+}
+
 const used = new Map();
 for (const file of files) {
   if (file.endsWith(join('client', 'styles.ts'))) continue;
-  const text = readFileSync(file, 'utf8');
+  const text = codeOnly(readFileSync(file, 'utf8'));
   // 负向先行断言：`dsh-pentest-client` 这类带前缀的标识符不是类名；
   // 紧跟着 `.md` 的是设计文档路径（`docs/dsh-pentest-plugin-design.md`），也不是类名。
   for (const match of text.matchAll(/(?<![A-Za-z0-9_-])(pentest-[A-Za-z0-9_-]+)/g)) {
