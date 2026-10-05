@@ -24,8 +24,9 @@ import type { NormalizedScope } from '../policy/scope-snapshot.ts';
 import type { ScopeTarget } from '../contracts.ts';
 import type { DbRlsContext, RlsAwareDbClient } from '../memory/ledger.ts';
 import { isPhase } from '../contracts.ts';
-import { planTransition } from './transition-table.ts';
-import type { TransitionPlanOutcome } from './transition-table.ts';
+import { planTransition, RUNTIME_MARKER_TYPES } from './transition-table.ts';
+import type { TransitionPlan, TransitionPlanOutcome } from './transition-table.ts';
+import { isLegalStatusEdge } from './phases.ts';
 import type { FrozenSessionInput, ActionTemplateBrief } from './session-port.ts';
 import type { BehaviorBrief } from '../policy/behavior-prompts.ts';
 import { SessionFactoryError } from './session-port.ts';
@@ -135,7 +136,9 @@ export class WorkflowCore {
   }
 
   /** 断言一次转移计划合法；不合法即抛。替代 `void plan` 那种把失败丢掉的写法。 */
-  assertPlan(outcome: TransitionPlanOutcome): void {
+  assertPlan(
+    outcome: TransitionPlanOutcome,
+  ): asserts outcome is { readonly ok: true; readonly plan: TransitionPlan } {
     if (!outcome.ok) throw new WorkflowRejection(outcome.code, outcome.message);
   }
 
@@ -219,8 +222,88 @@ export class WorkflowCore {
     return id;
   }
 
-  /** 写一条转移记录。`UNIQUE (engagement_id, resulting_version)` 是并发保护的一部分。 */
-  async recordTransition(input: {
+  /**
+   * 写入一条**已计划**的转移——状态推进的唯一写入点（2026-10-05 复核 REQ-8/AD-2/AD-3）。
+   *
+   * 为什么需要它：`recordTransition` 是裸 INSERT，`type` / `sessionReused` / `from_status`
+   * 全靠调用方手写，而手写的后果已经进过账本——图上不存在的边（`complete` 写在
+   * `waiting_human_review → report_ready` 上、`start` 写在 `auth_pending → worker_running` 上）、
+   * 同一操作两处记录不一致（`state_transitions` 记 `retry`、`handoffs` 记 `advance`）、
+   * 以及 `session_reused` 与分派表相反。因此：
+   *
+   *   - 计划必须由 `planTransition` 产出（它已做取值域、边与强制标记的校验）；
+   *   - 这里**再独立复核一次**边合法性（防止手工构造的计划绕过），非法即拒绝写入；
+   *   - 行的 `type` / `forced` / `sessionReused` 一律取计划字段，调用方不得手写。
+   */
+  async recordPlannedTransition(input: {
+    readonly plan: TransitionPlan;
+    /** 可选的行 id（见 `recordTransition` 的说明）。 */
+    readonly id?: string;
+    readonly engagementId: string;
+    readonly fromPhase: string | null;
+    readonly toPhase: string | null;
+    readonly graphIteration: number;
+    readonly fromScopeVersion: number | null;
+    readonly toScopeVersion: number | null;
+    readonly fromSessionId: string | null;
+    readonly toSessionId: string | null;
+    readonly expectedVersion: number;
+    readonly humanDecisionId: string;
+    readonly handoffId: string | null;
+    readonly reason?: string;
+  }): Promise<void> {
+    const plan = input.plan;
+    const runtimeMarker = (RUNTIME_MARKER_TYPES as readonly string[]).includes(plan.type);
+    if (runtimeMarker) {
+      if (plan.fromStatus !== plan.toStatus) {
+        throw new WorkflowRejection(
+          'classification_rejected',
+          `运行标记类转移不得改变主状态：${plan.type} ${plan.fromStatus} → ${plan.toStatus}（§5.1）`,
+        );
+      }
+    } else if (!isLegalStatusEdge(plan.type, plan.fromStatus, plan.toStatus)) {
+      throw new WorkflowRejection(
+        'classification_rejected',
+        `账本拒绝写入图上不存在的边：${plan.type} ${plan.fromStatus} → ${plan.toStatus}。` +
+          '状态迁移必须经 planTransition 产出的计划（2026-10-05 复核 REQ-8）',
+      );
+    }
+    await this.#recordTransition({
+      ...(input.id === undefined ? {} : { id: input.id }),
+      engagementId: input.engagementId,
+      fromPhase: input.fromPhase,
+      toPhase: input.toPhase,
+      fromStatus: plan.fromStatus,
+      toStatus: plan.toStatus,
+      type: plan.type,
+      forced: plan.forced,
+      // 会话处置取**分派表算出的**值：手写 `true` 曾是账本与分派表相反的来源（AD-3）。
+      sessionReused: plan.sessionReused,
+      graphIteration: input.graphIteration,
+      fromScopeVersion: input.fromScopeVersion,
+      toScopeVersion: input.toScopeVersion,
+      fromSessionId: input.fromSessionId,
+      toSessionId: input.toSessionId,
+      expectedVersion: input.expectedVersion,
+      humanDecisionId: input.humanDecisionId,
+      handoffId: input.handoffId,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+    });
+  }
+
+  /**
+   * 裸写入：**只允许** `recordPlannedTransition` 调用（私有即封死旁路）。
+   *
+   * 它不做任何校验，行字段全凭入参——这正是历史上账本出现图上不存在边的原因。
+   * `UNIQUE (engagement_id, resulting_version)` 是并发保护的一部分。
+   */
+  async #recordTransition(input: {
+    /**
+     * 行 id。可由调用方预生成：范围确认那条路径要在写 `worker_sessions.transition_id`
+     * 时引用同一个 id（会话行与迁移行互相引用，预生成 uuid 是打破这个环的方式）。
+     * 省略即用数据库默认值。
+     */
+    id?: string;
     engagementId: string;
     fromPhase: string | null;
     toPhase: string | null;
@@ -242,11 +325,11 @@ export class WorkflowCore {
   }): Promise<void> {
     await this.deps.txDb.query(
       `insert into pentest.state_transitions
-         (engagement_id, from_phase, to_phase, from_status, to_status, transition_type,
+         (id, engagement_id, from_phase, to_phase, from_status, to_status, transition_type,
           forced, session_reused, graph_iteration, from_scope_version, to_scope_version,
           from_worker_session_id, to_worker_session_id, expected_version, resulting_version,
           human_decision_id, handoff_id, reason)
-       values ($1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid,$13::uuid,$14,$15,$16::uuid,$17::uuid,$18)`,
+       values (coalesce($19::uuid, gen_random_uuid()), $1::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::uuid,$13::uuid,$14,$15,$16::uuid,$17::uuid,$18)`,
       [
         input.engagementId,
         input.fromPhase,
@@ -268,6 +351,7 @@ export class WorkflowCore {
         // 同样归一：`state_transitions.reason` 也是 NOT NULL，而信封会丢掉该字段
         // （2026-10-05 实测：终止动作在这条语句上第二次撞 500）。
         input.reason ?? '',
+        input.id ?? null,
       ],
     );
   }
@@ -683,15 +767,17 @@ export class WorkflowCore {
           decision: 'revert_to_waiting_human_review',
           reason: `交接草稿生成失败，按 §15.6 保持等待人工判断：${detail}`,
         });
-        await this.recordTransition({
+        const planned = planTransition({
+          type: 'handoff_cancel',
+          fromStatus: 'handoff_drafting',
+          toStatus: 'waiting_human_review',
+        });
+        this.assertPlan(planned);
+        await this.recordPlannedTransition({
+          plan: planned.plan,
           engagementId: session.engagement_id,
           fromPhase: session.phase,
           toPhase: session.phase,
-          fromStatus: 'handoff_drafting',
-          toStatus: 'waiting_human_review',
-          type: 'handoff_cancel',
-          forced: false,
-          sessionReused: true,
           graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
           fromScopeVersion: null,
           toScopeVersion: null,
@@ -745,7 +831,7 @@ export class WorkflowCore {
     await this.tx(async () => {
       const row = await this.lockEngagement(input.engagementId, input.expectedStateVersion);
       const planned = planTransition({ type, fromStatus: row.current_status, toStatus: row.current_status });
-      if (!planned.ok) throw new WorkflowRejection(planned.code, planned.message);
+      this.assertPlan(planned);
 
       const decisionId = await this.recordDecision({
         engagementId: input.engagementId,
@@ -755,15 +841,11 @@ export class WorkflowCore {
         decision: marker,
         reason: input.reason,
       });
-      await this.recordTransition({
+      await this.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: input.engagementId,
         fromPhase: row.current_phase,
         toPhase: row.current_phase,
-        fromStatus: row.current_status,
-        toStatus: row.current_status,
-        type,
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(row.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,
@@ -1278,6 +1360,35 @@ export class WorkflowCore {
       iteration: toInt(engagement.graph_iteration, 'graph_iteration'),
     });
     return id;
+  }
+
+  /**
+   * 重新挂回作业的最后一个非终态会话，并把它置回 `active`（§15.6 的「补充技术动作」）。
+   *
+   * 事故（AD-1，2026-10-05 复核）：`finishTechnicalTesting` 清空了
+   * `active_agent_session_id`，而 `reopenTechnicalWork` 不写回——作业停在 `worker_running`
+   * 且没有活动会话，`startWorker` / `retryWorker` / `beginHandoff` / `confirmTransition`
+   * 的闸门全部不满足，承诺的「补充技术动作」永远无法开始。
+   * 会话状态迁移 `waiting_human → active` 是 004 触发器允许的边。
+   */
+  async reopenLastSession(engagementId: string): Promise<{ readonly sessionId: string } | null> {
+    const found = await this.deps.txDb.query<{ id: string; status: string }>(
+      `select id, status from pentest.worker_sessions
+        where engagement_id = $1::uuid
+          and not (status = any($2::text[]))
+        order by created_at desc
+        limit 1`,
+      [engagementId, [...TERMINAL_SESSION_STATUSES]],
+    );
+    const row = found.rows[0];
+    if (row === undefined) return null;
+    if (row.status !== 'active') {
+      await this.deps.txDb.query(
+        `update pentest.worker_sessions set status = 'active' where id = $1::uuid`,
+        [row.id],
+      );
+    }
+    return { sessionId: row.id };
   }
 
   /**

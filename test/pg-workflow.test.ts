@@ -22,7 +22,8 @@ import { cleanupEngagements } from './helpers/cleanup.ts';
 import { scopeContentHash } from '../src/policy/scope-snapshot.ts';
 import { policyContentHash } from '../src/policy/behavior-profile.ts';
 import { TERMINAL_SESSION_STATUSES } from '../src/contracts.ts';
-import type { ScopeTarget } from '../src/contracts.ts';
+import type { MainStatus, ScopeTarget, TransitionType } from '../src/contracts.ts';
+import { isLegalStatusEdge } from '../src/workflow/phases.ts';
 
 import { PgWorkflowService } from '../src/workflow/pg-workflow.ts';
 import { WorkflowRejection } from '../src/workflow/model.ts';
@@ -2712,6 +2713,166 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       [id],
     );
     assert.equal(left.rows[0]?.n, 0, '清空后审批行不该残留');
+  });
+
+  // ── 账本一致性（2026-10-05 复核 REQ-8 / AD-1 / AD-2 / AD-3 的回归锁）──
+
+  async function countTransitions(target: string): Promise<number> {
+    const r = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.state_transitions where engagement_id = $1::uuid`,
+      [target],
+    );
+    return r.rows[0]?.n ?? 0;
+  }
+
+  /**
+   * 账本一致性：该作业的**每一条** `state_transitions` 都必须是状态图上的边。
+   *
+   * 这是 REQ-8 家族的通用锁：手写 `from_status` / `type` 曾把 `complete` 写在
+   * 「结束技术测试」的边上、把 `start` 写在 `auth_pending → worker_running` 上——
+   * 两者都不在图上，而只看单个操作很难发现。
+   */
+  async function assertLedgerLegal(target: string): Promise<void> {
+    const rows = await pool.query<{ transition_type: string; from_status: string; to_status: string }>(
+      `select transition_type, from_status, to_status from pentest.state_transitions
+        where engagement_id = $1::uuid`,
+      [target],
+    );
+    // 空账本合法（这些夹具是直接播种子行、不写迁移的）；这里只锁「写了的每一行都合法」，
+    // 行的存在性由各用例自己的断言负责。
+    for (const row of rows.rows) {
+      assert.equal(
+        isLegalStatusEdge(
+          row.transition_type as TransitionType,
+          row.from_status as MainStatus,
+          row.to_status as MainStatus,
+        ),
+        true,
+        `账本出现图上不存在的边：${row.transition_type} ${row.from_status} → ${row.to_status}`,
+      );
+    }
+  }
+
+  test('结束技术测试不写图上不存在的边；重新打开必须挂回活动会话（REQ-8a / AD-1 回归锁）', async () => {
+    const finishing = await newWaitingHumanSession();
+    const before = await service.getState(finishing.id);
+    await service.finishTechnicalTesting({
+      engagementId: finishing.id,
+      operatorId: 'op',
+      reason: '回归用例：结束技术测试',
+      expectedStateVersion: before.stateVersion,
+    });
+    const ghost = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.state_transitions
+        where engagement_id = $1::uuid and from_status = 'waiting_human_review' and to_status = 'report_ready'`,
+      [finishing.id],
+    );
+    assert.equal(ghost.rows[0]?.n, 0, '该边 recorded:false：账本不得出现这一行（REQ-8a）');
+    await assertLedgerLegal(finishing.id);
+
+    const ready = await service.getState(finishing.id);
+    await service.reopenTechnicalWork({
+      engagementId: finishing.id,
+      operatorId: 'op',
+      reason: '回归用例：重新打开',
+      expectedStateVersion: ready.stateVersion,
+    });
+    const reopened = await service.getState(finishing.id);
+    assert.equal(reopened.mainStatus, 'worker_running');
+    assert.notEqual(
+      reopened.activeWorkerSessionId,
+      null,
+      'AD-1：重新打开必须挂回活动会话，否则补充技术动作永远无法开始',
+    );
+    const session = await pool.query<{ status: string }>(
+      `select status from pentest.worker_sessions where id = $1::uuid`,
+      [reopened.activeWorkerSessionId],
+    );
+    assert.equal(session.rows[0]?.status, 'active', '被挂回的会话必须置回 active');
+    await assertLedgerLegal(finishing.id);
+  });
+
+  test('插话在交接草稿/确认期间必须被拒：不写账本、草稿不被孤儿化（REQ-8b 回归锁）', async () => {
+    const waiting = await newWaitingHumanSession();
+    const draft = await service.beginHandoff({
+      workerSessionId: waiting.sessionId,
+      operatorId: 'op',
+      toPhase: 'threat-modeling',
+    });
+    const inHandoff = await service.getState(waiting.id);
+    assert.notEqual(inHandoff.mainStatus, 'waiting_human_review', '前置条件：作业已进入交接阶段');
+    const before = await countTransitions(waiting.id);
+
+    await assert.rejects(
+      () => service.interject({ workerSessionId: waiting.sessionId, message: '先看 10.0.0.5' }),
+      (error: unknown) =>
+        error instanceof WorkflowRejection &&
+        error.code === 'classification_rejected' &&
+        /交接/.test(error.message),
+      '交接草稿/确认期间插话必须拒绝：否则草稿成孤儿、账本写下与实际不符的 from_status',
+    );
+
+    assert.equal(await countTransitions(waiting.id), before, '拒绝不得写账本');
+    assert.equal(
+      (await service.getState(waiting.id)).mainStatus,
+      inHandoff.mainStatus,
+      '主状态不得被插话改动',
+    );
+    // 草稿仍可取消：证明没有把作业扳成 worker_running 而让它失去取消/确认路径。
+    const cancelled = await service.cancelHandoff({
+      engagementId: waiting.id,
+      operatorId: 'op',
+      reason: '回归用例：取消草稿',
+      expectedStateVersion: (await service.getState(waiting.id)).stateVersion,
+    });
+    assert.equal(cancelled.mainStatus, 'waiting_human_review');
+    assert.ok(draft.draftId.length > 0);
+    await assertLedgerLegal(waiting.id);
+  });
+
+  test('交接确认不得用来做同阶段重做：拒绝并指向 retryWorker（REQ-8c 回归锁）', async () => {
+    const waiting = await newWaitingHumanSession();
+    const phase = (await service.getState(waiting.id)).currentPhase;
+    assert.ok(phase !== null, '前置条件：当前阶段已知');
+    const draft = await service.beginHandoff({
+      workerSessionId: waiting.sessionId,
+      operatorId: 'op',
+      toPhase: phase,
+    });
+    const before = await countTransitions(waiting.id);
+    const stateBefore = await service.getState(waiting.id);
+
+    await assert.rejects(
+      () =>
+        service.confirmTransition({
+          engagementId: waiting.id,
+          operatorId: 'op',
+          reason: '同阶段重做',
+          expectedStateVersion: stateBefore.stateVersion,
+          draftId: draft.draftId,
+          forced: false,
+          forcedAcknowledged: false,
+          objective: '同阶段重做',
+          excludedRefs: [],
+          approvedToPhase: phase,
+          approvedPrompt: 'p',
+          approvedSkillIds: [],
+          approvedToolAllow: [],
+          approvedApprovalRequired: [],
+          contextRefs: [],
+        }),
+      (error: unknown) =>
+        error instanceof WorkflowRejection && /重做本阶段|retryWorker/.test(error.message),
+      '同阶段确认写不出合法的边：必须拒绝并指向 retryWorker',
+    );
+
+    assert.equal(await countTransitions(waiting.id), before, '拒绝不得写账本');
+    assert.equal(
+      (await service.getState(waiting.id)).mainStatus,
+      'transition_confirmation',
+      '状态必须保持不变：草稿仍可确认（换目标阶段）或取消',
+    );
+    await assertLedgerLegal(waiting.id);
   });
 
 });

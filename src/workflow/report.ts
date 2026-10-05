@@ -31,7 +31,7 @@ export class ReportFlow {
           `只有等待人工判断时可以结束技术测试（当前 ${engagement.current_status}）`,
         );
       }
-      const decisionId = await this.#core.recordDecision({
+      await this.#core.recordDecision({
         engagementId: input.engagementId,
         operatorId: input.operatorId,
         decisionType: 'finish_technical_testing',
@@ -39,25 +39,11 @@ export class ReportFlow {
         decision: 'finish',
         reason: input.reason,
       });
-      await this.#core.recordTransition({
-        engagementId: input.engagementId,
-        fromPhase: engagement.current_phase,
-        toPhase: engagement.current_phase,
-        fromStatus: 'waiting_human_review',
-        toStatus: 'report_ready',
-        type: 'complete',
-        forced: false,
-        sessionReused: true,
-        graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
-        fromScopeVersion: null,
-        toScopeVersion: null,
-        fromSessionId: engagement.active_agent_session_id,
-        toSessionId: null,
-        expectedVersion: input.expectedStateVersion,
-        humanDecisionId: decisionId,
-        handoffId: null,
-        reason: input.reason,
-      });
+      // 该边在状态图上标记为 `recorded: false`（§5.4 / §13.8）：**不写** `state_transitions`
+      // 行。此前这里写的是 `type: 'complete'`——那属于 `report_ready → complete`（签字导出），
+      // 于是账本里出现图上不存在的组合，且「结束测试」与「签字导出」按 transition_type
+      // 不可区分（2026-10-05 复核 REQ-8a）。本步的留痕由 human_decisions 与领域事件
+      // `report.draft.generated` 承担。
       await this.#core.updateEngagement({
         engagementId: input.engagementId,
         expectedVersion: input.expectedStateVersion,
@@ -128,15 +114,17 @@ export class ReportFlow {
         decision: 'signed',
         reason: '报告签字并导出',
       });
-      await this.#core.recordTransition({
+      const planned = planTransition({
+        type: 'complete',
+        fromStatus: 'report_ready',
+        toStatus: 'complete',
+      });
+      this.#core.assertPlan(planned);
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: input.engagementId,
         fromPhase: engagement.current_phase,
         toPhase: engagement.current_phase,
-        fromStatus: 'report_ready',
-        toStatus: 'complete',
-        type: 'complete',
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,
@@ -173,7 +161,17 @@ export class ReportFlow {
         fromStatus: 'report_ready',
         toStatus: 'worker_running',
       });
-      if (!planned.ok) throw new WorkflowRejection(planned.code, planned.message);
+      this.#core.assertPlan(planned);
+      // AD-1（2026-10-05 复核）：重新挂回最后一个非终态会话并置回 active——
+      // 否则作业停在 worker_running 却没有活动会话，补充技术动作无法开始。
+      const session = await this.#core.reopenLastSession(input.engagementId);
+      if (session === null) {
+        throw new WorkflowRejection(
+          'classification_rejected',
+          '没有可复用的会话：本作业的非终态会话都已终结，无法回到补充技术动作。' +
+            '请由人类新建会话（或先终止本作业）。',
+        );
+      }
       const decisionId = await this.#core.recordDecision({
         engagementId: input.engagementId,
         operatorId: input.operatorId,
@@ -182,20 +180,16 @@ export class ReportFlow {
         decision: 'reopen',
         reason: input.reason,
       });
-      await this.#core.recordTransition({
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: input.engagementId,
         fromPhase: engagement.current_phase,
         toPhase: engagement.current_phase,
-        fromStatus: 'report_ready',
-        toStatus: 'worker_running',
-        type: 'report_reopen',
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,
-        fromSessionId: null,
-        toSessionId: engagement.active_agent_session_id,
+        fromSessionId: engagement.active_agent_session_id,
+        toSessionId: session.sessionId,
         expectedVersion: input.expectedStateVersion,
         humanDecisionId: decisionId,
         handoffId: null,
@@ -205,6 +199,7 @@ export class ReportFlow {
         engagementId: input.engagementId,
         expectedVersion: input.expectedStateVersion,
         currentStatus: 'worker_running',
+        activeSessionId: session.sessionId,
       });
     });
     return this.#core.getState(input.engagementId);

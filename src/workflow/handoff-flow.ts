@@ -89,9 +89,12 @@ export class HandoffFlow {
           `只有等待人工判断时可以进入交接（当前 ${engagement.current_status}）`,
         );
       }
-      this.#core.assertPlan(
-        planTransition({ type: 'handoff_regen', fromStatus: 'waiting_human_review', toStatus: 'handoff_drafting' }),
-      );
+      const planned = planTransition({
+        type: 'handoff_regen',
+        fromStatus: 'waiting_human_review',
+        toStatus: 'handoff_drafting',
+      });
+      this.#core.assertPlan(planned);
       const decisionId = await this.#core.recordDecision({
         engagementId: session.engagement_id,
         operatorId: input.operatorId,
@@ -100,15 +103,11 @@ export class HandoffFlow {
         decision: toPhase,
         reason: '人类点「进入下一阶段」：服务端起稿（不经 Agent）',
       });
-      await this.#core.recordTransition({
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: session.engagement_id,
         fromPhase: session.phase,
         toPhase: session.phase,
-        fromStatus: 'waiting_human_review',
-        toStatus: 'handoff_drafting',
-        type: 'handoff_regen',
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,
@@ -233,13 +232,12 @@ export class HandoffFlow {
           `当前状态没有可取消的交接（${engagement.current_status}）`,
         );
       }
-      this.#core.assertPlan(
-        planTransition({
-          type: 'handoff_cancel',
-          fromStatus: engagement.current_status,
-          toStatus: 'waiting_human_review',
-        }),
-      );
+      const planned = planTransition({
+        type: 'handoff_cancel',
+        fromStatus: engagement.current_status,
+        toStatus: 'waiting_human_review',
+      });
+      this.#core.assertPlan(planned);
 
       // 取消意味着那份草稿不再是「当前待确认」：不标它，读端点会继续把它交回界面，
       // 人类会对着已经作废的草稿再点一次确认（2026-10-05：读端点接上后立刻被测试逮到）。
@@ -257,25 +255,21 @@ export class HandoffFlow {
         decision: 'cancel',
         reason: input.reason,
       });
-      await this.#core.recordTransition({
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: input.engagementId,
         fromPhase: engagement.current_phase,
         toPhase: engagement.current_phase,
-        fromStatus: engagement.current_status,
-        toStatus: 'waiting_human_review',
-        type: 'handoff_cancel',
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,
-      fromSessionId: engagement.active_agent_session_id,
-      toSessionId: engagement.active_agent_session_id,
-      expectedVersion: input.expectedStateVersion,
-      humanDecisionId: decisionId,
-      handoffId: null,
-      reason: input.reason,
-    });
+        fromSessionId: engagement.active_agent_session_id,
+        toSessionId: engagement.active_agent_session_id,
+        expectedVersion: input.expectedStateVersion,
+        humanDecisionId: decisionId,
+        handoffId: null,
+        reason: input.reason,
+      });
       await this.#core.updateEngagement({
         engagementId: input.engagementId,
         expectedVersion: input.expectedStateVersion,
@@ -340,14 +334,33 @@ export class HandoffFlow {
     });
     if (!move.ok) throw new WorkflowRejection(move.code, move.message);
 
+    // REQ-8c（2026-10-05 复核）：同阶段重做走 retryWorker，**不得**借「交接确认」这条边。
+    // 此前这里直写 `move.plan.transitionType`：同阶段确认会写下图上不存在的 `retry` 边
+    // （该边只允许 advance / rollback / loop），而 `handoffs.transition_type` 又把它强写成
+    // `advance`——同一操作两处记录不一致。
+    if (move.plan.transitionType === 'retry') {
+      throw new WorkflowRejection(
+        'handoff_transition_illegal',
+        '同阶段重做不走交接确认：请用「重做本阶段」（retryWorker），它不会伪造阶段推进',
+      );
+    }
+    const planned = planTransition({
+      type: move.plan.transitionType,
+      fromStatus: 'transition_confirmation',
+      toStatus: 'worker_running',
+      forced: move.plan.forced === true,
+    });
+    this.#core.assertPlan(planned);
+
     // 交接必需键校验（纯函数；缺键阻止确认）
     const approvedRefs = input.contextRefs.filter((ref) => !input.excludedRefs.includes(ref.memoryId));
     // 引用条数按预算切分：溢出的写进交接包（设计 §8.10.1），下一 Agent 据此主动检索补齐。
     const cappedRefs = capContextRefs(approvedRefs.map((ref) => ref.memoryId));
     const handoffPackage: HandoffPackage = {
       handoffId: input.draftId,
-      transitionType: move.plan.transitionType === 'loop' ? 'loop'
-        : move.plan.transitionType === 'rollback' ? 'rollback' : 'advance',
+      // 交接记录里的类型取**计划算出的** handoffTransitionType（同一条边只记一个事实），
+      // 不再手写三元映射（2026-10-05 复核 REQ-8c）。
+      transitionType: planned.plan.handoffTransitionType ?? 'advance',
       forced: input.forced,
       approvedToPhase: input.approvedToPhase,
       approvedPrompt: input.approvedPrompt,
@@ -429,15 +442,11 @@ export class HandoffFlow {
         (move.plan.transitionType === 'loop' ? 1 : 0),
     });
 
-    await this.#core.recordTransition({
+    await this.#core.recordPlannedTransition({
+      plan: planned.plan,
       engagementId: input.engagementId,
       fromPhase,
       toPhase: input.approvedToPhase,
-      fromStatus: 'transition_confirmation',
-      toStatus: 'worker_running',
-      type: move.plan.transitionType,
-      forced: move.plan.forced,
-      sessionReused: false,
       graphIteration:
         toInt(engagement.graph_iteration, 'graph_iteration') + (move.plan.transitionType === 'loop' ? 1 : 0),
       fromScopeVersion: await this.#core.currentScopeVersion(input.engagementId),

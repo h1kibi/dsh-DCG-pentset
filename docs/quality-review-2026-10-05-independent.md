@@ -298,3 +298,36 @@ P3  lint/CI → verify 脚本族 → 单一来源 → 测试纪律 → git init 
 - **§15.6 草稿失败回退路径**：测试替身里对应的失败注入从未被任何用例使用（已删），该路径仍无测试。
 - **HandoffEditor 的 `notice`**：状态存在但 `setNotice` 从未被调用 → 该提示分支不可达（本轮只删死变量，未改 UI）。
 - **reindex 入队点**、容器内 PG 口令默认值、`prettier` 与 `import/no-cycle` 规则、`test/` 目录里 5 个文件的清理吞错：均未在本轮范围内。
+
+---
+
+## 附四：B1 账本统一写入器（2026-10-05，续）
+
+> 目标：把「状态推进」从**十几处手写 INSERT** 收敛为**唯一写入点**，并让账本里
+> 不可能再出现状态图上不存在的边（REQ-8 / AD-1 / AD-2 / AD-3 的公共根因）。
+
+### 改动
+
+| 项 | 落地 |
+|---|---|
+| 唯一写入点 | `WorkflowCore.recordPlannedTransition(plan, ctx)`：`planTransition` 产出的计划 + **独立复核**边合法性（运行标记类要求主状态不变；其余要求 `isLegalStatusEdge`）+ 行字段（`type`/`forced`/`sessionReused`）一律取计划 |
+| 类型层收窄 | `assertPlan` 改为断言签名（`asserts outcome is { ok: true; plan }`），调用方拿到 `plan` 不再需要手写字段 |
+| 迁移 | 12 处手写写入全部改道：`report.ts`×3、`handoff-flow.ts`×3、`sessions.ts`×4、`core.ts`×2；`intake.ts` 的**裸 INSERT** 也换成写入器（可传预生成 id，用于会话行 ↔ 迁移行的互相引用） |
+| REQ-8a | `finishTechnicalTesting` **不再**在 `waiting_human_review → report_ready` 上写 `complete`（该边 `recorded:false`）；留痕由 `human_decisions` + `report.draft.generated` 承担 |
+| REQ-8b | `interject` 读**真实主状态**并在其上判定：`handoff_drafting` / `transition_confirmation` / `auth_pending` 一律拒绝并给出处置指引（此前硬编码 `fromStatus` 会把草稿变孤儿） |
+| REQ-8c | `confirmTransition` 经计划写入；同阶段重做（`retry`）**显式拒绝**并指向 `retryWorker`；`handoffs.transition_type` 取计划的 `handoffTransitionType`（不再手写三元映射） |
+| AD-1 | `reopenTechnicalWork` 新增 `reopenLastSession`：挂回最后一个非终态会话并置回 `active`（`waiting_human → active` 是 004 触发器允许的边），作业不再停在「worker_running 但没有会话」的死角 |
+| AD-2 | 范围确认的账本行从 `auth_pending → worker_running / start` 改为 `ready → worker_running / start`（授权边 `auth_pending → ready` 是 `recorded:false`，由快照与人工决策留痕） |
+| AD-3 | `session_reused` 不再手写：取分派表算出的值（`complete`/`handoff_*`/`report_reopen`/`resume`/`pause`/`abort` 的 `null` 归一为 `false`） |
+
+### 回归锁（`test/pg-workflow.test.ts` 新增 3 条）
+
+- 通用断言 `assertLedgerLegal(engagementId)`：该作业**每一条** `state_transitions` 都必须是状态图上的边；
+- 「结束技术测试不写 recorded:false 边 + 重新打开必须挂回会话」（REQ-8a / AD-1）；
+- 「插话在交接草稿/确认期间必须被拒：不写账本、草稿不被孤儿化、仍可取消」（REQ-8b）；
+- 「交接确认不得用来做同阶段重做：拒绝并指向 retryWorker，状态与账本不变」（REQ-8c）。
+
+### 说明与遗留
+
+- 一条服务端操作可以横跨两条边（如范围确认：`auth_pending → ready` 未记账 + `ready → worker_running` 记账）。账本只记**可记账的那条**，另一条由 `human_decisions` 与快照/领域事件留痕——这是状态图 `recorded` 语义的本来含义。
+- 裸写入 `recordTransition` 在迁移后已无外部调用者，**已降为类私有**（`#recordTransition`）：旁路在类型层封死，`recordPlannedTransition` 是唯一出口。

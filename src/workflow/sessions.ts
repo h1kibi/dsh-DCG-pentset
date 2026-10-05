@@ -51,7 +51,8 @@ export class SessionFlow {
       if (engagement.active_agent_session_id !== null) {
         throw new WorkflowRejection('lease_required', '已有活动会话；请先关闭它再启动新的');
       }
-      this.#core.assertPlan(planTransition({ type: 'start', fromStatus: 'ready', toStatus: 'worker_running' }));
+      const planned = planTransition({ type: 'start', fromStatus: 'ready', toStatus: 'worker_running' });
+      this.#core.assertPlan(planned);
 
       const scopeVersion = await this.#core.currentScopeVersion(input.engagementId);
       const decisionId = await this.#core.recordDecision({
@@ -78,15 +79,11 @@ export class SessionFlow {
         budget: input.budget,
       });
 
-      await this.#core.recordTransition({
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: input.engagementId,
         fromPhase: null,
         toPhase: input.phase,
-        fromStatus: 'ready',
-        toStatus: 'worker_running',
-        type: 'start',
-        forced: false,
-        sessionReused: false,
         graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
         fromScopeVersion: scopeVersion,
         toScopeVersion: scopeVersion,
@@ -233,14 +230,13 @@ export class SessionFlow {
         `只有等待人工判断时可以重做（当前 ${engagement.current_status}）`,
       );
     }
-    this.#core.assertPlan(
-      planTransition({
-        type: 'retry',
-        fromStatus: 'waiting_human_review',
-        toStatus: 'worker_running',
-        reuseSession: input.reuseSession,
-      }),
-    );
+    const planned = planTransition({
+      type: 'retry',
+      fromStatus: 'waiting_human_review',
+      toStatus: 'worker_running',
+      reuseSession: input.reuseSession,
+    });
+    this.#core.assertPlan(planned);
 
     const currentId = engagement.active_agent_session_id;
     if (currentId === null) {
@@ -287,15 +283,11 @@ export class SessionFlow {
       );
     }
 
-    await this.#core.recordTransition({
+    await this.#core.recordPlannedTransition({
+      plan: planned.plan,
       engagementId: input.engagementId,
       fromPhase: engagement.current_phase,
       toPhase: engagement.current_phase,
-      fromStatus: 'waiting_human_review',
-      toStatus: 'worker_running',
-      type: 'retry',
-      forced: false,
-      sessionReused: reuse,
       graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
       fromScopeVersion: null,
       toScopeVersion: null,
@@ -426,7 +418,7 @@ export class SessionFlow {
         fromStatus: row.current_status,
         toStatus: row.current_status,
       });
-      if (!planned.ok) throw new WorkflowRejection(planned.code, planned.message);
+      this.#core.assertPlan(planned);
       const decisionId = await this.#core.recordDecision({
         engagementId: input.engagementId,
         operatorId: input.operatorId,
@@ -435,15 +427,11 @@ export class SessionFlow {
         decision: 'resume',
         reason: input.reason,
       });
-      await this.#core.recordTransition({
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: input.engagementId,
         fromPhase: row.current_phase,
         toPhase: row.current_phase,
-        fromStatus: row.current_status,
-        toStatus: row.current_status,
-        type: 'resume',
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(row.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,
@@ -505,12 +493,29 @@ export class SessionFlow {
     let stateVersion = 0;
     await this.#core.tx(async () => {
       const engagement = await this.#core.lockEngagement(session.engagement_id, await this.#core.stateVersion(session.engagement_id));
+      // REQ-8b（2026-10-05 复核）：唤醒必须读**真实主状态**并在其上判定。
+      // 此前硬编码 `fromStatus: 'waiting_human_review'`——于是 `beginHandoff` 把作业置为
+      // `transition_confirmation`（会话仍是 waiting_human）时，插话会把作业扳回
+      // `worker_running`、把未确认的交接草稿变成孤儿，账本还写下与实际不符的 from_status。
+      const fromStatus = engagement.current_status;
+      if (fromStatus !== 'waiting_human_review') {
+        const guidance =
+          fromStatus === 'handoff_drafting' || fromStatus === 'transition_confirmation'
+            ? '交接草稿/确认期间插话会污染草稿：请先确认或取消交接，再插话'
+            : fromStatus === 'auth_pending'
+              ? '范围提案确认期间插话会与确认流程竞争：请先确认或驳回范围提案'
+              : '只有等待人工判断（waiting_human_review）时才可以唤醒会话';
+        throw new WorkflowRejection(
+          'classification_rejected',
+          `当前主状态不接受插话唤醒（${fromStatus}）：${guidance}`,
+        );
+      }
       const planned = planTransition({
         type: 'interject_wake',
-        fromStatus: 'waiting_human_review',
+        fromStatus,
         toStatus: 'worker_running',
       });
-      if (!planned.ok) throw new WorkflowRejection(planned.code, planned.message);
+      this.#core.assertPlan(planned);
 
       const decisionId = await this.#core.recordDecision({
         engagementId: session.engagement_id,
@@ -520,15 +525,11 @@ export class SessionFlow {
         decision: 'wake',
         reason: '运行中插话纠偏',
       });
-      await this.#core.recordTransition({
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
         engagementId: session.engagement_id,
         fromPhase: session.phase,
         toPhase: session.phase,
-        fromStatus: 'waiting_human_review',
-        toStatus: 'worker_running',
-        type: 'interject_wake',
-        forced: false,
-        sessionReused: true,
         graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
         fromScopeVersion: null,
         toScopeVersion: null,

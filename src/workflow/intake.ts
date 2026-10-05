@@ -15,6 +15,7 @@ import { DEFAULTS } from '../contracts.ts';
 import { BOOTSTRAP_NEXT_STEP, WorkflowRejection, actionPolicyRiskSummary, normalizeEngagementName, toInt } from './model.ts';
 import type { EngagementRow, SessionRow } from './model.ts';
 import type { WorkflowCore } from './core.ts';
+import { planTransition } from './transition-table.ts';
 
 export class IntakeFlow {
   readonly #core: WorkflowCore;
@@ -972,19 +973,33 @@ export class IntakeFlow {
         ],
       );
       const nextVersion = toInt(engagement.state_version, 'state_version');
-      // `handoff_id` 的语义是**交接草稿**标识，而这次转移来自范围确认：两者不是一件事。
-      // 此前这里塞的是 `scope_intake_proposals.id`，而该列外键指向 `handoffs(id)`——
-      // 运行时必然 23503。范围方案的关联关系本来就在 `human_decisions.subject_id`
-      // 与 `scope_intake_proposals.human_decision_id` 上，不需要借用交接指针。
-      await this.#core.deps.txDb.query(
-        `insert into pentest.state_transitions
-           (id, engagement_id, from_phase, to_phase, from_status, to_status, transition_type,
-            forced, session_reused, graph_iteration, from_scope_version, to_scope_version,
-            from_worker_session_id, to_worker_session_id, expected_version, resulting_version,
-            human_decision_id, handoff_id, reason)
-         values ($1::uuid,$2::uuid,null,'intelligence-gathering','auth_pending','worker_running','start',false,false,1,0,1,$3::uuid,$4::uuid,$5,$6,$7::uuid,null,$8)`,
-        [transitionId, input.engagementId, intake.id, phaseSessionId, nextVersion, nextVersion + 1, decisionId, input.reason],
-      );
+      // `handoff_id` 保持 null：它的语义是**交接草稿**标识，而这次转移来自范围确认——
+      // 此前这里塞的是 `scope_intake_proposals.id`，而该列外键指向 `handoffs(id)`，运行时必然 23503。
+      // 方案关联关系在 `human_decisions.subject_id` 与 `scope_intake_proposals.human_decision_id` 上。
+      // AD-2（2026-10-05 复核）：这条账本行此前被手写成
+      // `auth_pending → worker_running / start`——图上不存在这个组合。状态图把
+      // 「人类确认授权与范围」标为 `auth_pending → ready` 且 **recorded: false**
+      // （留痕在 human_decisions 与范围/策略快照），随后才是 `ready → worker_running`
+      // 的 `start` 边。因此账本只记后者：一次服务端操作跨了两条边，可记账的只有一条。
+      const planned = planTransition({ type: 'start', fromStatus: 'ready', toStatus: 'worker_running' });
+      this.#core.assertPlan(planned);
+      await this.#core.recordPlannedTransition({
+        plan: planned.plan,
+        // 预生成 id：上面的会话行 `transition_id` 引用了它（两行互相引用，用预生成 uuid 打破环）。
+        id: transitionId,
+        engagementId: input.engagementId,
+        fromPhase: null,
+        toPhase: 'intelligence-gathering',
+        graphIteration: 1,
+        fromScopeVersion: 0,
+        toScopeVersion: 1,
+        fromSessionId: intake.id,
+        toSessionId: phaseSessionId,
+        expectedVersion: nextVersion,
+        humanDecisionId: decisionId,
+        handoffId: null,
+        reason: input.reason,
+      });
       await this.#core.audit(input.engagementId, intake.id, 'scope.snapshot', {
         scopeVersion: 1,
         targetSnapshot: { targets: scope.targets, exclusions: scope.exclusions },
