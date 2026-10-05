@@ -254,3 +254,47 @@ P3  lint/CI → verify 脚本族 → 单一来源 → 测试纪律 → git init 
 - RLS 自检对超级用户只告警不拒绝（单租户是当前合法形态）；共享库前必须先换 `pentest_app` 连接。
 - `skill_freeze` 的写入侧（`WorkflowCore.#freezeSkills`）由既有会话创建路径间接覆盖，未单独加断言；读取侧 6 条用例覆盖。
 - 实施中发现并修正的测试夹具问题：`pg-execution-store.test.ts` 的种子行从未与 `PLAN_INPUT` 的 epoch/scope 对齐（原子条件生效前不可见），已补齐 `policy_epoch=7` / `scope_version=3`；`compose.test.ts` 两处把 `recovery` 放进 `runtime`（不生效），已移到顶层并改为真实关闭对账。
+
+---
+
+## 附三：改进实施记录（A 护栏 / B7 真实角色 / B2 报告模块）
+
+> 三个提交：`aba8ff0`（基线，含 P0）→ `10ffb5c`（A+B7）→ 报告模块修复（B2，单独提交）。
+> 全量门禁复跑：`npm test` **1612/1612**（0 fail/skip）；`lint` 0 错；`typecheck`、`build`、
+> `verify:client`、`verify:styles`、`verify:promises`、`verify:forward-migration` 全绿。
+
+### A. 机械护栏与卫生
+
+| 动作 | 结果 |
+|---|---|
+| **git 基线** | `git init -b main` + 首次提交（256 文件）；`.tmp-chrome-live/`、`__pycache__/`、`*.pyc` 进 `.gitignore` 与 `.dockerignore`（90MB 活浏览器配置**未入库、未删除**）；`.qa-hardening.ts` 移入 `scripts/`（并纳入 `tsc` 覆盖） |
+| **eslint 门禁** | eslint 10 + typescript-eslint；类型感知规则只开四条：`no-floating-promises`（`node:test` 顶层调用声明为安全调用）、`no-misused-promises`、`no-explicit-any`、`no-empty`；两处**刻意**匹配控制字符的正则按文件豁免并注明原因 |
+| **基线清零** | 1779 → 0：删 47 处死导入/死局部/死函数；逐点修 `prefer-const` / `no-useless-assignment` / `preserve-caught-error`；`npm run lint` 进 scripts |
+| **产物断言** | `verify:client` 新增两条：产物不得含 `require("node:`/`createHash`；`stubRequire` 收紧为 fail-closed（未知外部依赖立即红）——把"靠 tree-shaking 侥幸"变成机器可验证 |
+| **承诺接线棘轮** | 新增 `verify:promises`：`wired` 条目必须被**生产代码**调用（注释与转发包装不算，测试不算）；REQ-4 的两处以 `pending` 登记并每次告警，接线或删除后告警自动翻转 |
+| **顺带清出的死码** | `surfaces.tsx` 的"宿主问人时让位"孤儿实现与测试桩（行为本身仍缺失，见下）、`dsh-session-factory` 的整套草稿形状校验死函数、`worker.ts` 的 `paramsOf`、`skill-pack.test` 的死工具清单、`HandoffEditor` 的死 `humanFields/edited/aiFields` 等 |
+
+### B7. 关键路径的真实角色测试（`test/rls-critical-paths.test.ts`）
+
+- **到期清扫**：先证明"租户级上下文 0 行"（事故形态），再证明"作业作用域真的清扫并写 `revoked_reason='expired'`"——REQ-2 修复的回归锁。
+- **审批撤销**：真实角色下 `approved(未消费)→revoked` 可用、决策见证落库、消费列未被触碰；跨作业与已消费仍拒绝——C-1 修复的回归锁。
+- 手法记录：`set_rls_context` 是**事务级**（`set_config(..., is_local=true)`），隐式单语句事务里下一条语句就看不见上下文——第一次实现因此失败，改为显式事务包裹后通过。
+
+### B2. 报告模块四修（`src/report/pg-report.ts`）
+
+| # | 修复 | 落地 |
+|---|---|---|
+| 1 | `getReportDraft` 是读端点却每次落新版本 | 先取版本：未编辑且同版本重算哈希一致 → 直接复用，不插入；库状态真的变了才落新版本 |
+| 2 | 重读把人工编辑版挤出最新版 | 最新版本带 `edited_content` 时直接复用该版本；导出不再静默回退到机器投影 |
+| 3 | 签字后仍生成新版本、导出与签字版不一致 | 新增 `SQL_LATEST_REPORT_FOR_EXPORT`（`order by (signed_at is not null) desc, version desc`）；存在签字版时重读直接返回签字版；`#latestOrDraft`（导出）改用它 |
+| 4 | 严重度一律标"人工确认值" | 只有 `verified_findings` 标"（人工确认值）"，其余分节标"（Agent 建议值，未经人工确认）" |
+
+测试：新增 5 条（纯逻辑 1 + 集成 4），断言"重读版本/哈希不变且行数不增"、"编辑版优先且导出一致"、"签字后重读与导出都指向签字版"、"严重度标注随分节"。**设计取舍（有意保留）**：存在签字版后，重读/导出都返回签字版，即便其后又有人工编辑的更高版本——该新版需再次签字才会成为取源对象；`redactPreview` 与 `getSignatureSnapshot` 仍取"最新版本"，属有意分工。
+
+### 遗留（更新后）
+
+- **REQ-4**：地址固定（`assertAdjudicatedAddress`）与重定向逐跳（`evaluateRedirectChain`）仍零消费者——现已由 `verify:promises` 每次告警；处置方向仍是"删除或真实接线"。
+- **"宿主问人时让位"**：孤儿实现与测试桩已删；**行为本身仍不存在**（状态条在宿主提问卡弹出时不会让位）。如需该行为要重新实现并配一条能红的测试。
+- **§15.6 草稿失败回退路径**：测试替身里对应的失败注入从未被任何用例使用（已删），该路径仍无测试。
+- **HandoffEditor 的 `notice`**：状态存在但 `setNotice` 从未被调用 → 该提示分支不可达（本轮只删死变量，未改 UI）。
+- **reindex 入队点**、容器内 PG 口令默认值、`prettier` 与 `import/no-cycle` 规则、`test/` 目录里 5 个文件的清理吞错：均未在本轮范围内。

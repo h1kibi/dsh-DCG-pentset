@@ -175,6 +175,7 @@ interface ReportRow {
   readonly edited_content: string | null;
   readonly content_hash: string;
   readonly accepted_finding_ids: readonly string[];
+  readonly signed_at: Date | string | null;
 }
 
 // ───────────────────────────── 投影形状（落 reports.projection_json）─────────────────────────────
@@ -264,6 +265,8 @@ interface LatestReport {
   readonly projection: ReportProjection;
   readonly editedContent: string | null;
   readonly contentHash: string;
+  /** §8.9：该版本是否已被人工签字（签字后导出取源优先这一行）。 */
+  readonly signedAt: string | null;
 }
 
 // ───────────────────────────── SQL ─────────────────────────────
@@ -309,10 +312,31 @@ const SQL_NEXT_VERSION = `select coalesce(max(version), 0) + 1 as version
        from pentest.reports
       where engagement_id = $1`;
 
-const SQL_LATEST_REPORT = `select version, projection_json, edited_content, content_hash, accepted_finding_ids
+/** 报告行的公共列：`signed_at` 既用于「已签字版优先」的选择，也用于调用方判断版本状态。 */
+const REPORT_ROW_COLUMNS =
+  'version, projection_json, edited_content, content_hash, accepted_finding_ids, signed_at';
+
+/**
+ * 通用「最新版本」：按版本号倒序。用于签字前置快照与预览取源——它们要的是**当前最新**
+ * 版本，而不是已签字的那一版。
+ */
+const SQL_LATEST_REPORT = `select ${REPORT_ROW_COLUMNS}
        from pentest.reports
       where engagement_id = $1
       order by version desc
+      limit 1`;
+
+/**
+ * 导出与重读取源：**已签字行优先**，其次才取最高版本。
+ *
+ * 事故（§3.2-3，2026-10-05 复核）：签字只标注当时最新的那一行，之后面板一打开
+ * `getReportDraft` 就落出未签字的新版本；导出按 `max(version)` 取源，于是导出物与
+ * 签字版永远对不上，而客户端 index 明确声称导出哈希用于核对签字那一版。
+ */
+const SQL_LATEST_REPORT_FOR_EXPORT = `select ${REPORT_ROW_COLUMNS}
+       from pentest.reports
+      where engagement_id = $1
+      order by (signed_at is not null) desc, version desc
       limit 1`;
 
 /** 版本只追加：`updateReport` 建新行而不是覆盖旧版（旧版可被签字哈希追溯）。 */
@@ -488,7 +512,13 @@ function renderFinding(lines: string[], finding: FindingProjection, index: numbe
   lines.push(`### ${index + 1}. ${finding.title}`);
   lines.push('');
   lines.push(`- 结论 ID：${finding.id}`);
-  lines.push(`- 严重度：${finding.severity ?? '（未定级）'}（人工确认值）`);
+  // §8.9：严重度只在人工接受后才是「人工确认值」。awaiting_review / unverified_candidates /
+  // assessed_not_confirmed 这些分节的人类动作是暂缓 / 拒绝 / 未处置，从未确认严重度——
+  // 一律标「人工确认值」等于把 Agent 建议冒充人工结论（2026-10-05 复核 §3.2-4）。
+  lines.push(
+    `- 严重度：${finding.severity ?? '（未定级）'}` +
+      (finding.section === 'verified_findings' ? '（人工确认值）' : '（Agent 建议值，未经人工确认）'),
+  );
   lines.push(`- 状态：${finding.status}`);
   if (finding.confidence !== null) lines.push(`- 置信度：${finding.confidence}`);
   lines.push(`- 受影响资产：${finding.affectedAssetIds.join('、') || '（无）'}`);
@@ -844,7 +874,36 @@ export class PgReportService implements PentestReportService {
   async getReportDraft(engagementId: string): Promise<ReportDraft> {
     return this.#withTransaction(async (tx) => {
       await this.#lock(tx, engagementId);
+      const existing = await this.#latestReportForExport(tx, engagementId);
+      // 已签字版本 / 人工编辑版本直接复用，绝不落新版本。
+      //
+      // 事故（§3.2-2、§3.2-3，2026-10-05 复核）：`getReportDraft` 是注册为 `kind:'read'` 的
+      // 读端点，却无条件 `#nextVersion + SQL_INSERT_REPORT`。后果是——① 每次重读都让客户端
+      // 手里的 contentHash 过期，签字必然 `stale_state_version`；② 人工编辑版会被 `edited_content=null`
+      // 的更高版本挤出，导出（取 max(version)）丢掉人工修订；③ 签字后一打开面板就产生未签字的新版本，
+      // 导出与签字哈希永远对不上。读端点不得推进版本；只有库状态真的变了才落新版本。
+      if (existing !== undefined && (existing.signedAt !== null || existing.editedContent !== null)) {
+        return {
+          engagementId,
+          version: existing.version,
+          content: existing.editedContent ?? renderReportMarkdown(existing.projection),
+          contentHash: existing.contentHash,
+        };
+      }
       const body = await this.#project(tx, engagementId);
+      if (existing !== undefined) {
+        // 最新版本未编辑：用**同一个版本号**重算正文；哈希与落库值一致说明库状态没变，
+        // 直接复用该版本（不插入），从而让「重读 → 同一 contentHash」成立。
+        const projection: ReportProjection = {
+          kind: 'pentest.report.projection',
+          version: existing.version,
+          ...body,
+        };
+        const content = renderReportMarkdown(projection);
+        if (sha256Hex(content) === existing.contentHash) {
+          return { engagementId, version: existing.version, content, contentHash: existing.contentHash };
+        }
+      }
       const version = await this.#nextVersion(tx, engagementId);
       const projection: ReportProjection = { kind: 'pentest.report.projection', version, ...body };
       const content = renderReportMarkdown(projection);
@@ -1211,17 +1270,26 @@ export class PgReportService implements PentestReportService {
     return asNumber(row.version, 'reports.next_version');
   }
 
-  async #latestReport(db: DbClient, engagementId: string): Promise<LatestReport | undefined> {
-    const found = await db.query<ReportRow>(SQL_LATEST_REPORT, [engagementId]);
-    const row = found.rows[0];
+  #toLatestReport(row: ReportRow | undefined): LatestReport | undefined {
     if (row === undefined) return undefined;
-    const projection = parseReportProjection(row.projection_json);
     return {
       version: asNumber(row.version, 'reports.version'),
-      projection,
+      projection: parseReportProjection(row.projection_json),
       editedContent: row.edited_content,
       contentHash: row.content_hash,
+      signedAt: row.signed_at === null ? null : toIso(row.signed_at, 'reports.signed_at'),
     };
+  }
+
+  async #latestReport(db: DbClient, engagementId: string): Promise<LatestReport | undefined> {
+    const found = await db.query<ReportRow>(SQL_LATEST_REPORT, [engagementId]);
+    return this.#toLatestReport(found.rows[0]);
+  }
+
+  /** 导出/重读取源：已签字行优先（见 `SQL_LATEST_REPORT_FOR_EXPORT` 的注释）。 */
+  async #latestReportForExport(db: DbClient, engagementId: string): Promise<LatestReport | undefined> {
+    const found = await db.query<ReportRow>(SQL_LATEST_REPORT_FOR_EXPORT, [engagementId]);
+    return this.#toLatestReport(found.rows[0]);
   }
 
   /** 有版本就用该版本的投影（与人类审阅/签字的对象一致）；没有版本则现投影一版（不落库）。 */
@@ -1234,10 +1302,10 @@ export class PgReportService implements PentestReportService {
 
   /** 导出用：没有报告版本时先落一版草稿（§16.1.1「签字前也允许导出」）。 */
   async #latestOrDraft(db: DbClient, engagementId: string): Promise<LatestReport> {
-    const latest = await this.#latestReport(db, engagementId);
+    const latest = await this.#latestReportForExport(db, engagementId);
     if (latest !== undefined) return latest;
     await this.getReportDraft(engagementId);
-    const created = await this.#latestReport(db, engagementId);
+    const created = await this.#latestReportForExport(db, engagementId);
     if (created === undefined) {
       throw new ReportServiceError(`engagement ${engagementId} 的草稿刚写入却读不回：拒绝导出空报告`);
     }

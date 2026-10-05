@@ -27,7 +27,7 @@ import type { Finding, FindingStatus, ReportSection } from '../src/contracts.ts'
 import { REPORT_SECTIONS } from '../src/contracts.ts';
 import type { DbClient } from '../src/memory/ledger.ts';
 import { sha256Hex } from '../src/memory/chunks.ts';
-import type { ReportProjection } from '../src/report/pg-report.ts';
+import type { FindingProjection, ReportProjection } from '../src/report/pg-report.ts';
 import {
   PgReportService,
   ReportServiceError,
@@ -182,6 +182,59 @@ describe('§8.9 报告分节映射（纯逻辑）', () => {
     assert.match(first, /未经确认/);
   });
 
+  it('§8.9 严重度标注按分节区分：只有人工确认分节标「人工确认值」', () => {
+    const base = fixtureProjection();
+    const statusFor: Record<ReportSection, FindingStatus> = {
+      verified_findings: 'human_accepted',
+      assessed_not_confirmed: 'rejected',
+      unverified_candidates: 'candidate',
+      awaiting_review: 'candidate',
+    };
+    const findingIn = (section: ReportSection): FindingProjection => ({
+      id: `f-${section}`,
+      title: `${section} 结论`,
+      severity: 'medium',
+      status: statusFor[section],
+      section,
+      affectedAssetIds: [],
+      evidence: [],
+      reproductionSteps: [],
+      impact: null,
+      remediation: null,
+      confidence: null,
+      acceptedBy: null,
+      acceptedAt: null,
+      dispositionAction: null,
+      dispositionReason: null,
+      dispositionOperatorId: null,
+      dispositionAt: null,
+    });
+    const projection: ReportProjection = {
+      ...base,
+      sections: REPORT_SECTIONS.map((section) => ({ section, findings: [findingIn(section)] })),
+    };
+    const content = renderReportMarkdown(projection);
+    const blockOf = (section: ReportSection): string => {
+      const marker = `（${section}）`;
+      const start = content.indexOf(marker);
+      assert.ok(start >= 0, `报告应包含分节 ${section}`);
+      const rest = content.slice(start + marker.length);
+      const end = rest.indexOf('\n## ');
+      return end === -1 ? rest : rest.slice(0, end);
+    };
+
+    const verified = blockOf('verified_findings');
+    assert.match(verified, /- 严重度：medium（人工确认值）/);
+    assert.doesNotMatch(verified, /Agent 建议值/);
+
+    // 其余分节的人类动作是暂缓 / 拒绝 / 未处置，从未确认严重度，不得标「人工确认值」。
+    for (const section of ['assessed_not_confirmed', 'unverified_candidates', 'awaiting_review'] as const) {
+      const block = blockOf(section);
+      assert.match(block, /- 严重度：medium（Agent 建议值，未经人工确认）/, section);
+      assert.doesNotMatch(block, /人工确认值/, `分节 ${section} 不得把 Agent 建议冒充人工确认`);
+    }
+  });
+
   it('无库依赖：纯逻辑用例不访问数据库', async () => {
     const service = new PgReportService(NO_DB);
     await assert.rejects(() => service.getReportDraft('e-1'), /该用例不应访问数据库/);
@@ -255,6 +308,8 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
   let engagementId = '';
   /** 独立 engagement：只用于导出脱敏，不受主流程的编辑影响。 */
   let exportEngagementId = '';
+  /** 独立 engagement：只用于报告重读幂等 / 编辑版优先 / 签字版优先（不受主流程状态推进影响）。 */
+  let versioningEngagementId = '';
   let credentialArtifactId = '';
   let publicArtifactId = '';
   let candidateDeferredId = '';
@@ -318,6 +373,15 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
     return projection[key] as readonly string[];
   }
 
+  /** reports 行数：用来证明读端点（重读 / 签字后重读）不再无界增长版本。 */
+  async function countReports(target: string): Promise<number> {
+    const found = await client.query<{ n: number }>(
+      'select count(*)::int as n from pentest.reports where engagement_id = $1',
+      [target],
+    );
+    return found.rows[0]?.n ?? 0;
+  }
+
   before(async () => {
     client = new Client({ connectionString: DATABASE_URL });
     await client.connect();
@@ -326,6 +390,7 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
 
     engagementId = randomUUID();
     exportEngagementId = randomUUID();
+    versioningEngagementId = randomUUID();
     credentialArtifactId = randomUUID();
     publicArtifactId = randomUUID();
     candidateDeferredId = randomUUID();
@@ -448,6 +513,18 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
                '["使用默认凭据登录"]'::jsonb, 0.5)`,
       [randomUUID(), exportEngagementId, exportArtifactId],
     );
+
+    // 版本化幂等用 engagement：无结论、无证据，state_version=0——让「同一库状态重读」
+    // 与「编辑 / 签字后取源」两条路径都能用干净的起点断言，不受主流程推进干扰。
+    // 无证据意味着默认导出脱敏是空操作，导出正文与签字版逐字节相同。
+    await client.query(
+      `insert into pentest.engagements
+         (id, tenant_id, name, status, current_status, current_phase, state_version,
+          target_snapshot, scope_snapshot, roe_snapshot, policy_snapshot, config_snapshot, created_by)
+       values ($1, 'pg-report', 'pg-report-versioning', 'running', 'report_ready', null, 0,
+               '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'node-test')`,
+      [versioningEngagementId],
+    );
   });
 
   after(async () => {
@@ -460,7 +537,7 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
       // 角色后用户触发器与 FK 触发器都不触发，才能把本文件的种子按依赖倒序删干净。
       await client.query("SET session_replication_role = 'replica'");
       replicaActive = true;
-      const ids = [engagementId, exportEngagementId];
+      const ids = [engagementId, exportEngagementId, versioningEngagementId];
       for (const statement of RING_BREAKERS) await client.query(statement, [ids]);
       for (const statement of CLEANUP_STATEMENTS) await client.query(statement, [ids]);
     } finally {
@@ -741,6 +818,71 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
     const payload = JSON.parse(json.content) as { version: number; body: string };
     assert.equal(payload.version, 3);
     assert.match(payload.body, /人工编辑后的报告/);
+  });
+
+  // ── 报告读端点幂等与签字一致性（§3.2 复核修复的回归锁）──
+
+  it('getReportDraft 幂等：连续两次重读版本与哈希不变，且 reports 行数不增', async () => {
+    const before = await countReports(versioningEngagementId);
+    const first = await report.getReportDraft(versioningEngagementId);
+    const second = await report.getReportDraft(versioningEngagementId);
+    assert.equal(first.version, 1, '首次取草稿落 v1');
+    assert.equal(second.version, first.version, '重读不得推进版本');
+    assert.equal(second.contentHash, first.contentHash, '重读必须返回同一 contentHash（否则签字必然 stale）');
+    assert.equal(second.content, first.content);
+    assert.equal(await countReports(versioningEngagementId), before + 1, '首次落一版、重读不得再落新版本');
+  });
+
+  it('updateReport 后重读仍返回编辑正文，导出不再静默回退到机器投影', async () => {
+    const edited = '# 人工编辑后的版本化报告\n\n（人工修订，必须出现在正式产物里）\n';
+    const ref = await report.updateReport({
+      engagementId: versioningEngagementId,
+      operatorId: DISPOSER,
+      expectedStateVersion: 0,
+      editedContent: edited,
+    });
+    assert.equal(ref.version, 2);
+    assert.equal(ref.contentHash, sha256Hex(edited));
+
+    const draft = await report.getReportDraft(versioningEngagementId);
+    assert.equal(draft.version, 2, '重读不得以更高版本把编辑版挤出');
+    assert.equal(draft.content, edited);
+    assert.equal(draft.contentHash, sha256Hex(edited), '返回的 contentHash 必须指向编辑版正文');
+
+    const exported = await report.exportReport({
+      engagementId: versioningEngagementId,
+      format: 'markdown',
+      operatorId: DISPOSER,
+    });
+    assert.equal(exported.fileName, `pentest-report-${versioningEngagementId}-v2.md`);
+    assert.equal(exported.content, edited);
+    assert.equal(exported.contentHash, sha256Hex(edited));
+  });
+
+  it('签字后重读返回签字版本，导出的 contentHash 与签字版一致', async () => {
+    const draft = await report.getReportDraft(versioningEngagementId);
+    assert.ok(draft.contentHash !== null, '草稿必须带权威内容哈希');
+    const signed = await report.signReportVersion({
+      engagementId: versioningEngagementId,
+      version: draft.version,
+      contentHash: draft.contentHash,
+      operatorId: DISPOSER,
+    });
+    assert.equal(signed.version, 2);
+    const rowsAfterSign = await countReports(versioningEngagementId);
+
+    const reread = await report.getReportDraft(versioningEngagementId);
+    assert.equal(reread.version, signed.version, '存在签字版时重读必须返回签字版本');
+    assert.equal(reread.contentHash, signed.contentHash);
+    assert.equal(await countReports(versioningEngagementId), rowsAfterSign, '签字后重读不得再产生未签字新版本');
+
+    const exported = await report.exportReport({
+      engagementId: versioningEngagementId,
+      format: 'markdown',
+      operatorId: DISPOSER,
+    });
+    assert.equal(exported.fileName, `pentest-report-${versioningEngagementId}-v2.md`);
+    assert.equal(exported.contentHash, signed.contentHash, '导出哈希必须能核对签字版');
   });
 
   it('exportReport 默认按分类脱敏结构化投影，且只为无版本的 engagement 落一版草稿', async () => {
