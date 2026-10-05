@@ -664,7 +664,7 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 
 ---
 
-## 附十四：C2 组合根安装器表（2026-10-05，**部分完成**）
+## 附十四：C2 组合根安装器表（2026-10-05，已完成 6/6）
 
 ### 已落地
 
@@ -714,9 +714,15 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 
 `installDatabase` / `installIndexing` / `installExecution` / `installWorkflow` / `installConsole`——每个都有具名输入与产物，内部细节（为什么共用写连接、为什么晚绑定、为什么报告面共享实例、为什么四个面分开构造）都随代码移动。
 
-### 剩余（复核清单之外，明确记录）
+### 第 6 个安装器：installBudget（复核清单之外，但它是剩余长度的主体）
 
-`compose()` 仍是 349 行——剩下的主体是**预算与活性块**（§10.5，~228 行：dsh-budget 端口绑定、步骤累计、预算告警与系统暂停）与对账/心跳入口（~40 行）。复核的安装器清单里**没有**预算这一项，且它不是纯接线（它持有状态：绑定表、链式队列、观察器），要继续压缩需要第 6 个安装器（`installBudget`），边界要单独设计——已记入待办，不在本轮冒充完成。
+`installBudget({config, readDb, txDb, ledger, rlsContext, rlsScopePort, workflow})` →
+`{createBudget, lifecycle}`。它**持状态**（每会话绑定、串行链、告警/耗尽键），边界因此画在
+「状态只在 `observe` 内读写，`createBudget` 是纯工厂」。顺手修掉两处「缩进说谎」：
+`BudgetSessionRow` 与 `pendingWarningKeys` 此前嵌套在 `compose()` 里却按顶层缩进写
+（TS 允许，读起来像模块级声明），现已提到模块作用域。
+
+`compose()` 最终 **880 → 148 行**——复核目标「安装器表 + 组合根 ≈200 行编排」达成。
 
 ---
 
@@ -754,3 +760,39 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 于是新增 `scripts/verify-typert-face.ts`（`npm run verify:typert-face`）：双向集合比较
 （清单↔门面）、方法形状合规性、重复声明、数量对齐。**实测 53/53 一致**——两条事实源当前同步，
 这条锁从此接手「漂移即红」。
+
+---
+
+## 附十六：收尾状态（2026-10-05）
+
+### 本轮（C1…C7）落地的度量
+
+| 文件 | 变化 | 说明 |
+|---|---|---|
+| `src/compose.ts` | 2058 行（`compose()` 880 → **148**） | 6 个安装器 + 3 个具名端口类型 |
+| `src/execution/service.ts` | 1724 → **1392** | `admit` 482 → 317；闸门与错误构造迁出 |
+| `src/execution/admission.ts`（新） | 877 | 受理 11 道 + 复核 8 道具名只读闸门 |
+| `src/execution/gate-failures.ts`（新） | 143 | 闸门失败 sink（服务，非接线） |
+| `src/memory/session-context.ts`（新） | 423 | 会话准入/范围/RLS 单点 |
+| `src/client/views/GateList.tsx`（新） | 94 | 闸门清单一处渲染（3 形状 + 3 组 CSS → 1） |
+| `src/canonical.ts`（新） | 48 | 内容哈希的规范 JSON（合并两处重复） |
+| `src/memory/pg-worker-tools.ts` | 2023 → **1847** | 会话/范围/RLS 迁出（语义单点） |
+| `src/workflow/intake.ts` | 1068 → **1010** | 两个入口收敛到一份 staging |
+| `src/agents/capability.ts` | 删除（141 行） | 未接线的重复实现 |
+
+### 门禁
+
+`npm test` **1659/1659**；lint / typecheck / build / `verify:client` 39/39 / `verify:styles` /
+`verify:promises` / **`verify:typert-face`（新增）53/53** / `verify:forward-migration` 25 断言。
+
+三条门禁在本轮被**加固**（都是「文本扫描算进注释」或「断言太钝」造成的噪声）：
+`verify:client`（只看代码）、`verify:styles`（只看代码）、`verify:typert-face`（新增一致性锁）。
+
+### 明确未做（都需要**决策**或属**投机**，不冒充完成）
+
+| 项 | 需要什么 | 现状 |
+|---|---|---|
+| REQ-11：`EmbeddingRevisionRegistry.activate` 的运维入口 | **产品决策**：加控制台端点（＋UI），还是在重建完成路径里自动激活 | 代码里的定位已改成「可见失败 + 两步处置」；重建已有生产端（策略轴自动、嵌入轴拒绝写入） |
+| REQ-4：代理侧接线（地址固定 / 逐跳重校验） | **部署决策**：代理按裁决地址拨号并调用宿主校验，还是由宿主侧完成后再下发命令 | 容器内置工具已按裁决地址固定拨号；缺口精确落在代理；两处注释与 `verify:promises` 记录均为「未接线」 |
+| C3 的「族拆文件」 | 纯机械拆分（`PgWorkerTools` 1847 行 → 检索/读取/提交三族） | 语义单点已收拢；拆分不改变行为，属可选的导航性改进 |
+| C4 的「三个单体按区块拆」 | 复核自评 **Speculative**；纯移动、无行为变化，但会产生大 diff 与 UI 测试噪声 | 已完成的**具体**部分（闸门收敛）见附十五 |
