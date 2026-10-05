@@ -30,12 +30,17 @@
  * c. **资源限额必须有**（CPU / 内存 / PID / 时长 / 输出上限）。缺任一项即拒绝——
  *    「没限额」意味着一次失控的扫描可以打满宿主。
  *
- * ── 关于执行令牌 ──
+ * ── 关于「执行令牌」（已删除，2026-10-05 复核 REQ-4）──
  *
- * `executionToken` 是服务端在 `commitRun` 事务里签发的一次性令牌。它通过**环境变量**
- * 传给容器（不是命令行参数——参数会出现在 `ps` 输出里），容器内的包装器持它向代理
- * 证明「本次执行已获准入」。令牌不进入模型可见的参数，因为 dsh 的参数是深冻结的
- * （详见 tools/guard.ts 的说明）。
+ * 此前这里注入一个 `commitRun` 签发的一次性令牌，注释声称「容器内的包装器持它向代理
+ * 证明本次执行已获准入」。事实是**没有任何消费方校验它**：出口代理只看 `EGRESS_ALLOW`，
+ * 容器内的包装器只打印它是否存在，服务端签发之后自己也不再读。一条不可验证的凭证
+ * 等于没有凭证，却让读者以为这条路径上还有第二道闸门——因此整条删掉。
+ *
+ * 「只有已准入的执行才会跑」这件事**目前由结构承担**，不是运行时检查：
+ * `SandboxExecutor.run` 的唯一调用点在 `ExecutionService` 内、位于 `commitRun` 事务成功
+ * 之后，模型侧触达不到执行器。将来若要独立凭证，正确形态是代理与服务端共享存储校验
+ * （设计 §10.2.3 的完整形态），而不是再往环境变量里塞一个没人验的字符串。
  */
 
 import { spawn } from 'node:child_process';
@@ -140,9 +145,8 @@ export function buildDockerArgs(input: {
   readonly plan: ExecutionPlan;
   readonly config: DockerSandboxConfig;
   readonly containerName: string;
-  readonly executionToken: string;
 }): readonly string[] {
-  const { image, plan, config, containerName, executionToken } = input;
+  const { image, plan, config, containerName } = input;
   const limits = { ...DEFAULT_LIMITS, ...config.limits };
   const timeoutMs = Math.min(plan.timeoutMs, limits.maxWallClockMs);
 
@@ -178,9 +182,7 @@ export function buildDockerArgs(input: {
     // 出口边界改由「网络成员集合」承担：目标必须与沙箱同在 internalNetwork 上。
     // ── 已裁决地址：容器不得按域名再次解析；JSON 由服务端生成，非用户参数 ──
     '-e', `PENTEST_RESOLVED_ADDRESSES=${JSON.stringify(plan.resolvedAddresses)}`,
-    // ── 执行令牌与裁决基准：经环境变量传递，不出现在 argv（ps 可见）──
-    // 令牌是 commitRun 一次性签发的凭证，不是幂等键——两者用途不同。
-    '-e', `PENTEST_EXECUTION_TOKEN=${executionToken}`,
+    // ── 裁决基准：经环境变量传递，不出现在 argv（ps 可见）──
     '-e', `PENTEST_PLAN_HASH=${plan.planHash}`,
     '-e', `PENTEST_POLICY_EPOCH=${plan.policyEpoch}`,
     '-e', `PENTEST_SCOPE_VERSION=${plan.scopeVersion}`,
@@ -395,7 +397,7 @@ export class DockerSandbox implements SandboxExecutor {
   }
 
   async run(request: SandboxRunRequest, signal: AbortSignal): Promise<ToolRunResult> {
-    const { plan, executionToken } = request;
+    const { plan } = request;
 
     const image = resolveImage(plan, this.config.allowedImages);
     if (image === undefined) {
@@ -411,20 +413,6 @@ export class DockerSandbox implements SandboxExecutor {
       };
     }
 
-    // 令牌一致性：plan 里没有令牌字段，令牌由 commitRun 签发并与 planHash 绑定。
-    // 空的令牌说明调用方跳过了 commitRun —— 拒绝。
-    if (executionToken.trim().length === 0) {
-      return {
-        status: 'blocked',
-        error: {
-          status: 'blocked',
-          code: 'scope_violation',
-          message: '缺少一次性执行令牌；本次执行未经 commitRun 准入',
-          next_action: '不要重试；调用方必须先经执行服务的准入流程',
-        },
-      };
-    }
-
     const timeoutMs = Math.min(plan.timeoutMs, { ...DEFAULT_LIMITS, ...this.config.limits }.maxWallClockMs);
     const containerName = this.containerName(plan);
     const argv = buildDockerArgs({
@@ -432,7 +420,6 @@ export class DockerSandbox implements SandboxExecutor {
       plan,
       config: this.config,
       containerName,
-      executionToken,
     });
 
     const outcome = await this.runner.run(argv, { signal, timeoutMs });

@@ -607,15 +607,6 @@ export class PgPolicyService implements PolicyService {
   }
 
   /**
-   * 逐跳校验一条重定向链（§10.2.2「重定向每一跳都重新校验」）。
-   *
-   * 这是 `scope.ts` 里 `evaluateRedirectChain` 的**接线点**——该函数此前已实现但
-   * 无调用者，等于这条安全规则在运行时没有落点。HTTP 路径的每次跳转都应经它。
-   *
-   * 数据来源与 `evaluateScope` 相同（同一范围版本 + 资产裁决），因此不增加查询语义
-   * 负担；范围读取失败与判定失败一样返回确定拒绝，不退化为「放过」。
-   */
-  /**
    * 已注册的动作模板（顺序即注册顺序）。
    *
    * 暴露它的原因：模板集合是封闭的，而提示词必须把它交给模型，否则模型只能猜
@@ -626,6 +617,19 @@ export class PgPolicyService implements PolicyService {
     return this.#registry.list();
   }
 
+  /**
+   * 逐跳校验一条重定向链（§10.2.2「重定向每一跳都重新校验」）。
+   *
+   * **服务层没有消费者**（2026-10-05 复核 REQ-4）：实现与数据来源都在，但没有任何调用者。
+   * 现状：容器内 `http_get` 自己跟跳，并按裁决地址集合对每一跳重新取址
+   * （`pentest-tool` 的 `while True: hop` 循环 + `fixed_address`）；本方法要补的是
+   * **带范围/资产裁决语义的那一层判定**（跳转目标是否在范围内、是否落在排除项上），
+   * 它目前只在测试里被调用。接线时要做的：代理或执行路径在每一跳判定前调用本方法，
+   * 并把判定结果落审计。
+   *
+   * 数据来源与 `evaluateScope` 相同（同一范围版本 + 资产裁决），因此不增加查询语义
+   * 负担；范围读取失败与判定失败一样返回确定拒绝，不退化为「放过」。
+   */
   async evaluateRedirectChain(input: {
     engagementId: string;
     scopeVersion: number;
@@ -648,9 +652,15 @@ export class PgPolicyService implements PolicyService {
   /**
    * 地址固定校验（§10.2.2）：实际拨号地址必须落在裁决时解析出的地址集合内。
    *
-   * 这是 `scope.ts` 里 `assertAdjudicatedAddress` 的接线点——同样此前无调用者。
-   * 代理在建立连接前调用它，即可保证「连接的地址」= 「校验的地址」，
-   * 从而闭合 DNS 重绑定的窗口。
+   * **服务层没有消费者**（2026-10-05 复核 REQ-4）：实现与数据来源都在，但没有任何调用者。
+   * 现状要说清楚，免得两处结论互相打架：
+   * - 容器内的**内置工具**自己做到了固定拨号——`pentest-tool` 的 `adjudicated_addresses`
+   *   /`fixed_address` 只拨裁决出的字面地址，并对每一跳重新取址；
+   * - 但**出口代理**（`scripts/egress-proxy.py`）只按 `EGRESS_ALLOW` 判定，并由它自己
+   *   解析域名（`create_connection((host, port))`）——经代理的域名目标因此仍有一个
+   *   重绑定窗口，而闭合它正是本方法存在的理由。
+   * 接线时要做的：代理在建立连接前调用本方法（或让策略服务定期产出地址集合给代理），
+   * 并把拒绝落审计（`scope_violation`）。
    */
   assertAdjudicatedAddress(normalized: NormalizedTarget, dialedAddress: string): ScopeVerdict {
     return assertAdjudicatedAddress(normalized, dialedAddress);

@@ -376,3 +376,45 @@ P3  lint/CI → verify 脚本族 → 单一来源 → 测试纪律 → git init 
 
 - `#fetch`（面板数据读：结论/放行队列/记忆）未加归属守卫——面板数据不参与状态条，且各自有"读取失败"呈现；需要时再按同一模式收。
 - `test/client-memory-views.test.ts` 里另有一个 `parseLimit`（记忆检索条数，非法值回落 `DEFAULT_MEMORY_LIMIT`）——与预算解析**同名不同义**，本轮未动；若后续混淆，建议改名（`parseMemoryLimit`）。
+
+---
+
+## 附七：REQ-9 交接真哈希 + REQ-4 死语义处置（2026-10-05，续）
+
+### REQ-9：两处「内容哈希」都是真摘要，且 UI 拿到的是权威值
+
+| 位置 | 之前 | 现在 |
+|---|---|---|
+| 草稿（`beginHandoff` 写入）| `'sha256:' + base64url(JSON.stringify(draftJson)).slice(0, 43)`——**可逆**（等于把草稿正文含提示词编码后存回哈希列）、**截断**（尾部丢弃） | `computeDraftHash(draftJson)` = 对**落库那份** `draft_json` 的 sha256 十六进制摘要 |
+| 确认（`confirmTransition` 写入）| 同一形态，摘要对象是 `approvedPrompt` | `computeHandoffHash(批准包, 绑定范围版本)`——包内 `humanDecisionRef` 指向**本次**决策 id，摘要因此覆盖「谁、以什么内容、在哪个范围版本下批准」 |
+| 读回（`currentHandoffDraft`）| 不返回哈希，界面永远显示「尚未计算」 | 返回 `handoffs.content_hash`（`HandoffDraft.contentHash`） |
+| 界面（`HandoffEditor`）| 只能显示调用方传进来的预览值 | 显示权威哈希：前 16 位 + 省略号，完整值在 `title`（与报告导出页同一约定） |
+
+顺带修掉两处过时事实：`HandoffEditor` 注释里的端点名 `requestHandoffDraft` / `editHandoff` 并不存在（真实端点是 `beginHandoff` / `currentHandoffDraft`，且**没有**草稿编辑端点）；`rpc.ts` 的 `lock: 'envelope'` 说明称「那三个方法」——实际只有 `interject` 一个（`beginHandoff` 已是 `actor`）。
+
+**回归锁**：起稿用例断言草稿哈希为 64 位十六进制、等于库里 `draft_json` 的摘要、且读端点返回的正是它；确认用例断言 `humanDecisionRef` = `human_decision_id`、`content_hash` = 用批准包复算的摘要、包内 `contentHash` 与落库列一致。
+
+#### 实施中发现的新缺陷：哈希过不了 jsonb 往返（本轮已修）
+
+把「回读 `draft_json` 复算摘要」写成断言后**立刻红了**，实测：
+
+```
+stored     = 90706115a8ec019b780f7d7e59e67a57023d640a715df46b83f3a617f05eb61b
+recomputed = 452a422db96206d98ad598f51938d03605995247ec27bc2e5a968f73ca8cb149
+```
+
+根因：`draft_json` / `approved_json` 都是 **`jsonb`** 列，PostgreSQL **不保留对象键序**（按「长度 + 字节序」重排、并去重），而首版 `computeDraftHash` 直接 `JSON.stringify` 输入对象——写入时按 JS 插入顺序序列化，读回时按 jsonb 顺序序列化，同一份内容算出两个摘要。也就是说：即使换成了真 sha256，「同一份草稿同一个哈希」这条性质在读回的那一刻仍然是断的（人类看到的、库里存的、事后复算的三者永远对不上）。
+
+修法：新增 `canonicalJsonForHash`（递归按键排序后序列化，**数组顺序保留**——§7.4 的引用优先级顺序有语义），两个哈希函数都经由它。性质由新用例钉住：`computeDraftHash(withReversedKeys(x)) === computeDraftHash(x)`、`computeHandoffHash(乱序包) === computeHandoffHash(正序包)`，同时 `['s1','s2'] ≠ ['s2','s1']`（排序不得抹掉数组语义）。
+
+> 这条缺陷值得单独记一笔：它只在「写入侧」看是看不出来的——`content_hash` 列里躺着一个格式正确的 64 位摘要，谁都不会怀疑它；是**回读复算**把它逼出来的。另一处 N4（工作记忆 `content_hash` 是 `sha256:todo` 字面量）同属「哈希列里放的不是哈希」，本轮未动（见 §2 N4）。
+
+### REQ-4：一处删除、两处如实降级
+
+| 语义 | 处置 |
+|---|---|
+| `executionToken`（生成/注入/非空检查/容器打印）| **整条删除**：`commitRun` 不再签发（同时去掉 `node:crypto` 导入）、`SandboxRunRequest` 不再有此字段、`docker-sandbox` 不再注入 `PENTEST_EXECUTION_TOKEN`、容器工具不再打印 `exec_token_present`、6 处测试断言与 1 个「缺令牌即拒绝」用例随之删除（该保证改由**结构**承担：`SandboxExecutor.run` 的唯一调用点在 `commitRun` 成功之后）。设计文档 §10.2.3 里「签发一次性令牌」的表述属**规范**，本轮未改（改规范是另一件事）。 |
+| `assertAdjudicatedAddress` | 保留实现，注释如实降级：**服务层没有消费者**；缺口精确定位到**代理**（`egress-proxy.py` 只按 `EGRESS_ALLOW` 判定并自己解析域名），而容器内置工具**已经**按裁决地址固定拨号。 |
+| `evaluateRedirectChain` | 保留实现，注释如实降级：容器 `http_get` 每跳只做**地址固定**，缺的是**带范围/资产裁决语义**的那一层判定。 |
+
+`verify:promises` 的两条 `pending` 条目保留（判定「未接线」的结论不因注释修正而改变）；`pg-policy.ts` 中一处**错位的文档注释**（`evaluateRedirectChain` 的说明挂在 `listActionTemplates` 上方）一并归位。

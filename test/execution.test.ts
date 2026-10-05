@@ -363,7 +363,7 @@ function makeHarness(
       pending.set(input.toolRunId, { planHash: input.planHash, idempotencyKey: input.idempotencyKey });
       // 窗口注入点：commitRun 与 sandbox.run 之间（GAP-3 的等待窗口回归测试用）。
       hooks?.afterCommit?.();
-      return { ok: true, executionToken: `tok-${input.toolRunId}` };
+      return { ok: true };
     },
     finishRun: async (toolRunId, result) => {
       // 故障注入点：结算回写失败（GAP-5 回归测试用）。
@@ -1503,7 +1503,6 @@ test('执行成功：沙箱收到计划与一次性执行令牌，结果回写',
   assert.equal(result.status, 'completed');
   assert.equal(result.stdout, 'HTTP/1.1 200 OK');
   assert.equal(h.sandbox.calls.length, 1);
-  assert.equal(h.sandbox.calls[0]?.executionToken, 'tok-run-1');
   assert.equal(h.sandbox.calls[0]?.plan.idempotencyKey, decision.plan.idempotencyKey);
   assert.equal(h.store.finished.get(decision.plan.idempotencyKey)?.result.status, 'completed');
 });

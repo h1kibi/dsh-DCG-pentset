@@ -454,7 +454,7 @@ describe(
 
     // ───────────────────────────── commitRun：原子提交 ─────────────────────────────
 
-    it('commitRun 在同一事务内消费凭证 + 登记运行，并签发不可预测的一次性令牌', async () => {
+    it('commitRun 在同一事务内消费凭证 + 登记运行（§10.3.1）', async () => {
       const approvalId = await createApproval();
       const toolRunId = randomUUID();
       const idempotencyKey = `key-${randomUUID()}`;
@@ -462,8 +462,6 @@ describe(
       const commit = await store.commitRun(commitInput(toolRunId, idempotencyKey, approvalId));
       assert.equal(commit.ok, true);
       assert.ok(commit.ok);
-      // 令牌由 CSPRNG 直接产出（32 字节 → base64url 43 字符），不是可推导的串。
-      assert.match(commit.executionToken, /^[A-Za-z0-9_-]{43}$/);
 
       const run = await readRun(toolRunId);
       assert.ok(run !== undefined);
@@ -496,13 +494,6 @@ describe(
       assert.ok(approval !== undefined);
       assert.ok(approval.consumed_at instanceof Date);
       assert.equal(approval.consumed_by_tool_run, toolRunId);
-
-      // 两次签发的令牌互不相同（不可预测的可观测代理）。
-      const second = await store.commitRun(
-        commitInput(randomUUID(), `key-${randomUUID()}`, await createApproval()),
-      );
-      assert.ok(second.ok);
-      assert.notEqual(second.executionToken, commit.executionToken);
     });
 
     it('commitRun 在凭证已被消费时返回 approval_consumed，且不登记第二个运行', async () => {

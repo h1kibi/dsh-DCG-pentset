@@ -194,11 +194,15 @@ export interface CommitRunInput {
 }
 
 /**
- * host 侧原子提交的结果：凭证消费 + 运行登记 + 一次性执行令牌
- * 必须在同一事务内完成（§10.3.1）。
+ * host 侧原子提交的结果：凭证消费 + 运行登记必须在同一事务内完成（§10.3.1）。
+ *
+ * 这里**不再**签发一次性执行令牌（2026-10-05 复核 REQ-4）：签发过、注入过、检查过非空，
+ * 但没有任何消费方校验它——代理只看 `EGRESS_ALLOW`，容器内包装器只是打印它是否存在。
+ * 不可验证的凭证不是闸门；「只有已准入的执行会跑」由调用结构承担
+ * （`SandboxExecutor.run` 的唯一调用点在 `commitRun` 成功之后）。
  */
 export type CommitRunResult =
-  | { readonly ok: true; readonly executionToken: string }
+  | { readonly ok: true }
   | {
       readonly ok: false;
       readonly reason:
@@ -232,8 +236,6 @@ export interface ExecutionStore {
 
 export interface SandboxRunRequest {
   readonly plan: ExecutionPlan;
-  /** 一次性执行令牌：沙箱与代理持它才可发起连接，并在连接时刻复核策略 epoch。 */
-  readonly executionToken: string;
 }
 
 export interface SandboxExecutor {
@@ -1627,7 +1629,7 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
             ),
           };
         } else {
-          result = await deps.sandbox.run({ plan, executionToken: commit.executionToken }, combined);
+          result = await deps.sandbox.run({ plan }, combined);
         }
       }
     } catch (error) {

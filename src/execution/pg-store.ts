@@ -33,7 +33,6 @@
  * `invalid input syntax` 抛给上层。
  */
 
-import { randomBytes } from 'node:crypto';
 import type { ActionClass, ApprovalDecision, ApprovalRecord, ToolRunResult } from '../contracts.ts';
 import type { DbClient } from '../memory/ledger.ts';
 import type {
@@ -471,9 +470,7 @@ export class PgExecutionStore implements ExecutionStore {
         // 两个 CTE 的互锁保证不会走到这里；真走到了说明原子性假设被破坏，必须响亮失败。
         throw new Error('commitRun：运行已登记但凭证未消费——单语句原子性被破坏');
       }
-      // 一次性执行令牌：CSPRNG 直接产出，不经任何可推导的变换；只交付给沙箱进程。
-      // 令牌不落库（001 没有该列）：沙箱与代理持它才可发起连接，代理在连接时刻复核 policy epoch。
-      return { ok: true, executionToken: randomBytes(32).toString('base64url') };
+      return { ok: true };
     }
 
     // 状态未落地：以下全部是只读诊断，不写任何东西（因此仍无半完成状态）。

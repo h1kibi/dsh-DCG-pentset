@@ -32,14 +32,16 @@ const PROMISES: readonly PromiseEntry[] = [
     symbol: 'assertAdjudicatedAddress',
     file: 'src/policy/scope.ts',
     status: 'pending',
-    note: 'REQ-4：连接时刻的地址固定未接线——删除或由代理侧真实接线，二选一',
+    note:
+      'REQ-4：服务层未接线（容器内置工具已按裁决地址固定拨号；缺口在出口代理——它自己解析域名）。'
+      + '接线形态：代理按裁决地址拨号，或调用本方法后落审计',
     forwarders: ['src/policy/pg-policy.ts'],
   },
   {
     symbol: 'evaluateRedirectChain',
     file: 'src/policy/scope.ts',
     status: 'pending',
-    note: 'REQ-4：HTTP 重定向逐跳校验未接线',
+    note: 'REQ-4：未接线（容器 http_get 每跳只做地址固定，缺范围/资产裁决那一层）。接线形态：代理或执行路径每跳调用',
     forwarders: ['src/policy/pg-policy.ts'],
   },
   {

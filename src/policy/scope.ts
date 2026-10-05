@@ -1256,7 +1256,9 @@ function canonicalAddresses(
 
 /**
  * §10.2.2「匹配规则」与「范围违规的处置」：返回 included/ok 或稳定拒绝码。
- * 通过时返回带 `resolvedAddresses` 的规范化目标 —— 连接必须落到其中之一（`assertAdjudicatedAddress`）。
+ * 通过时返回带 `resolvedAddresses` 的规范化目标 —— 连接必须落到其中之一
+ * （由 `assertAdjudicatedAddress` 判定；**该判定在服务层尚未接线**，
+ * 容器内置工具已按裁决地址固定拨号，代理侧的接线点见 `pg-policy.ts`）。
  */
 export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
   const loadedResult = isLoadedScope(input.scope)

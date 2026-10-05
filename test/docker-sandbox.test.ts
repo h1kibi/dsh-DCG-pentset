@@ -57,8 +57,8 @@ function plan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
   };
 }
 
-function argvFor(p: ExecutionPlan, token = 'tok-1'): readonly string[] {
-  return buildDockerArgs({ image: IMAGE, plan: p, config: CONFIG, containerName: 'c1', executionToken: token });
+function argvFor(p: ExecutionPlan): readonly string[] {
+  return buildDockerArgs({ image: IMAGE, plan: p, config: CONFIG, containerName: 'c1' });
 }
 
 /** 取某个开关后面的值。 */
@@ -146,14 +146,7 @@ test('镜像用 digest 引用，不用标签', () => {
   assert.ok(ref.includes('@sha256:'), `镜像必须以 @sha256: 引用，实际 ${ref}`);
 });
 
-test('执行令牌经环境变量传入，不出现在 argv 的命令文本里', () => {
-  const argv = argvFor(plan(), 'secret-token-abc');
-  assert.ok(argv.includes('PENTEST_EXECUTION_TOKEN=secret-token-abc'));
-  // 命令文本是最后一个元素，不得含令牌
-  assert.equal(argv[argv.length - 1]!.includes('secret-token-abc'), false);
-});
-
-test('令牌与 planHash/epoch/scope 一起传入：容器内可自校验裁决基准', () => {
+test('裁决基准（planHash/epoch/scope）经环境变量传入：容器内可自校验', () => {
   const argv = argvFor(plan({ planHash: 'ph-9', policyEpoch: 5, scopeVersion: 3 }));
   assert.ok(argv.includes('PENTEST_PLAN_HASH=ph-9'));
   assert.ok(argv.includes('PENTEST_POLICY_EPOCH=5'));
@@ -193,19 +186,10 @@ function fakeRunner(
 
 const signal = (): AbortSignal => new AbortController().signal;
 
-test('缺少执行令牌时拒绝执行（不降级为直接跑）', async () => {
-  const { runner, calls } = fakeRunner({ code: 0, stdout: 'ok', stderr: '', timedOut: false });
-  const sandbox = new DockerSandbox(CONFIG, { runner });
-  const out = await sandbox.run({ plan: plan(), executionToken: '   ' }, signal());
-  assert.equal(out.status, 'blocked');
-  assert.equal(out.error?.code, 'scope_violation');
-  assert.equal(calls.length, 0, '未准入时不得启动容器');
-});
-
 test('正常执行：把 runner 的结果映射为 completed', async () => {
   const { runner } = fakeRunner({ code: 0, stdout: 'scan done', stderr: '', timedOut: false });
   const sandbox = new DockerSandbox(CONFIG, { runner });
-  const out = await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+  const out = await sandbox.run({ plan: plan() }, signal());
   assert.equal(out.status, 'completed');
   assert.equal(out.exitCode, 0);
   assert.equal(out.stdout, 'scan done');
@@ -214,14 +198,14 @@ test('正常执行：把 runner 的结果映射为 completed', async () => {
 test('超时映射为 timed_out 且标记截断', async () => {
   const { runner } = fakeRunner({ code: null, stdout: 'partial', stderr: '', timedOut: true });
   const sandbox = new DockerSandbox(CONFIG, { runner });
-  const out = await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+  const out = await sandbox.run({ plan: plan() }, signal());
   assert.equal(out.status, 'timed_out');
 });
 
 test('进程未能启动映射为 runtime_error + sandbox_unavailable', async () => {
   const { runner } = fakeRunner({ code: null, stdout: '', stderr: 'docker not found', timedOut: false });
   const sandbox = new DockerSandbox(CONFIG, { runner });
-  const out = await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+  const out = await sandbox.run({ plan: plan() }, signal());
   assert.equal(out.status, 'runtime_error');
   assert.equal(out.error?.code, 'sandbox_unavailable');
 });
@@ -253,7 +237,7 @@ test('超时优先于中止：两者都置位时报 timed_out', () => {
 test('中止经沙箱执行路径一路传到结果（不是只在纯函数里成立）', async () => {
   const { runner } = fakeRunner({ code: null, stdout: '', stderr: '', timedOut: false, aborted: true });
   const sandbox = new DockerSandbox(CONFIG, { runner });
-  const out = await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+  const out = await sandbox.run({ plan: plan() }, signal());
   assert.equal(out.status, 'cancelled');
 });
 
@@ -268,7 +252,7 @@ test('超时/中止后必须补一次 docker rm -f 兜底：宿主杀了 CLI ≠
   ]) {
     const { runner, calls } = fakeRunner(result);
     const sandbox = new DockerSandbox(CONFIG, { runner });
-    await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+    await sandbox.run({ plan: plan() }, signal());
     const removal = calls.find((argv) => argv[1] === 'rm');
     assert.ok(removal !== undefined, `必须尝试删除容器（${JSON.stringify(result)}）`);
     assert.deepEqual(removal.slice(0, 3), ['docker', 'rm', '-f']);
@@ -283,7 +267,7 @@ test('正常退出与运行期错误**不**做兜底删除：那可能删掉别�
   ]) {
     const { runner, calls } = fakeRunner(result);
     const sandbox = new DockerSandbox(CONFIG, { runner });
-    await sandbox.run({ plan: plan(), executionToken: 'tok' }, signal());
+    await sandbox.run({ plan: plan() }, signal());
     assert.equal(calls.filter((argv) => argv[1] === 'rm').length, 0, '非超时/中止不得触发删除');
   }
 });
