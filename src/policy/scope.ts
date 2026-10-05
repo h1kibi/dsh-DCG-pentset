@@ -614,7 +614,7 @@ function parseUrlSelector(raw: string, allowWildcard: boolean): Result<ParsedUrl
     return fail('encoded_authority', `URL ${raw} 的 authority 含百分号编码，不同解析器还原结果不同（${DOC} 必须拒绝的输入形态）`);
   }
 
-  let hostPart = authority;
+  let hostPart: string;
   let portText: string | undefined;
   if (authority.startsWith('[')) {
     const close = authority.indexOf(']');

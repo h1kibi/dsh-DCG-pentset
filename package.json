@@ -45,11 +45,13 @@
     "build:client": "tsdown",
     "postbuild": "node -e \"require('node:fs').cpSync('src/db/migrations','lib/db/migrations',{recursive:true})\"",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src test scripts",
     "test": "node --import ./test/helpers/tsx-loader.mjs --test --test-concurrency=1 --experimental-strip-types --test-timeout=40000 \"test/**/*.test.ts\"",
     "test:parallel": "node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=40000 \"test/**/*.test.ts\"",
     "verify:client": "node --experimental-strip-types scripts/verify-client-bundle.ts",
     "verify:styles": "node scripts/verify-style-coverage.mjs",
     "verify:forward-migration": "node --experimental-strip-types scripts/verify-forward-migration.ts",
+    "verify:promises": "node --experimental-strip-types scripts/verify-promises.ts",
     "db:verify": "node --experimental-strip-types scripts/verify-schema.ts"
   },
   "peerDependencies": {
@@ -73,13 +75,16 @@
     "@deepseek-ai/dsh-session": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
     "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
+    "eslint": "^10.12.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "tsdown": "0.23.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.71.0"
   }
 }

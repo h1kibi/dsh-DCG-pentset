@@ -13,7 +13,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ConsoleRpc,
-  ConsoleRpcFault,
   CONSOLE_RPC_METHODS,
   isConsoleMethod,
   describeConsoleMethods,

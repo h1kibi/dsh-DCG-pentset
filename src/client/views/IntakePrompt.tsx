@@ -512,7 +512,6 @@ export interface IntakeRunningCardProps {
 
 export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
   const active = props.activeSession;
-  const nextPhase = props.currentPhase === null ? null : nextAdvancePhase(props.currentPhase);
   // 标题按**真实状态**分档：写死「正在运行」会在 Agent 已经交完报告等你判断时撒谎。
   const headline =
     props.mainStatus === 'waiting_human_review'

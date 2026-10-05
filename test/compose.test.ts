@@ -1651,7 +1651,7 @@ describe('修改审批计划（真实 PostgreSQL）', { skip: DATABASE_URL === u
 
     const store = new PgExecutionStore(probe as unknown as DbClient);
     const replacementToolRunId = randomUUID();
-    const commit = await store.commitRun({
+    await store.commitRun({
       toolRunId: replacementToolRunId,
       workerSessionId: sessionId,
       idempotencyKey: `approval-replacement-${randomUUID()}`,
@@ -1790,7 +1790,7 @@ describe('apply 启动租约心跳', { skip: DATABASE_URL === undefined ? '未�
     const probe = new Pool({ connectionString: DATABASE_URL });
     const disposers: Array<() => unknown> = [];
     let engagementId = '';
-    let sessionId = '';
+    let sessionId: string;
     try {
       engagementId = randomUUID();
       await probe.query(

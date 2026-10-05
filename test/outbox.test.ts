@@ -1006,7 +1006,7 @@ describe(
       const dead = await enqueueJob(engagementId, { availableAt: past() });
       await failUntilDead(queue, engagementId, dead.job.id);
 
-      const leased = await enqueueJob(engagementId, { availableAt: past() });
+      await enqueueJob(engagementId, { availableAt: past() });
       onlyRow(await queue.claim({ engagementId, limit: 1 }));
 
       const pendingOlder = await enqueueJob(engagementId, {

@@ -279,37 +279,6 @@ export interface HostDomRootLike {
   querySelectorAll(selector: string): ArrayLike<HostDomNodeLike>;
 }
 
-/**
- * 插件自家 UI 的根。**落在里面的控件不算「宿主在问人」**：控制台的运行控制里，
- * 阶段选择也是 `button[role="radio"]`——它不是提问卡，不该让状态条变灰（评审指出）。
- */
-const OWN_UI_SELECTOR = '.pentest-console,.pentest-mainpanel,.pentest-statusbar';
-
-function insideOwnUi(node: HostDomNodeLike): boolean {
-  const hit = node.closest?.(OWN_UI_SELECTOR);
-  return hit !== null && hit !== undefined;
-}
-
-/** 该选择器下是否存在**可见**且被接受的首个节点。 */
-function visibleAny(
-  root: HostDomRootLike,
-  selectors: readonly string[],
-  accept: (node: HostDomNodeLike) => boolean = () => true,
-): boolean {
-  for (const selector of selectors) {
-    const nodes = root.querySelectorAll(selector);
-    const count = nodes.length;
-    for (let i = 0; i < count; i += 1) {
-      const node = nodes[i];
-      if (node === undefined || !accept(node)) continue;
-      const rects = node.getClientRects?.();
-      // 没有 `getClientRects` 的实现（测试替身）按可见处理：隐藏的控件才需要显式否证。
-      if (rects === undefined || rects.length > 0) return true;
-    }
-  }
-  return false;
-}
-
 export function StatusPillSurface(props: {
   readonly controller: ConsoleController;
   readonly onOpen: () => void;

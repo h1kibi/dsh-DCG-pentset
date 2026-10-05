@@ -5,19 +5,17 @@
  * 方法体与拆分前逐字一致；共享原语经构造注入的 {@link WorkflowCore} 使用。
  */
 
-import type { ActionClass, ContextRef, HandoffDraft, HandoffDraftRequest, HandoffEdit, HumanCancel, Phase, TransitionConfirmation, TransitionResult, WorkflowSnapshot } from '../contracts.ts';
+import type { ActionClass, ContextRef, HandoffDraft, HumanCancel, Phase, TransitionConfirmation, TransitionResult, WorkflowSnapshot } from '../contracts.ts';
 import { ACTION_CLASSES, isPhase } from '../contracts.ts';
 import { planTransition } from './transition-table.ts';
 import { PHASE_DEFINITIONS, planPhaseMove } from './phases.ts';
 import { SKILL_PACKS } from '../skills/skill-pack.ts';
 import { DEFAULT_PHASE_TOOL_ALLOW } from './model.ts';
-import { capContextRefs, enrichContextRefs, validateHandoff } from './handoff.ts';
+import { capContextRefs, validateHandoff } from './handoff.ts';
 import type { HandoffPackage } from '../contracts.ts';
-import { SessionFactoryError } from './session-port.ts';
 import { issueLease, revokeLease } from './lease.ts';
 import { DEFAULTS } from '../contracts.ts';
-import { SYSTEM_OPERATOR_ID, WorkflowRejection, recommendedNextPhase, toInt } from './model.ts';
-import type { WorkflowServiceDeps } from './model.ts';
+import { WorkflowRejection, recommendedNextPhase, toInt } from './model.ts';
 import type { WorkflowCore } from './core.ts';
 
 export class HandoffFlow {

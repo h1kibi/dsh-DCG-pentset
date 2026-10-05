@@ -346,7 +346,6 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
     };
   }
 
-  const blankReason = reason.trim().length === 0;
   const consumed = item.consumedAt !== null;
   // 到期时间缺失或不可解析 → 按「已过期」处理：放行判定必须 fail-closed（与存储层的读法一致）
   const expiryMs = item.expiresAt === null ? Number.NaN : Date.parse(item.expiresAt);

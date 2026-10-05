@@ -79,9 +79,6 @@ for (const match of designText.matchAll(/^\s{2}'([a-z0-9-]+)':\s'[a-zA-Z][a-zA-Z
   defined.add(`--pt-${match[1]}`);
 }
 
-const componentCss = cssText
-  .replace(/import[\s\S]*?from\s+'[^']+';/g, '')
-  .replace(/export const [A-Z_]+ = `/g, '');
 const referenced = new Set([...cssText.matchAll(/var\((--pt-[a-z0-9-]+)/g)].map((m) => m[1]));
 const unknownTokens = [...referenced].filter((token) => !defined.has(token)).sort();
 

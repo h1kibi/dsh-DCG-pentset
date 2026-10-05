@@ -73,6 +73,7 @@ async function main(): Promise<void> {
             `${file.fileName} 第 ${i + 1}/${statements.length} 条语句失败：${
               err instanceof Error ? err.message : String(err)
             }`,
+            { cause: err },
           );
         }
       }

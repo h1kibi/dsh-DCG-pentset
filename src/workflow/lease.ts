@@ -595,7 +595,7 @@ export async function revokeLease(
     );
   }
   const outcome = await store.transaction(async (tx) => {
-    let active: SessionLease | null = null;
+    let active: SessionLease | null;
     if (input.expectGeneration !== undefined) {
       active = await tx.selectActiveLease(input.workerSessionId);
       if (active === null) return { ok: true as const, value: { revokedLeaseIds: [], reason: input.reason, active } };

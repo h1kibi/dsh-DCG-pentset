@@ -353,7 +353,7 @@ export async function migrate(options: MigrateOptions = {}): Promise<MigrateResu
             await client.query(statements[i] as string);
           } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);
-            throw new Error(`${file.fileName} 第 ${i + 1}/${statements.length} 条语句失败：${detail}`);
+            throw new Error(`${file.fileName} 第 ${i + 1}/${statements.length} 条语句失败：${detail}`, { cause: err });
           }
         }
         await recordAppliedMigration(client, version, file.fileName);

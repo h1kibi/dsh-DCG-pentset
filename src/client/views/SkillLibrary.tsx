@@ -81,8 +81,6 @@ export const UNDECIDED_NOTE =
 const AUDIT_NOTE =
   '新增与修改会记录操作者、时间与内容哈希，形成审计条目（§2.2）。';
 
-const SELECTION_LEGEND = '本次装载的 skill 集合';
-
 // ───────────────────────── 类型 ─────────────────────────
 
 /**

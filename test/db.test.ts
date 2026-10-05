@@ -604,7 +604,7 @@ describe('迁移器纯逻辑', () => {
 const connectionString = process.env['PENTEST_DATABASE_URL'];
 const integration = connectionString ? describe : describe.skip;
 
-integration('集成：真实 PostgreSQL + pgvector', () => {
+void integration('集成：真实 PostgreSQL + pgvector', () => {
   it('迁移幂等：连跑两次不重复执行', async () => {
     const expectedFiles = (await loadMigrations(MIGRATIONS_DIR)).map((m) => m.fileName);
     const first = await migrate({ connectionString });
@@ -917,7 +917,7 @@ integration('集成：真实 PostgreSQL + pgvector', () => {
   });
 });
 
-integration('集成：审批权限与 resolver 边界', () => {
+void integration('集成：审批权限与 resolver 边界', () => {
   async function queryAsApp(client: pg.Client, sql: string, params?: readonly unknown[]) {
     await client.query('SET ROLE pentest_app');
     try {
@@ -948,7 +948,7 @@ integration('集成：审批权限与 resolver 边界', () => {
           [id, name],
         );
       }
-      for (const [id, engagement, name] of [[workerA, engagementA, 'approval-worker-a'], [workerB, engagementB, 'approval-worker-b']] as const) {
+      for (const [id, engagement, _name] of [[workerA, engagementA, 'approval-worker-a'], [workerB, engagementB, 'approval-worker-b']] as const) {
         await client.query(
           `INSERT INTO pentest.worker_sessions
              (id, engagement_id, dsh_session_id, phase, profile_id, profile_revision, attempt,

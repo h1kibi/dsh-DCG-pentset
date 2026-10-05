@@ -43,7 +43,6 @@ class FakeSessionFactory implements SessionFactory {
   readonly delivered: Array<{ dshSessionId: string; message: string }> = [];
   readonly closed: string[] = [];
   #failCreate = false;
-  #failDraft = false;
 
   failNextCreate(): void {
     this.#failCreate = true;
@@ -63,11 +62,6 @@ class FakeSessionFactory implements SessionFactory {
       throw new SessionFactoryError('会话已关闭', { dshSessionId });
     }
     this.delivered.push({ dshSessionId, message });
-  }
-
-  /** 让下一次草稿请求失败（§15.6 的回退路径要用它）。 */
-  failNextDraft(): void {
-    this.#failDraft = true;
   }
 
   /** 记录每次草稿请求的目标阶段（用于断言「省略时按状态机」）。 */
@@ -2594,7 +2588,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       targets: [{ kind: 'ip', value: '10.9.9.9', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }] as const,
     });
     madeEngagements.push(created.id);
-    const started = await service.startWorker({
+    await service.startWorker({
       engagementId: created.id,
       operatorId: 'op',
       reason: '开始情报收集',

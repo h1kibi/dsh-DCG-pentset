@@ -269,7 +269,7 @@ describe('索引调度器（真实 PostgreSQL）', { skip: DATABASE_URL === unde
 
   test('未知任务类型：同样走失败路径', async () => {
     const { engagementId } = await seed();
-    const { outbox, dispatcher } = build();
+    const { dispatcher } = build();
     // 直接插一行未知类型（绕过 enqueue 的取值表校验，模拟更高版本入队的任务）
     await pool.query(
       `insert into pentest.outbox_jobs (engagement_id, job_type, entity_id, idempotency_key, status)

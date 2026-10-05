@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { SANDBOX_TOOLBELT } from '../src/contracts.ts';
 import { PROFILE_DEFAULTS } from '../src/policy/behavior-profile.ts';
 import { SKILL_PACKS, allPackSkillNames, parseSkillFile, type ParsedSkill } from '../src/skills/skill-pack.ts';
 
@@ -34,19 +33,6 @@ const SECTIONS = [
  * 白名单而不是黑名单：新增一个不认识的可执行名时测试会红，逼人确认「这工具真在镜像里」，
  * 而不是让一条永远跑不通的命令悄悄留在 skill 里。
  */
-const SHELL_BUILTINS = [
-  'for', 'if', 'then', 'else', 'elif', 'fi', 'while', 'do', 'done', 'case', 'esac', 'true', 'false',
-  'export', 'set', 'cd', 'echo', 'exit', 'test', 'read', 'shift', 'local', 'return', 'unset', 'wait',
-] as const;
-const POSIX_TOOLS = [
-  'cat', 'grep', 'egrep', 'sed', 'awk', 'sort', 'uniq', 'head', 'tail', 'wc', 'cut', 'tr', 'ls', 'find',
-  'xargs', 'tee', 'mktemp', 'base64', 'xxd', 'od', 'iconv', 'sleep', 'timeout', 'which', 'command',
-  'mkdir', 'rm', 'cp', 'mv', 'touch', 'diff', 'printf', 'seq', 'env', 'hostname', 'id', 'uname', 'date',
-  'sh', 'bash', 'python3', 'pip', 'true', 'false', 'stat', 'readlink', 'dirname', 'basename', 'nl', 'split',
-] as const;
-
-const ALLOWED = new Set<string>([...SANDBOX_TOOLBELT, ...POSIX_TOOLS, ...SHELL_BUILTINS]);
-
 async function loadPack(): Promise<Map<string, { text: string; parsed: ParsedSkill }>> {
   const entries = await readdir(SKILLS_DIR, { withFileTypes: true });
   const out = new Map<string, { text: string; parsed: ParsedSkill }>();

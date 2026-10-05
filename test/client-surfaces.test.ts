@@ -189,9 +189,8 @@ test('状态条在上栏且可点击（2026-10-05 起不再用底部浮层）', 
   const facts = statusPillFacts(
     snapshot({ engagements: [engagement('e1', '作业')], selectedEngagementId: 'e1' }),
   );
-  let opened = 0;
   const html = renderToStaticMarkup(
-    createElement(PentestStatusPill, { facts, onOpen: () => { opened += 1; } }),
+    createElement(PentestStatusPill, { facts, onOpen: () => undefined }),
   );
   // **位置回归锁**：底部浮层会压住宿主输入区/提问卡（人类报的重叠）。
   // 现在挂在 `conversation.header` 的文档流里，因此不得再出现 fixed 定位。
@@ -419,42 +418,6 @@ test('「弱背景」用的是设计系统里的 wash 令牌，而不是某个�
 // 宿主令牌清单（`--dsw-alias-*`）已随视觉方向变更一并移除：深色单主题不再依赖宿主
 // 颜色令牌，「引用了未定义令牌」这条断言改由 `definedTokens()` 对照设计系统做（见上）。
 
-
-// ─────────────────── 状态条在宿主问人时让位 ───────────────────
-
-/**
- * 回归锁：2026-10-04 活体演练里，状态条（fixed，屏幕下方居中）压住了宿主提问卡的
- * 「下一题」按钮命中点——Puppeteer 报 `covered by div.pentest-statusbar`，人类鼠标
- * 点同一处同样点不到。修法是**让位**：宿主在问人时把指针事件交给下面的控件。
- */
-function domRoot(selectors: Record<string, Array<{ readonly visible?: boolean; readonly ownUi?: boolean }>>): {
-  querySelectorAll(selector: string): ArrayLike<{
-    getClientRects(): { readonly length: number };
-    closest(selector: string): unknown;
-  }>;
-} {
-  return {
-    // 真实实现逐条发选择器（`a`、`b`…），所以桩按「这一段是否被查询到」来匹配，
-    // 否则每条断言都会因为桩不认识选择器而恒返回 0 个元素——测试会变成永远绿的假象。
-    querySelectorAll(selector: string) {
-      const out: Array<{
-        getClientRects(): { readonly length: number };
-        closest(selector: string): unknown;
-      }> = [];
-      for (const [key, nodes] of Object.entries(selectors)) {
-        if (!selector.includes(key)) continue;
-        for (const node of nodes) {
-          out.push({
-            getClientRects: () => ({ length: node.visible === false ? 0 : 1 }),
-            // 落在插件自家 UI 里的节点：`closest` 返回一个非 null 的东西。
-            closest: () => (node.ownUi === true ? {} : null),
-          });
-        }
-      }
-      return out;
-    },
-  };
-}
 
 test('状态条：作业名里的控制序列在渲染前剥掉（终端里粘出来的名字不该把乱码带进上栏）', () => {
   const facts = statusPillFacts(

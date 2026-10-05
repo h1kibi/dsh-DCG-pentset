@@ -515,8 +515,6 @@ export class MemoryIndexer {
       }
     }
 
-    let inserted = 0;
-    let skipped = 0;
     let metadataOnly = 0;
     let superseded = 0;
 
@@ -543,8 +541,8 @@ export class MemoryIndexer {
       });
     }
 
-    inserted = await this.#insertChunks(pending);
-    skipped = pending.length - inserted;
+    const inserted = await this.#insertChunks(pending);
+    const skipped = pending.length - inserted;
 
     // 结算块产出后，把同源暂定块标记为被该版本取代
     if (!event.provisional && drafts.some((d) => !d.provisional)) {

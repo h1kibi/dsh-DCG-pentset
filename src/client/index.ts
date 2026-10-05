@@ -39,7 +39,6 @@ import type {
   CandidateAsset,
   EngagementMemory,
   Finding,
-  MemorySearchHit,
   MemoryWatermark,
   DiagnosticsSnapshot,
   ScopeDetail,

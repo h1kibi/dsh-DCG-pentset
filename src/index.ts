@@ -829,15 +829,6 @@ function hostServicesOf(ctx: Context): PentestHostServices | undefined {
   };
 }
 
-interface ConfiguredEcosystemEntry {
-  readonly options?: { readonly name?: unknown };
-  readonly _initTask?: Promise<void>;
-}
-
-interface ConfiguredEcosystemLoader {
-  readonly entries?: () => Iterable<ConfiguredEcosystemEntry>;
-}
-
 /**
  * dsh loader 并行启动同级 entry；等待已经在途的生态 entry，避免 `apply` 在
  * sibling runtime 注册前把 registry 读成半成品。这里只等待 entry 自己的启动任务，

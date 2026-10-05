@@ -241,7 +241,7 @@ test('无论有无服务，守卫都装上（两个扩展点各一）', async ()
 
 test('状态机类能力不被注册为模型工具（§4.2 人类专属）', async () => {
   const rec = recorder();
-  applyPentest(makeCtx({ workerTools: fakeDeps }, rec) as never, {});
+  await applyPentest(makeCtx({ workerTools: fakeDeps }, rec) as never, {});
   for (const forbidden of [
     'phase_transition',
     'worker_session_create',

@@ -27,14 +27,12 @@ import type {
   ActionIntent,
   BootstrapIntakeResult,
   ExecutionPlan,
-  HandoffDraft,
-  Phase,
   RequestScopeConfirmationInput,
   ScopeProposal,
   ToolError,
   WorkerReportInput,
 } from '../contracts.ts';
-import { DEFAULTS, isPhase } from '../contracts.ts';
+import { DEFAULTS } from '../contracts.ts';
 import { PHASE_ORDER } from '../workflow/phases.ts';
 
 /** 工具实现依赖的服务面（全部由宿主注入，便于测试）。 */
@@ -217,30 +215,6 @@ function toJson(value: unknown): JsonValue {
 /** 统一的 JSON 渲染：把结构化结果原样交给模型，不做自然语言美化。 */
 function renderJson(_args: unknown, value: JsonValue): { type: 'text'; text: string }[] {
   return [{ type: 'text', text: JSON.stringify(value, null, 2) }];
-}
-
-/**
- * 把模型传来的 `params` 转发为模板参数集合。
- *
- * **不做过滤**：string / number 之外的 JSON 值（object / array / boolean / null）
- * 一律原样到达执行服务，由服务端的 `validateParams` 按模板声明的参数白名单判定。
- *
- * 修正说明（§10.2.1）：上一版在这里「只保留 string 与 number，其余键丢弃」，理由是
- * 「多传一个无关字段不值得让整个调用失败」。这与 §10.2.1「未声明的参数一律拒绝，
- * 不做『忽略未知字段』处理」直接冲突——丢弃会让服务看到**变形的参数集**：
- * 一个本该因越界字段被拒的调用会因该字段消失而通过校验。真正的拒绝权在
- * `validateParams`（它检查 `Object.keys(params)`），工具层只负责如实转发。
- *
- * 返回类型的标量收窄来自既有契约（`ActionIntent.params` / `ParamBag` 都是
- * `string | number`），不是运行时收窄：越界值在编译期不可表达，只能在边界做一次
- * 类型断言，并在运行时交给服务拒绝。
- */
-function paramsOf(value: unknown): Readonly<Record<string, string | number>> {
-  // 非对象根（null / 标量 / 数组）不是「按名传递的参数集合」，视为未提供参数。
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return {};
-  // 浅拷贝：不把 dsh 深冻结的调用参数对象本身交给服务；取值一律不丢。
-  const passthrough = { ...(value as Record<string, unknown>) };
-  return passthrough as Readonly<Record<string, string | number>>;
 }
 
 /** 构造全部 Worker 工具定义。 */

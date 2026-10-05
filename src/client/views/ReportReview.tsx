@@ -321,7 +321,6 @@ export interface ReportReviewProps {
 
 export function ReportReview(props: ReportReviewProps): ReactNode {
   const endpointExported = props.endpointExported ?? DISPOSITION_ENDPOINT_EXPORTED;
-  const wired = props.onDispose !== undefined;
   const engagementId = props.snapshot.selectedEngagementId;
   const undisposed = countUndisposed(props.findings, props.dispositions);
 

@@ -255,21 +255,6 @@ const INPUT: FrozenSessionInput = {
 };
 
 
-const VALID_DRAFT: Record<string, unknown> = {
-  schema_version: 1,
-  suggested_to_phase: 'exploitation',
-  objective: '验证已确认的高危结论',
-  prompt: '在放行范围内验证 finding:xyz 的可利用性',
-  suggested_skills: ['web-validation'],
-  context_refs: [{ memory_id: 'm-1', reason: '资产清单' }],
-  excluded_refs: ['m-2'],
-  tool_capability_suggestion: {
-    allowed: ['memory_search', 'pentest_exec'],
-    approval_required: ['exploit_validation'],
-  },
-  limitations: ['尚未确认目标是否在范围内'],
-};
-
 // ───────────────────────────── 创建 ─────────────────────────────
 
 describe('DshSessionFactory.create', () => {

@@ -269,7 +269,7 @@ describe('集成：租户与 engagement 隔离（真实角色 + FORCE RLS）', {
   });
 
   it('作业列表按租户可见（这是控制台首屏的设计行为，不是泄露）', async () => {
-    const { tenantId, a, b } = await seedPair();
+    const { tenantId, a, b: _b } = await seedPair();
     await asApp({ tenantId, engagementId: a }, async (probe) => {
       const names = await probe.rows<{ name: string }>(
         'select name from pentest.engagements order by name',

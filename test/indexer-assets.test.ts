@@ -322,7 +322,7 @@ describe('索引器资产归属与阶段（真实 PostgreSQL）', { skip: DATABA
       await run();
     } catch (error) {
       if (error instanceof IndexerError) return error.code;
-      throw new Error(`期望 IndexerError，实际是 ${String(error)}`);
+      throw new Error(`期望 IndexerError，实际是 ${String(error)}`, { cause: error });
     }
     throw new Error('期望失败，但调用成功了');
   }

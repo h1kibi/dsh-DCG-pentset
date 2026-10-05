@@ -9,7 +9,7 @@ for (const [phase, names] of Object.entries(SKILL_PACKS)) for (const n of names)
 const files = new Map<string, string>();
 for (const e of await readdir(dir, { withFileTypes: true })) {
   if (!e.isDirectory()) continue;
-  try { files.set(e.name, parseSkillFile(await readFile(join(dir, e.name, 'SKILL.md'), 'utf8')).body); } catch {}
+  try { files.set(e.name, parseSkillFile(await readFile(join(dir, e.name, 'SKILL.md'), 'utf8')).body); } catch { /* 解析失败：跳过该 skill（脚本只做自检，不阻断） */ }
 }
 
 console.log('=== 1) 跨 pack 引用（Agent 取不到被引用的正文 → 死引用）===');

@@ -35,7 +35,7 @@ import type { ActionClass, ContextRef, HandoffDraft, Phase } from '../../contrac
 import type { ConsoleController } from '../controller.ts';
 import { planPhaseMove } from '../../workflow/phases.ts';
 import { actionClassLabel, needsPerActionApproval, phaseLabel } from '../format.ts';
-import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, Table, TextArea, TextInput, toneClass } from '../ui.tsx';
+import { Badge, Button, Card, ErrorBar, Field, List, TextArea, TextInput, toneClass } from '../ui.tsx';
 
 // ───────────────────────────── 文案（集中在此，便于将来接入 locale） ─────────────────────────────
 
@@ -108,18 +108,6 @@ const TRUST_LABELS: Readonly<Record<string, string>> = {
   human_input: '人类输入',
 };
 
-/** 人类编辑后的交接内容（= `confirmTransition` / `editHandoff` 的载荷来源）。 */
-interface HandoffEditState {
-  readonly toPhase: Phase;
-  /** 下一任务的目标（人类可改；进批准包）。 */
-  readonly objective: string;
-  readonly prompt: string;
-  readonly skillIds: readonly string[];
-  readonly toolAllow: readonly string[];
-  readonly approvalRequired: readonly ActionClass[];
-  readonly contextRefs: readonly ContextRef[];
-}
-
 export function HandoffEditor(props: HandoffEditorProps): ReactNode {
   const { draft } = props;
 
@@ -140,34 +128,17 @@ export function HandoffEditor(props: HandoffEditorProps): ReactNode {
       : draft.toolCapabilitySuggestion.approvalRequired,
   );
   const [contextRefs, setContextRefs] = useState<readonly ContextRef[]>(draft.contextRefs);
-  // 来源判定只能在客户端做：服务端存的是「人类确认后的最终版」，谁改的它不知道。
-  // 判据是「当前值是否还不等于草稿原值」——简单、可解释，也不会随时间漂移。
-  const humanFields = [
-    ...(objective !== draft.objective ? ['目标'] : []),
-    ...(prompt !== draft.prompt ? ['任务提示词'] : []),
-    ...(toPhase !== draft.suggestedToPhase ? ['目标阶段'] : []),
-    ...(skillIds.join(',') !== draft.suggestedSkillIds.join(',') ? ['skill'] : []),
-    ...(toolAllow.join(',') !== draft.toolCapabilitySuggestion.allowed.join(',') ? ['工具面'] : []),
-    ...(approvalRequired.join(',') !== draft.toolCapabilitySuggestion.approvalRequired.join(',') ? ['放行类别'] : []),
-    ...(contextRefs.map((r) => r.memoryId).join(',') !== draft.contextRefs.map((r) => r.memoryId).join(',')
-      ? ['上下文引用']
-      : []),
-  ];
-  const aiFields = ['目标', '任务提示词', '目标阶段', 'skill', '工具面', '放行类别', '上下文引用'].filter(
-    (name) => !humanFields.includes(name),
-  );
   const [refDraft, setRefDraft] = useState<{ readonly memoryId: string; readonly reason: string }>({ memoryId: '', reason: '' });
 
-  const [reason, setReason] = useState('');
+  const [reason] = useState('');
   /** §7.2 可空键的「已表决为空」。 */
   const [skillsVotedEmpty, setSkillsVotedEmpty] = useState(false);
   const [approvalVotedEmpty, setApprovalVotedEmpty] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ readonly code: string; readonly message: string } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice] = useState<string | null>(null);
 
-  const edited: HandoffEditState = { toPhase, objective, prompt, skillIds, toolAllow, approvalRequired, contextRefs };
   const forced = false;
 
   // 阶段移动计划：禁用原因就是服务端会返回的拒绝理由（§5.3）

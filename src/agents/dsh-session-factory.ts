@@ -66,8 +66,7 @@ import { SessionSeq } from '@deepseek-ai/dsh-session';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
-import { ACTION_CLASSES, SANDBOX_TOOLBELT, isPhase } from '../contracts.ts';
-import type { ActionClass } from '../contracts.ts';
+import { SANDBOX_TOOLBELT } from '../contracts.ts';
 import type {
   CreatedSession,
   FrozenSessionInput,
@@ -111,7 +110,11 @@ interface AgentCreateOptionsView {
     readonly model: string;
     readonly reasoningEffort?: 'low' | 'high' | 'max';
   };
-  readonly setup: (agentCtx: AgentScopedContextView) => void;
+  /**
+   * `setup` 可以返回 Promise：dsh 会等它完成才公告会话与 Agent，并在拒绝时整体回滚
+   * （见 `create()` 的注释）。本视图类型此前写死 `void`，与真实行为不符。
+   */
+  readonly setup: (agentCtx: AgentScopedContextView) => void | Promise<void>;
 }
 
 interface UserMessageView {
@@ -688,95 +691,8 @@ function renderCapabilitySection(input: FrozenSessionInput): string {
 // ───────────────────────────── 交接草稿 ─────────────────────────────
 
 
-
-/** 取一个 seq 处的 assistant 文本；不是 assistant 消息或形状不符则返回 undefined。 */
-function assistantTextAt(session: SessionView, seq: number): string | undefined {
-  const event = asRecord(session.eventAt(SessionSeq(seq)));
-  if (event?.['type'] !== 'assistant/message') return undefined;
-  const message = asRecord(asRecord(event['data'])?.['message']);
-  const content = message?.['content'];
-  if (!Array.isArray(content)) return undefined;
-  return content
-    .map((block) => {
-      const view = asRecord(block);
-      return view !== undefined && view['type'] === 'text' && typeof view['text'] === 'string'
-        ? view['text']
-        : '';
-    })
-    .join('');
-}
-
-
-/** 允许模型在定界符内套一层 ``` 围栏（常见输出习惯），只剥一层。 */
-function stripCodeFence(body: string): string {
-  if (!body.startsWith('```')) return body;
-  const firstBreak = body.indexOf('\n');
-  if (firstBreak < 0) return body;
-  const lastFence = body.lastIndexOf('```');
-  return lastFence <= firstBreak ? body : body.slice(firstBreak + 1, lastFence).trim();
-}
-
 // ───────────────────────────── 草稿形状校验 ─────────────────────────────
 
-
-function draftShapeError(dshSessionId: string, detail: string): SessionFactoryError {
-  return new SessionFactoryError(
-    `交接草稿不符合 §7.2 的形状（${detail}）：已丢弃，请人工组装交接内容（§15.6）`,
-    { dshSessionId },
-  );
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function stringList(value: unknown, field: string, dshSessionId: string): readonly string[] {
-  if (!Array.isArray(value)) throw draftShapeError(dshSessionId, `${field} 必须是数组`);
-  return value.map((item, index) => {
-    if (typeof item !== 'string') throw draftShapeError(dshSessionId, `${field}[${index}] 必须是字符串`);
-    return item;
-  });
-}
-
-function nonEmptyString(value: unknown, field: string, dshSessionId: string): string {
-  if (typeof value !== 'string' || value === '') {
-    throw draftShapeError(dshSessionId, `${field} 必须是非空字符串`);
-  }
-  return value;
-}
-
-function isActionClass(value: unknown): value is ActionClass {
-  return typeof value === 'string' && (ACTION_CLASSES as readonly string[]).includes(value);
-}
-
-function actionClassList(value: unknown, field: string, dshSessionId: string): readonly ActionClass[] {
-  return stringList(value, field, dshSessionId).map((name) => {
-    if (!isActionClass(name)) {
-      throw draftShapeError(
-        dshSessionId,
-        `${field} 含非法动作类别 ${JSON.stringify(name)}（合法集合：${ACTION_CLASSES.join('、')}）`,
-      );
-    }
-    return name;
-  });
-}
-
-function contextRefList(
-  value: unknown,
-  dshSessionId: string,
-): readonly { readonly memoryId: string; readonly reason: string }[] {
-  if (!Array.isArray(value)) throw draftShapeError(dshSessionId, 'context_refs 必须是数组');
-  return value.map((item, index) => {
-    const ref = asRecord(item);
-    if (ref === undefined) throw draftShapeError(dshSessionId, `context_refs[${index}] 必须是对象`);
-    return {
-      memoryId: nonEmptyString(ref['memory_id'], `context_refs[${index}].memory_id`, dshSessionId),
-      reason: nonEmptyString(ref['reason'], `context_refs[${index}].reason`, dshSessionId),
-    };
-  });
-}
 
 // ───────────────────────────── 消息 ─────────────────────────────
 

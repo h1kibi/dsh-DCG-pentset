@@ -263,7 +263,7 @@ test('不重叠：定时器连续触发也只跑一次', async () => {
     { dispatcher: fakeDispatcher({ calls, delayMs: 30 }), outbox: fakeOutbox() },
     { intervalMs: 10, setIntervalFn: timer.setIntervalFn, clearIntervalFn: timer.clearIntervalFn },
   );
-  scheduler.tick();
+  void scheduler.tick();
   timer.fire(0);
   timer.fire(0);
   await flush();

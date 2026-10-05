@@ -69,6 +69,21 @@ check('factory 是函数', typeof entry.factory === 'function');
 check('产物外部化 react（require 而非内联）', source.includes('require("react")'), '');
 check('产物外部化 react/jsx-runtime', source.includes('require("react/jsx-runtime")'), '');
 
+// 客户端产物**不得**引用 Node 内置或服务端实现：产物在浏览器里执行，任何一处
+// `require("node:…")` 都会让整个插件加载失败（不止那一个面板）。这条边曾只靠
+// tree-shaking 侥幸成立（2026-10-05 复核报告 §3.4），因此在这里钉成产物断言，
+// 而不是继续依赖构建配置的偶然。
+check(
+  '产物不含 Node 内置引用',
+  !/\brequire\(\s*["']node:/.test(source) && !/\bfrom\s*["']node:/.test(source),
+  '',
+);
+check(
+  '产物不含服务端摘要实现（createHash / sha256Hex）',
+  !/\bcreateHash\b/.test(source) && !/\bsha256Hex\b/.test(source),
+  '',
+);
+
 // ── 2) materialize：模拟宿主在首次 import 时做的事 ──
 
 /**
@@ -83,7 +98,20 @@ check('产物外部化 react/jsx-runtime', source.includes('require("react/jsx-r
  * 而不是内联了一份 React），不靠这里的桩来表达。
  */
 const requireFromHere = createRequire(import.meta.url);
-const stubRequire = (spec: string): unknown => requireFromHere(spec);
+/**
+ * 宿主机只提供这几类外部依赖，**其余一律拒绝**（fail-closed）。
+ *
+ * 此前是把任何请求交给 `createRequire`：坏产物（例如真带进来
+ * `require("node:crypto")`）在自检里也能过——它要到浏览器里才炸。现在未知依赖
+ * 在这里就红，与上面的产物断言形成两道锁。
+ */
+const ALLOWED_EXTERNAL = /^(?:react$|react-dom$|react\/|@deepseek-ai\/)/;
+const stubRequire = (spec: string): unknown => {
+  if (!ALLOWED_EXTERNAL.test(spec)) {
+    throw new Error(`客户端产物请求了宿主不提供的外部依赖：${spec}`);
+  }
+  return requireFromHere(spec);
+};
 
 let exports: Record<string, unknown>;
 try {
@@ -134,7 +162,7 @@ function makeSlotStub(): {
   /** 每个 key 上的 inject 订阅者：**常驻**，每次声明到来都重跑。 */
   const subscribers = new Map<string, Set<() => () => void>>();
   /** 上一次声明效果产出的注销函数，塌缩时调用。 */
-  let activeDisposers: Array<() => void> = [];
+  const activeDisposers: Array<() => void> = [];
 
   const slots: Record<string, unknown> = {
     register(options: Record<string, unknown>, component: unknown): () => void {

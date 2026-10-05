@@ -852,7 +852,7 @@ export class PgPolicyService implements PolicyService {
     }
 
     let session: SessionRow | undefined;
-    let scopeVersionPresent = false;
+    let scopeVersionPresent: boolean;
     try {
       const sessionResult = await this.#db.query<SessionRow>(SQL_SESSION, [plan.workerSessionId]);
       session = sessionResult.rows[0];
@@ -1018,8 +1018,8 @@ export class PgActionPolicySource implements ActionPolicySource {
   async forSession(workerSessionId: string): Promise<ActionPolicySnapshot> {
     if (!UUID_RE.test(workerSessionId)) return DEFAULT_ACTION_POLICY;
     let snapshot: unknown;
-    let rawVersion: number | string | null = null;
-    let recordedHash = '';
+    let rawVersion: number | string | null;
+    let recordedHash: string;
     try {
       const result = await this.#db.query<PolicySnapshotRow>(SQL_POLICY_SNAPSHOT, [workerSessionId]);
       const row = result.rows[0];
