@@ -42,6 +42,17 @@ PENTEST_DATABASE_URL='postgresql://postgres:check@127.0.0.1:55446/postgres' \
   npm run verify:forward-migration
 ```
 
+> ⚠️ **三个库不要共用同一个 `PENTEST_DATABASE_URL`**（本轮实测踩到，表现极具误导性）：
+>
+> | 用途 | 库 | 原因 |
+> |---|---|---|
+> | `npm test` | **`pentest`** | `test/helpers/tsx-loader.mjs` 有**库名守卫**：指向别的库会**直接拒绝整轮运行**并打印实际库名（不是静默跳过） |
+> | `npm run verify:forward-migration` | **`postgres`**（或任一有权建库的角色） | 它要 CREATE DATABASE 建临时库演练 |
+> | 个人环境 / 手工迁移 | **`pentest_personal`** | 见上文 profile 配置 |
+>
+> 把其中任何一个**一次性 export 给整条链**（如 `npm run build && npm run verify && npm test`），
+> 会得到「构建通过、门禁全绿、**测试 70 个文件全失败**」的假警报——实际只是库不对。
+
 ### 连接角色：开发可以用超级用户，生产**不行**
 
 上面那条连接串用的是 `postgres`——**超级用户始终绕过 RLS**，包括 `FORCE ROW LEVEL SECURITY`。
@@ -192,7 +203,7 @@ DEEPSEEK_API_KEY=sk-... node start-personal.mjs
 
 ### 4b. 生产路径（用 `lib/` 产物）
 
-改完 `src/` 要 `npm run build`。
+改完 `src/` 要 `npm run build`。构建现在**先清空 `lib/`**（`build` = `clean && build:host && build:client`）：`lib/` 曾被删除模块留下陈旧产物（`agents/capability.js` 及其 `.d.ts`），会随 `files: ["lib"]` 进 npm 包、随 `docker/Dockerfile` 的 `COPY lib` 进镜像——clean 之后两者都不再带上它们。
 
 ```bash
 cd /c/Projects/Agent-projects/dsh-DCG-pentest
@@ -515,9 +526,11 @@ Agent 继续追问。范围确认本身**仍然**只能在控制台点，提问�
 
 ```bash
 npm run verify:styles
-# 期望：类名 310/310、无字面颜色、令牌全部已定义
+# 期望：类名 346/346、无字面颜色、令牌全部已定义
 
 # 一次跑完全部门禁（样式 / 承诺接线 / 端点面一致性 / 客户端产物 / 前向迁移）：
+# 前置：先把 `lib/` 构建出来（verify:client 读 `lib/client.js`，没构建会失败）——
+#       即 `npm run build && npm run verify`；数据库口径见 §1 的警告（测试与迁移演练分库）。
 npm run verify
 ```
 
@@ -798,7 +811,7 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 - **控制台读取与 Worker 读取走同一份范围谓词，且都要求租约有效**。控制台按当前范围版本，Worker 按会话冻结的范围版本；`readMemory` 在无可见分块时拒绝，不回退返回原始 payload。
 - **可观测性未实现**（§14）：15 项指标零发射、四种回放全缺。要判断「Agent 到底做了什么」目前靠会话事件与数据库。
 - 证据仓库（`artifacts`）**只读不写**：`artifact_read` 读的是既有行，当前没有写入产线。
-- **实测规模与耗时**（2026-10-05）：`npm test` → **1587 用例 / 0 失败 / ≈60 秒**（`--test-concurrency=1` 串行跑，带真实 PostgreSQL 的 test 库）。别被"集成测试"四个字吓住，它比一场代码审查还快。
+- **实测规模与耗时**（2026-10-05 复核）：`npm test` → **1663 用例 / 0 失败 / ≈2 分钟**（`--test-concurrency=1` 串行跑，带真实 PostgreSQL 的 test 库）。别被"集成测试"四个字吓住，它比一场代码审查还快。
 - 全量测试**不可并发跑**（共享同一个 PG，且**测试库是 `pentest`、不是 `pentest_personal`**）；跑前先停常驻服务，否则调度器会与测试抢同一批表。
   - 指向个人库会被 `test/helpers/tsx-loader.mjs` 的守卫**直接拒绝**（§6.5.12）——这条纪律已经不用靠人记。
   - 若常驻服务用的是**另一个库**（个人库）而测试用 `pentest`，两者不共享表，可同时跑；上面这条停服务的建议针对的是「同库」场景。实测的失败形状：`索引调度器 → drain：反复处理直到队列为空` 期望领 5 个任务、实际领到 2 个（另 3 个被常驻调度器先领走），且**失败会跳过清理**、在库里留下孤儿 `memory_chunks`。该用例已改为断言**最终状态**（任务都 done、事件都落块、无 pending/dead），对并发领取免疫；清理夹具也补了第二轮迟到写入扫描。规程不变：跑前停服务——其它用例未必都免疫。

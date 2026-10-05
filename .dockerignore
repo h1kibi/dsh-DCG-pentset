@@ -18,6 +18,8 @@ __pycache__/
 *.pyc
 _*
 *.tsbuildinfo
-# 刻意**不**排除 lib/types：它只 568K，而 package.json 的 `exports` 里三个
-# "types" 路径指向它——排掉会让发布出去的包在类型解析上悬空（运行期不受影响，
-# 因为 Node 走 "default"，但那是"恰好没坏"，不是设计）。
+# 刻意**不**排除 lib/types：它只 568K，而 `exports["."]` 的 `types` 指向它——
+# 排掉会让发布出去的包在类型解析上悬空（运行期不受影响，因为 Node 走 "default"，
+# 但那是"恰好没坏"，不是设计）。
+# （`./client` 不产类型：产物是宿主模块加载器的自定义格式、tsdown `dts: false`；
+#   原先那条指向 `lib/types/client/index.d.ts` 的 `types` 条件已删除——第六轮质检。）

@@ -891,3 +891,18 @@
 - **执行面**：干净构建完整、`clean` 无损、撤回项未动、公开声明面未变 → **本次执行无回归**；
 - **新发现**：1 条既有契约缺陷（`./client` 的 types 悬空）+ 2 处注释与事实不符（`.dockerignore` 的「三个 types 路径」、`exports["./src/*"]` 的发布语义）；
 - **未做**（待授权）：I.2 的修法选择、RUNBOOK 的 URL 警告、`exports["./src/*"]` 的注释澄清。
+
+---
+
+## 附录 J：三项收尾的落地（对附录 I 发现的处置）
+
+| I 的发现 | 处置 | 证据 |
+|---|---|---|
+| `exports["./client"].types` 指向**永不生成**的文件（tsdown `dts: false`） | 采用**修法 (b)：删除该 `types` 条件**并让契约诚实——修法 (a)（tsdown 开 dts、把落点做成 `lib/types/client/index.d.ts`）与「客户端产物是宿主模块加载器的自定义包装格式」的既定设计相悖，且要改构建配置与落点，风险高于收益。同时给 `package.json` 加 `"//exports"` 说明两条契约（沿用 `docker/package.json` 的 `"//"` 注释惯例） | `require('./package.json')` 解析 ✓；`npm pack --dry-run` 仍 **157** 文件（删条件不改变发布内容）；`grep` 确认仓内**零**处按名字依赖 `dsh-pentest/client` 的类型 |
+| `.dockerignore` 注释宣称「exports 里**三个** types 路径指向 lib/types」 | 改为事实描述：只有 `exports["."]` 的 `types` 指向 `lib/types`；并注明 `./client` 不产类型及其原因 | `.dockerignore:21-25` |
+| RUNBOOK 缺「**三个库不要共用同一个 `PENTEST_DATABASE_URL`**」的警告（本轮假警报的根因） | 在 §1 迁移命令后加警告块：三库对照表（`pentest` 测试 / `postgres` 迁移演练需 CREATEDB / `pentest_personal` 个人），并写明假警报的**形状**（「构建通过、门禁全绿、测试 70 个文件全失败」）；引用 `test/helpers/tsx-loader.mjs` 的库名守卫 | `RUNBOOK.md:45-54` |
+| RUNBOOK 的过时数字 | 类名期望 `310/310` → **346/346**；`npm test` 规模 `1587 用例 / ≈60 秒` → **1663 用例 / ≈2 分钟**（本轮实测） | `RUNBOOK.md:529` / `:814` |
+| RUNBOOK 未写「`verify` 需要先 `build`」 | 在 §6.5.5 的门禁命令块加前置说明（`verify:client` 读 `lib/client.js`，未构建会失败） | `RUNBOOK.md:531-534` |
+| RUNBOOK 未写 `build` 现在会先 clean | §4b 的生产路径说明改为：`build = clean && build:host && build:client`，并说明陈旧产物曾随 `files` 进 npm 包、随 `COPY lib` 进镜像 | `RUNBOOK.md:206` |
+
+**验证**：`typecheck` 退出码 0；`lint` / `verify:styles` / `verify:promises`（9 项 8 告警 0 失败）；`npm pack` 文件数保持 157；`package.json` 可解析且 `exports` 键集合不变（`.` `./client` `./cordis.patch.yml` `./src/*` `./package.json`）。

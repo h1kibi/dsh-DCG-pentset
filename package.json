@@ -11,13 +11,16 @@
       "default": "./lib/index.js"
     },
     "./client": {
-      "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "//exports": [
+    "./src/* 指向未发布的源码目录（files 只发 lib + cordis.patch.yml）：它是给源码检出处 / dev 加载用的口子（见 harness.dev.patch.yml），对已安装的包不可用。",
+    "./client 只有 default：客户端产物是宿主模块加载器的自定义包装格式（见 tsdown.config.ts），tsdown 设了 dts: false，不产类型。原先指向 lib/types/client/index.d.ts 的 types 条件指向一个永不生成的文件（第六轮质检发现），已删除。"
+  ],
   "files": [
     "lib",
     "cordis.patch.yml"
