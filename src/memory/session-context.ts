@@ -102,7 +102,12 @@ export interface SessionContextDeps {
    * 缺省时用本模块的 `SessionContextRefusal`（单测与只读装配）。
    */
   readonly refuse?: (code: string, message: string, nextAction: string) => Error;
-  /** 事务运行器（串行化独占写连接）。缺省时 `withTx` 直接用 `db`。 */
+  /**
+   * 事务运行器（串行化独占写连接）。
+   *
+   * 省略时 `query` 仍可用（读路径不需要事务），但 **`withTx` 会响亮失败**——
+   * 它的语义是「同一事务」，退化执行会静默丢掉原子性。
+   */
   readonly txRunner?: {
     run<T>(work: (tx: DbClient) => Promise<T>, before?: (tx: DbClient) => Promise<void>): Promise<T>;
   };
@@ -413,7 +418,12 @@ export async function enterWorkerSession(
     withTx: <T>(run: (tx: DbClient) => Promise<T>): Promise<T> => {
       const runner = deps.txRunner;
       if (runner === undefined) {
-        return run(deps.db);
+        // **不**静默退化为「直接在 db 上跑」：`withTx` 的语义是「同一事务 + 该会话的 RLS
+        // 上下文」，缺运行器时退化会把「原子写」变成「两条语句各写各的」——那正是这一层
+        // 存在的理由（把原子性收拢到单点）。宁可响亮失败，也不要一条看不出问题的不原子路径。
+        throw new Error(
+          '会话上下文缺少事务运行器（SessionContextDeps.txRunner）：withTx 要求同事务写入，不能退化为无事务',
+        );
       }
       return runner.run(run, async (tx) => {
         await withSessionRlsContext(deps, tx, workerSessionId);

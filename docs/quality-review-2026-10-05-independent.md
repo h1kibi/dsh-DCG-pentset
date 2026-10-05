@@ -368,7 +368,8 @@ P3  lint/CI → verify 脚本族 → 单一来源 → 测试纪律 → git init 
 
 ### 度量与回归锁
 
-- **产物**：`lib/client.js` 1,155,366 → **1,131,392 字节**（−24KB：53 条端点 spec 表不再进产物）；产物代码里 `createHash` 0 命中、无 `require("node:`。
+- **产物**：`lib/client.js` 当次构建实测 1,155,366 → **1,131,392 字节**（−24KB：53 条端点 spec 表不再进产物）；产物代码里 `createHash` 0 命中、无 `require("node:`。
+  > 口径说明（2026-10-05 质检补）：`lib/` 被 gitignore，**这两次读数无法从 git 复算**，只能在同一环境下重新构建得到；且后续提交（C4 的共享 `GateList` 等）又改变了产物——当前实测 **1,133,964 字节**，仍明显小于修复前的 1,155,366。
 - **断言修正**：`verify:client` 的两条新断言改为**只看去注释后的代码**——tsdown 保留注释，而本仓注释大量解释"为什么不能引 `node:crypto`"；把注释算命中会让断言变成噪声，而噪声断言的下场是被忽略。
 - **测试 +5**：`parseLimit` 严格用例（`'1e5'`/`'1.5'`/`'2,5'`/`'+5'`/超安全整数）、`startBlockers` 具名理由 + 合法输入不误拦、清单↔方法表一致 + 原型链键名拒绝、以及新文件 `test/client-controller-staleness.test.ts`（手动结算 invoker：读失败不回落到上一作业；迟到响应不覆盖新作业）。
 
@@ -475,7 +476,8 @@ recomputed = 452a422db96206d98ad598f51938d03605995247ec27bc2e5a968f73ca8cb149
 
 ### 度量
 
-`test/` 下的 `.catch(() =>` 从 **77+ 处（仅报告点名的 5 个文件）降到 1 处**——那一处就是具名 `detach()`，它描述的是「有意的脱离」，不是吞失败。
+`test/` 下的 `.catch(() =>`：修复前 **89 处命中行**（其中**代码里 84 处**，其余在注释里）；现在 **12 处命中行**，其中**代码里只剩 1 处**——就是具名 `detach()`（它描述「有意的脱离」），另外 11 处出现在注释里（本轮的清理记录会引用旧写法）。
+> 口径说明（2026-10-05 质检补）：引用旧写法的注释**故意保留**（它们解释「这里曾经吞错、为什么后来不吞」），因此「全仓库 grep 计数」永远不是 1；判据是**去注释后的代码**。
 
 ---
 
@@ -796,3 +798,55 @@ plan_engagement_running → plan_lease_valid → plan_scope_version_current → 
 | REQ-4：代理侧接线（地址固定 / 逐跳重校验） | **部署决策**：代理按裁决地址拨号并调用宿主校验，还是由宿主侧完成后再下发命令 | 容器内置工具已按裁决地址固定拨号；缺口精确落在代理；两处注释与 `verify:promises` 记录均为「未接线」 |
 | C3 的「族拆文件」 | 纯机械拆分（`PgWorkerTools` 1847 行 → 检索/读取/提交三族） | 语义单点已收拢；拆分不改变行为，属可选的导航性改进 |
 | C4 的「三个单体按区块拆」 | 复核自评 **Speculative**；纯移动、无行为变化，但会产生大 diff 与 UI 测试噪声 | 已完成的**具体**部分（闸门收敛）见附十五 |
+
+---
+
+## 附十七：对本次升级本身的质量检查（2026-10-05，收尾）
+
+### 方法（以及一次失败）
+
+按 `code-review-and-quality` 的要求，先尝试**独立评审**：派 5 个只读评审切片
+（执行域 / 组合根 / 记忆与工作流 / 客户端与门禁脚本 / 测试纪律与文档声明），
+每条结论要求 severity + `file:line` + 命令证据。
+
+**5 片全部因模型通道 402（余额不足）中断**——与上一轮报告里记录的现象相同
+（"评审 agent 的模型通道本轮多次 402 中断"）。中断前的命令记录显示核对已进行到一半
+（量化声明复测、门禁反向验证、用例静态计数），但结构化结论未产出。
+
+因此转为**作者自查**，用同一套标准补齐证据；作者自查的固有弱点（对自己假设盲）用三种手段补偿：
+① **变异验证**（改动新增判定并看测试是否红）；② **文档声明逐条复测**（命令输出为证）；
+③ **反向核验门禁自身**（门禁会不会被注释/格式骗过）。
+
+### 发现
+
+| # | 严重度 | 结论 | 处置 |
+|---|---|---|---|
+| 1 | **Required** | `memory/session-context.ts` 的 `withTx` 在缺 `txRunner` 时**静默退化为「直接在 db 上跑」**——本轮抽取时新引入的静默兜底，掩盖了「同事务」这一不变量（生产路径注入了运行器，但这个口子对将来的调用方是隐形的） | **已修**：缺运行器时**响亮失败**，并在 `SessionContextDeps.txRunner` 的文档里写清「省略时 query 可用、withTx 会失败」 |
+| 2 | **Required** | 文档两处数字口径不精确：① 产物体积（`lib/` **被 gitignore**，读数无法从 git 复算，且已被后续提交刷新——当前 1,133,964 而非 1,131,392）；② 吞错计数（全 `test/` 命中 89 → 12，而**代码里** 84 → 1，其余 11 处在注释里） | **已修**：两处都补上口径说明与复测值 |
+| 3 | **Required** | `RlsScopePort` / `RlsScope` 的**规范类型重复**：`workflow/model.ts` 与 `compose.ts` 各一份、形状几乎相同（`current()` 的返回类型一处内联一处具名）。**基线即存在**（非本轮引入），但两个类型分居两处会让读者以为是两套机制 | **已修**：只保留 `model.ts` 一份（含具名 `RlsScope`），`compose.ts` 改为导入 |
+| 4 | **Required（附计划，未做）** | `src/compose.ts` **1877 → 2058 行（+181）**：函数拆到 148 行 ✓，但**文件**反而更大且仍超 1000 行审视线——触发 review skill 的 presumptive blocker「改动让已超尺寸的文件更大」 | 计划：① `src/db/pool.ts`（`createDatabasePool`/`poolAsDbClient`/`createTxDb`/`txClientWithRlsContext`/`TxClientHandle`/`TxDbPort`/`acquireTxClient`/`isConnectionFailure`，约 570 行）② `src/install.ts`（6 个安装器 + 产物类型 + 仅被它们使用的辅助：`approvalPlanValidatorFor`/`missingSessionFactory`/`scopeWorkerToolsBySession`/`makeWorkerExecute`，约 700 行）→ `compose.ts` 回到 ~300 行。**依赖方向无环**：pool.ts 与 install.ts 互不 import，compose.ts 同时 import 二者 |
+| 5 | **Nit（列出，未动）** | 四个具名类型只有定义模块消费（`TxDbPort`/`BackgroundScopes`/`LeaseRlsResolver`/`SessionContextRefusal`）——导出面略宽 | 按 skill 的 dead-code hygiene「先问再删」，**列出待作者决定**，不擅自删除 |
+
+### 变异验证（回答"测试能不能抓回归"，用实验而非阅读）
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| 审计闸门条件取反（`if (gate.allowed)` → `if (!gate.allowed)`） | 红 | `admission-pipeline.test.ts` **2 红** ✓ |
+| 目的长度上限去掉（`> 500` 分支） | 红 | **1 红** ✓ |
+| `GateList` 去重去掉 | 红 | **1 红** ✓ |
+
+三次变异后均以 `git checkout` 还原（`git status` 干净）✓ —— 说明新增测试对这几条路径不是同义反复。
+
+### 文档声明逐条复测（命令为证）
+
+| 声明 | 实测 | 结论 |
+|---|---|---|
+| `compose()` 880 → 148 行 | 148（`awk` 跨度） | ✓ |
+| `admit` 482 → 317 行 | 317（基线 482） | ✓ |
+| `service.ts` 1724 → 1392 | 1392 | ✓ |
+| `pg-worker-tools.ts` 2023 → 1847 | 1847 | ✓ |
+| `intake.ts` 1068 → 1010 | 1010 | ✓ |
+| `capability.ts` 已删除 | 文件不存在；引用为 0 | ✓ |
+| 全量用例 1659 | 本轮门禁 1659/1659 | ✓ |
+| `verify:*` 通过行 | client 39/39、styles 346/346、promises 3 项 0 失败、typert-face 53/53、forward-migration 25 | ✓ |
+| 「未做项」与代码一致 | REQ-11 `activate` 无调用方 ✓、REQ-4 代理侧无消费者 ✓、C3 族拆未做 ✓、C4 单体未拆 ✓ | ✓ |

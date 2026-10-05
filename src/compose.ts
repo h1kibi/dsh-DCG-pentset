@@ -72,6 +72,7 @@ import { PgLeaseStore } from './workflow/pg-lease.ts';
 import { PgPolicyService, PgSessionDirectory, PgActionPolicySource } from './policy/pg-policy.ts';
 import { PgWorkflowService } from './workflow/pg-workflow.ts';
 import { SYSTEM_OPERATOR_ID } from './workflow/model.ts';
+import type { RlsScope, RlsScopePort } from './workflow/model.ts';
 import type { ActionPolicySource } from './execution/service.ts';
 import type { AppendEventInput } from './contracts.ts';
 import { DEFAULTS } from './contracts.ts';
@@ -142,11 +143,8 @@ export interface RuntimeRlsContext {
  * （fail closed），而不是读到别的作业的数据。这是刻意的取向——宁可返回空、
  * 让人发现漏了，也不能让两个作业的数据互相泄漏。
  */
-export interface RlsScope {
-  readonly tenantId: string;
-  readonly engagementId: string | null;
-  readonly workerSessionId: string | null;
-}
+// `RlsScope` 与 `RlsScopePort` 的**规范定义**在 `workflow/model.ts`：
+// 前者此前只在这里声明过，于是组合根与工作流各持一份「差不多」的形状（2026-10-05 质检合并）。
 
 /** 组合配置。密钥类字段只接受引用或已解析的值，本模块不读环境变量。 */
 export interface ComposeConfig {
@@ -380,20 +378,6 @@ export interface ComposedPlugin {
    * RLS 会挡住 engagement 行。见 {@link RlsScope}。
    */
   readonly rls: RlsScopePort;
-}
-
-/**
- * RLS 作用域端口：建立作用域、读当前作用域。
- *
- * 由 `compose` 基于 `AsyncLocalStorage` 实现，供工作流与组合层复用
- * （`WorkflowServiceDeps.rlsScope` 收的就是它）。
- */
-export interface RlsScopePort {
-  run<T>(
-    scope: { readonly engagementId?: string | null; readonly workerSessionId?: string | null },
-    work: () => Promise<T>,
-  ): Promise<T>;
-  current(): RlsScope | undefined;
 }
 
 /** 连接池包一层 RLS：每次查询在**当前异步作用域**的租户/作业下执行。 */

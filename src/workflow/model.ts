@@ -147,6 +147,19 @@ export interface WorkflowServiceDeps {
 }
 
 /**
+ * 当前异步作用域里的 RLS 归属（§9.4）。
+ *
+ * 具名导出（此前只存在于 `compose.ts` 的本地声明里）：它与 {@link RlsScopePort} 是一对，
+ * 而 `RlsScopePort` 的**规范定义在本文件**——两个类型分居两处时，
+ * `compose.ts` 会复制一份「差不多」的版本，读起来像两套机制。
+ */
+export interface RlsScope {
+  readonly tenantId: string;
+  readonly engagementId: string | null;
+  readonly workerSessionId: string | null;
+}
+
+/**
  * RLS 作用域端口。
  *
  * `run` 建立作用域；`current` 读当前作用域（用于断言调用方与作用域一致，
@@ -157,7 +170,7 @@ export interface RlsScopePort {
     scope: { readonly engagementId?: string | null; readonly workerSessionId?: string | null },
     work: () => Promise<T>,
   ): Promise<T>;
-  current(): { readonly tenantId: string; readonly engagementId: string | null; readonly workerSessionId: string | null } | undefined;
+  current(): RlsScope | undefined;
 }
 
 /**
