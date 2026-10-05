@@ -35,8 +35,8 @@ import {
   parseLimit,
   reasoningNoteOf,
   toSearchParams,
-  trustTone,
 } from '../src/client/views/MemoryExplorer.tsx';
+import { trustTone } from '../src/client/format.ts';
 import type { IndexWatermarkView, MemoryHitView, MemoryQueryForm } from '../src/client/views/MemoryExplorer.tsx';
 import type { LedgerVerificationView } from '../src/contracts.ts';
 import {

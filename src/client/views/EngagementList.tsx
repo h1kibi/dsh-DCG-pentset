@@ -157,7 +157,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
     setBusyId(id);
     setActionError(null);
     void controller
-      .mutate('archiveEngagement', { engagementId: id, archived }, '')
+      .archiveEngagement({ engagementId: id, archived })
       .then(async (result) => {
         if (!result.ok) {
           setActionError(`${result.code}：${result.message}`);
@@ -205,7 +205,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
     setBusyId(purge.id);
     setActionError(null);
     void controller
-      .mutate('purgeEngagement', { engagementId: purge.id, confirmName: purge.confirmName }, '')
+      .purgeEngagement({ engagementId: purge.id, confirmName: purge.confirmName })
       .then(async (result) => {
         if (!result.ok) {
           setActionError(`${result.code}：${result.message}`);

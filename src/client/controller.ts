@@ -23,6 +23,9 @@ import { ConsoleClient } from '../console/client.ts';
 import type { HostInvoker } from '../console/client.ts';
 import type { ConsoleMethodName } from '../console/method-names.ts';
 import type { PurgePreview,
+  ApprovalModeChange,
+  ArchiveEngagementInput,
+  PurgeEngagementInput,
   StartWorkerInput,
   TransitionConfirmation,
   RetryRequest,
@@ -748,6 +751,10 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
    *   - 成功后重读状态（因为服务端已经改变了事实，界面必须跟上）；
    *   - 冲突时**自动重读**并把冲突告诉 UI——用户看到的是最新状态加一条提示，
    *     而不是一个卡住的旧界面。
+   *
+   * **视图不得直接调用**：每个端点都应有类型化的具体动作（见下方「具体动作」小节——
+   * 参数形状钉在一处，字段名写错在编译期就暴露）。`mutate` 只留给控制器内部与
+   * 尚无包装的端点；后者出现时应补包装，而不是把 `Record<string, unknown>` 漏到视图层。
    */
   async mutate(
     method: ConsoleMethodName,
@@ -827,6 +834,33 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
 
   interject(workerSessionId: string, message: string): Promise<ConsoleCallResult> {
     return this.mutate('interject', { workerSessionId, message }, '运行中插话纠偏');
+  }
+
+  /**
+   * 切换审批模式（人工审批 ⇄ 高权限）。
+   *
+   * **运行中可切、不要求理由**（§6.4「人类是主人」）：写新一版策略并推进 policy epoch，
+   * 旧放行凭证与在途计划当场失效。
+   *
+   * 与下面两条一起，是 2026-10-05 复核补上的「类型化表面缺口」：此前视图直接调
+   * `mutate()`（返回 `Record<string, unknown>` 形状的 params），字段名写错只会在运行时
+   * 被服务端以「信封不允许键」含糊拒绝。补齐后 `mutate()` 回到控制器内部工具的定位。
+   */
+  setApprovalMode(input: Omit<ApprovalModeChange, 'operatorId' | 'expectedStateVersion'>): Promise<ConsoleCallResult> {
+    const { reason, ...params } = input;
+    return this.mutate('setApprovalMode', params, reason ?? '');
+  }
+
+  /** 归档 / 取消归档作业：归档是默认的「清理」，数据保留（对比 `purgeEngagement`）。 */
+  archiveEngagement(input: Omit<ArchiveEngagementInput, 'operatorId'>): Promise<ConsoleCallResult> {
+    const { reason, ...params } = input;
+    return this.mutate('archiveEngagement', params, reason ?? '');
+  }
+
+  /** 彻底删除作业内容（不可恢复）。`confirmName` 必须与作业名完全一致——人类防手滑的栏杆。 */
+  purgeEngagement(input: Omit<PurgeEngagementInput, 'operatorId' | 'expectedStateVersion'>): Promise<ConsoleCallResult> {
+    const { reason, ...params } = input;
+    return this.mutate('purgeEngagement', params, reason ?? '');
   }
 
   /**

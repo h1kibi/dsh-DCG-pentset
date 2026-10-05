@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 import type { WorkerSessionSummary } from '../../contracts.ts';
 import type { SessionChatRpc } from '../session-chat.ts';
 import { SessionChatClient, traceTranscript, type TraceRow } from '../session-chat.ts';
-import { phaseLabel, sessionStatusTone } from '../format.ts';
+import { phaseLabel, sessionStatusLabel, sessionStatusTone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar } from '../ui.tsx';
 
 /** 运行中的会话读得勤一点；已结束的会话没有再读的必要，给一个慢周期。 */
@@ -27,19 +27,7 @@ const IDLE_POLL_MS = 15_000;
 
 const LIVE_STATUSES: readonly WorkerSessionSummary['status'][] = ['starting', 'active', 'waiting_human', 'handoff_drafting', 'transition_confirmation', 'paused', 'blocked'];
 
-/** 会话状态的中文标签（与其它视图一致：本文件的私有表，不新增全局约定）。 */
-const SESSION_STATUS_LABELS: Readonly<Record<WorkerSessionSummary['status'], string>> = {
-  starting: '启动中',
-  active: '运行中',
-  waiting_human: '等待人工',
-  handoff_drafting: '准备交接',
-  transition_confirmation: '等待阶段确认',
-  paused: '已暂停',
-  blocked: '已阻塞',
-  failed: '已失败',
-  closed: '已关闭',
-  superseded: '已被取代',
-};
+/** 会话状态的中文标签来自 `format.ts` 的**单源**（`sessionStatusLabel`）——此前本文件与时间轴各一份，措辞已分叉。 */
 
 export interface AgentTraceProps {
   /** 与 `SessionChat` 同一个调用面（走 dsh 的 `session/page`）。 */
@@ -102,7 +90,7 @@ export function AgentTrace(props: AgentTraceProps): ReactNode {
   return (
     <Card title={`当前 Agent 轨迹（${phaseLabel(session.phase)}）`}>
       <div className="pentest-session-chat__bar">
-        <Badge text={SESSION_STATUS_LABELS[session.status]} tone={sessionStatusTone(session.status)} hint={session.status} />
+        <Badge text={sessionStatusLabel(session.status)} tone={sessionStatusTone(session.status)} hint={session.status} />
         <Badge text={`工具 ${String(counts.tool)}`} tone="neutral" />
         <Badge text={`思考 ${String(counts.thinking)}`} tone="neutral" />
         <Badge text={`回复 ${String(counts.reply)}`} tone="neutral" />

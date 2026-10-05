@@ -206,7 +206,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
     setModeFailure(null);
     setModeNotice(null);
     void props.controller
-      .mutate('setApprovalMode', { engagementId, approvalMode: modeTarget }, '')
+      .setApprovalMode({ engagementId, approvalMode: modeTarget })
       .then((result) => {
         if (!result.ok) {
           setModeFailure(`${result.code}：${result.message}`);

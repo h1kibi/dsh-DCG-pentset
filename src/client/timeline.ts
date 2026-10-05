@@ -16,7 +16,7 @@
 
 import type { Phase, SessionStatus, WorkerSessionSummary } from '../contracts.ts';
 import { PHASES } from '../contracts.ts';
-import { phaseLabel as sessionPhaseLabel } from './format.ts';
+import { phaseLabel as sessionPhaseLabel, sessionStatusLabel, sessionStatusTone, type Tone } from './format.ts';
 
 /**
  * 一个会话为什么被标为「需要留意」。
@@ -100,7 +100,7 @@ export function matchesFilter(session: WorkerSessionSummary, filter: TimelineFil
     session.status,
     // 展示标签（中文）——人类输入的是这个
     sessionPhaseLabel(session.phase),
-    sessionStatusLabelOf(session.status),
+    sessionStatusLabel(session.status),
     session.statusNote ?? '',
     String(session.attempt),
     String(session.iteration),
@@ -111,38 +111,12 @@ export function matchesFilter(session: WorkerSessionSummary, filter: TimelineFil
 }
 
 /**
- * 会话状态的中文标签。
- *
- * 会话级状态与 engagement 级主状态是**两套枚举**（§5.1 的两层状态），因此不能
- * 借用 `mainStatusLabel`——那会把 `waiting_human` 显示成主状态的措辞。
+ * 会话状态的中文标签来自 `format.ts` 的**单源**（`sessionStatusLabel`）：
+ * 会话级状态与 engagement 级主状态是两套枚举（§5.1），不能借用 `mainStatusLabel`。
  *
  * 它也是搜索的一部分：人类会输入「等待人工」，而存储的是英文 id（`waiting_human`），
  * 因此 haystack 需要两者都有。
  */
-function sessionStatusLabelOf(status: SessionStatus): string {
-  switch (status) {
-    case 'starting':
-      return '启动中';
-    case 'active':
-      return '工作中';
-    case 'waiting_human':
-      return '等待人工';
-    case 'handoff_drafting':
-      return '准备交接中';
-    case 'transition_confirmation':
-      return '等待确认交接';
-    case 'paused':
-      return '已暂停';
-    case 'blocked':
-      return '阻塞';
-    case 'failed':
-      return '失败';
-    case 'closed':
-      return '已关闭';
-    case 'superseded':
-      return '已被取代';
-  }
-}
 
 export function filterSessions(
   sessions: readonly WorkerSessionSummary[],
@@ -154,7 +128,7 @@ export function filterSessions(
 /** 迷你地图的一个色块。 */
 export interface MinimapBlock {
   readonly sessionId: string;
-  readonly tone: 'neutral' | 'active' | 'attention' | 'danger' | 'done';
+  readonly tone: Tone;
   readonly title: string;
   /** 该块属于哪个迭代（迷你地图按迭代分组显示）。 */
   readonly iteration: number;
@@ -179,7 +153,7 @@ export function buildMinimap(sessions: readonly WorkerSessionSummary[]): readonl
   const byIteration = new Map<number, MinimapBlock[]>();
   for (const s of sessions) {
     const orphan = orphanInfo(s);
-    const tone = orphan?.needsAttention === true ? 'attention' : statusTone(s.status);
+    const tone = orphan?.needsAttention === true ? 'attention' : sessionStatusTone(s.status);
     const block: MinimapBlock = {
       sessionId: s.id,
       tone,
@@ -237,26 +211,6 @@ export function buildTimeTicks(
 function clockLabel(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getMonth() + 1)}-${String(d.getDate())} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function statusTone(status: SessionStatus): MinimapBlock['tone'] {
-  switch (status) {
-    case 'starting':
-    case 'active':
-      return 'active';
-    case 'waiting_human':
-    case 'handoff_drafting':
-    case 'transition_confirmation':
-    case 'blocked':
-      return 'attention';
-    case 'failed':
-      return 'danger';
-    case 'closed':
-    case 'superseded':
-      return 'done';
-    case 'paused':
-      return 'neutral';
-  }
 }
 
 /** 阶段在轨道上的序号（供时间轴按阶段分组显示）。 */

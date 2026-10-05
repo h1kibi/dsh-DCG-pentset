@@ -49,9 +49,8 @@ import type { Classification, LedgerVerificationView, Phase, TrustLevel } from '
 import type { ChunkKind } from '../../memory/chunks.ts';
 import type { RetrievalRoute } from '../../memory/retrieval.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatCount, formatTimestamp, phaseLabel, trustLabel, truncate } from '../format.ts';
+import { formatCount, formatTimestamp, phaseLabel, trustLabel, trustTone, truncate } from '../format.ts';
 import { GateList } from './GateList.tsx';
-import type { Tone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextInput } from '../ui.tsx';
 
 // ───────────────────────── 文案（§6.2.3 要求文案可经 locale 覆盖；本仓暂无完整 locale 表，先集中在此） ─────────────────────────
@@ -337,27 +336,7 @@ export function formatScore(score: number): string {
   return score.toFixed(4);
 }
 
-/**
- * 来源可信度的语义色。
- *
- * **它只表达证据等级，不表达相关性**（§8.6：`trust_level` 不参与排序评分，除人工决策与
- * 工具观测各加 1 个 RRF 单位的权威度加成外）。因此「外部不可信」用危险色表示「别当事实用」，
- * 而不是表示「排得靠后」。
- */
-export function trustTone(trust: TrustLevel): Tone {
-  switch (trust) {
-    case 'human_decision':
-      return 'done';
-    case 'tool_observation':
-      return 'active';
-    case 'model_reasoning':
-      return 'attention';
-    case 'agent_claim':
-      return 'neutral';
-    case 'external_untrusted':
-      return 'danger';
-  }
-}
+/** 来源可信度的语义色来自 `format.ts` 的**单源**（`trustTone`，与 `trustLabel` 同处）。 */
 
 /**
  * 一行的思考链标注（§8.3）。优先用上游给的标注文本；上游漏传但类型是思考链时兜底，

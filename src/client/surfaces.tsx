@@ -285,7 +285,7 @@ export function StatusPillSurface(props: {
     // 不要求理由：人类是主人。`mutate` 的第三参传空串（服务端对该端点不校验理由）；
     // 账本里照样记下操作者、from/to 与时间。
     void props.controller
-      .mutate('setApprovalMode', { engagementId: selected, approvalMode: current === 'auto' ? 'human' : 'auto' }, '')
+      .setApprovalMode({ engagementId: selected, approvalMode: current === 'auto' ? 'human' : 'auto' })
       .then(async (result) => {
         if (!result.ok) {
           setModeError(`${result.code}：${result.message}`);

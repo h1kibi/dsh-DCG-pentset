@@ -113,6 +113,56 @@ export function sessionStatusTone(status: SessionStatus): Tone {
   }
 }
 
+/**
+ * 会话状态的中文名（`worker_sessions.status`，§9.2）。
+ *
+ * 与 engagement 级主状态是**两套枚举**（§5.1 的两层状态），不能借用 `mainStatusLabel`——
+ * 那会把 `waiting_human` 显示成主状态的措辞。
+ *
+ * **单源**：此前时间轴（`timeline.ts`）与 AgentTrace 各写了一份私有表，措辞已经分叉
+ * （`active`：'工作中' vs '运行中'；`blocked`：'阻塞' vs '已阻塞'……第六轮质检实测）。
+ * 这里取与 `runMarkerLabel` 同一套 house style（存活态用「…中/准备…」，终态用「已…」）
+ * 并以设计文档的用词为准（doc 里「运行中」出现 24 次、「工作中」0 次）。
+ */
+const SESSION_STATUS_LABELS: Readonly<Record<SessionStatus, string>> = {
+  starting: '启动中',
+  active: '运行中',
+  waiting_human: '等待人工',
+  handoff_drafting: '准备交接',
+  transition_confirmation: '等待确认交接',
+  paused: '已暂停',
+  blocked: '已阻塞',
+  failed: '已失败',
+  closed: '已关闭',
+  superseded: '已被取代',
+};
+
+export function sessionStatusLabel(status: SessionStatus): string {
+  return SESSION_STATUS_LABELS[status];
+}
+
+/**
+ * 来源可信度的语义色。
+ *
+ * **它只表达证据等级，不表达相关性**（§8.6：`trust_level` 不参与排序评分，除人工决策与
+ * 工具观测各加 1 个 RRF 单位的权威度加成外）。因此「外部不可信」用危险色表示「别当事实用」，
+ * 而不是表示「排得靠后」。与 `trustLabel` 同处（原先在 `views/MemoryExplorer.tsx` 里自建）。
+ */
+export function trustTone(trust: TrustLevel): Tone {
+  switch (trust) {
+    case 'human_decision':
+      return 'done';
+    case 'tool_observation':
+      return 'active';
+    case 'model_reasoning':
+      return 'attention';
+    case 'agent_claim':
+      return 'neutral';
+    case 'external_untrusted':
+      return 'danger';
+  }
+}
+
 /** 动作类别（风险分级）。 */
 const ACTION_CLASS_LABELS: Readonly<Record<ActionClass, string>> = {
   passive_read: '被动读取',

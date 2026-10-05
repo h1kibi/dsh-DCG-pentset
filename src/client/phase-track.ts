@@ -17,6 +17,7 @@
  */
 
 import { PHASES } from '../contracts.ts';
+import { phaseLabel } from './format.ts';
 import type { Phase, WorkerSessionSummary } from '../contracts.ts';
 
 /** 一个阶段节点上要显示的信息。 */
@@ -72,14 +73,7 @@ export interface PhaseTrack {
   readonly currentIteration: number;
 }
 
-/** 阶段的中文名。与 `format.ts` 的 `phaseLabel` 同源，这里内联以避免循环依赖。 */
-const PHASE_LABELS: Readonly<Record<Phase, string>> = {
-  'intelligence-gathering': '情报收集',
-  'threat-modeling': '威胁建模',
-  'vulnerability-analysis': '漏洞分析',
-  exploitation: '利用验证',
-  'post-exploitation': '后渗透',
-};
+/** 阶段的中文名来自 `format.ts` 的**单源**（`phaseLabel`）——原注释声称「内联以避免循环依赖」，但 `format.ts` 只依赖契约层，循环并不存在。 */
 
 /**
  * 由会话列表构建轨道。
@@ -95,7 +89,7 @@ export function buildPhaseTrack(sessions: readonly WorkerSessionSummary[]): Phas
     const iterations = [...new Set(mine.map((s) => s.iteration))].sort((a, b) => a - b);
     return {
       phase,
-      label: PHASE_LABELS[phase],
+      label: phaseLabel(phase),
       sessionCount: mine.length,
       activeSessionId: active?.id ?? null,
       maxAttempt: mine.reduce((max, s) => Math.max(max, s.attempt), 0),
