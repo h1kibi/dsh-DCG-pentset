@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@f239cd79a21d：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）"
+  smoked: "沙箱实测@8aba5d58ad5b：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）"
 ---
 
 # Web 面清点（recon-web-surface）

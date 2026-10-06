@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-CRYP-01, RFC 5280, RFC 9309, MITRE ATT&CK T1590.002/T1596.003]
-  smoked: "沙箱实测@f239cd79a21d：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为"
+  smoked: "沙箱实测@8aba5d58ad5b：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为"
 ---
 
 # DNS 与证书面清点（recon-dns-cert）

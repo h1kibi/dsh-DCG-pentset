@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@f239cd79a21d：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open"
+  smoked: "沙箱实测@8aba5d58ad5b：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open"
 ---
 
 # 网络面清点（recon-network-surface）

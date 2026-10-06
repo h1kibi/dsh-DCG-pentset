@@ -336,13 +336,20 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
   {
     group: 'Web 内容与核验',
     usage:
-      '目录/文件枚举用 ffuf 或 feroxbuster（先量软 404 基线）；nuclei 只用镜像自带的只读模板' +
-      '（/opt/pentest-templates），**不要**从网上下载模板——上游模板集含入侵性用例。sqlmap 属利用类动作，逐条人批。',
+      '目录/文件枚举用 ffuf（先量软 404 基线）、dirsearch 或 gobuster；爬取用 katana / gospider（前者 JS 感知，后者快）。' +
+      'nuclei 只用镜像自带的只读模板（/opt/pentest-templates），**不要**从网上下载模板——上游模板集含入侵性用例。' +
+      'dalfox 是主动型 XSS 扫描、sqlmap/commix 属利用类动作，三者都要人类逐条放行；arjun 发现隐藏参数（只发探测请求）；' +
+      'wafw00f 在发起大规模扫描前先判防护类型（一次请求，成本极低）。',
     tools: [
       { name: 'ffuf', from: 'ffuf' },
       { name: 'gobuster', from: 'gobuster' },
       { name: 'dirb', from: 'dirb' },
       { name: 'wfuzz', from: 'wfuzz' },
+      { name: 'dirsearch', from: 'dirsearch' },
+      { name: 'arjun', from: 'arjun' },
+      { name: 'dalfox', from: 'github.com/hahwul/dalfox/v2' },
+      { name: 'gospider', from: 'github.com/jaeles-project/gospider' },
+      { name: 'wafw00f', from: 'wafw00f' },
       { name: 'nuclei', from: 'github.com/projectdiscovery/nuclei' },
       { name: 'sqlmap', from: 'sqlmap' },
       { name: 'commix', from: 'commix' },
@@ -352,7 +359,9 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
     group: '凭据与杂凑',
     usage:
       '**默认禁止爆破/喷洒**（见 skills/exploit-auth-testing：单账号 ≤5 次、间隔 ≥1s，且必须人类逐条放行）。' +
-      'john 用于离线杂凑破解（拿到杂凑后在本机算，不打目标）；hashid 只做形态识别。',
+      'hydra 只在人类明确放行的单账号验证里用；john 只做**小规模**离线校验（拿到杂凑后在本机算，不打目标）；' +
+      'hashid 只做形态识别。**重活交人类**：GPU 破解（hashcat 那类）与 10^6 量级字典不在沙箱里硬跑——' +
+      '2 核/2g/无 GPU 的容器跑这些只会占满预算并产出不可复核的降级结论（hashcat 本镜像有意不装）。',
     tools: [
       { name: 'hydra', from: 'hydra' },
       { name: 'john', from: 'john' },
@@ -362,19 +371,47 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
   {
     group: 'AD / Windows 服务',
     usage:
-      '只读枚举优先（`smbclient -L`/`smbmap -H`/`impacket-…` 的只读用法）；任何写 share、改配置的动作都属于' +
-      '带破坏性的类别，要人类逐条放行。impacket 在本镜像里**有两套名字**（2026-10-06 实测）：' +
-      '`impacket-<脚本>`（如 impacket-smbclient，来自 apt 的 python3-impacket，随 smbmap 进来，在 /usr/bin）' +
-      '与 73 个上游原名 `*.py`（如 GetNPUsers.py / secretsdump.py，来自 pip 的 impacket，在 /usr/local/bin）。' +
-      '两套都能用，找不到 `impacket-x` 时试 `x.py`。' +
-      '**netexec / enum4linux-ng 本镜像没有**：两者只从 GitHub 安装，而构建网络不可达 github.com——' +
-      '需要它们的一体化 AD 用例时改用 impacket 逐条命令，或由人类在本机导入镜像。',
+      '**从只读枚举起步**：enum4linux-ng（SMB/RPC 结构化输出）、smbclient -L / smbmap -H / rpcclient、' +
+      'ldapsearch、ldapdomaindump（域对象转储）、adidnsdump（AD DNS 记录）、bloodhound-python（收集后做最短路分析）。' +
+      '**攻击链动作全部逐条人批**：kerbrute（用户名枚举与密码喷洒——喷洒属爆破类，单账号 ≤5 次/间隔 ≥1s）、' +
+      'certipy（ADCS 模板枚举与 ESC1-8）、evil-winrm（含 pass-the-hash）、impacket 的写操作。' +
+      '任何写 share、改配置、投递文件都属带破坏性的类别。\n' +
+      '**NetExec（`nxc`）本镜像没有**：它的依赖表里有四个 git URL，装它必须 github.com 可达，而本环境该域时通时不通（' +
+      '2026-10-06 实测，理由与手工装法写在 `docker/tools/Dockerfile` 的"有意不装"清单里）。' +
+      '它的一体化用法请用等价组合替代：枚举用 enum4linux-ng + smbmap + ldapdomaindump，' +
+      '横向用 evil-winrm（WinRM）或 impacket 的 psexec/wmiexec/smbexec。\n' +
+      'impacket 在本镜像里**有两套名字**（2026-10-06 实测）：`impacket-<脚本>`（如 impacket-smbclient，来自 apt 的' +
+      'python3-impacket，随 smbmap 进来，在 /usr/bin）与 73 个上游原名 `*.py`（如 GetNPUsers.py / secretsdump.py，' +
+      '来自 pip 的 impacket，在 /usr/local/bin）。两套都能用，找不到 `impacket-x` 时试 `x.py`。\n' +
+      '**不在这里的**（它们是投放到 Windows 目标上运行的工件，不是 Linux 沙箱里的 CLI）：Rubeus / Seatbelt / ' +
+      'PowerUp / WinPEAS —— 需要在目标侧执行时，由人类决定投递方式并逐条放行。',
     tools: [
       { name: 'smbclient', from: 'smbclient' },
       { name: 'smbmap', from: 'smbmap' },
+      { name: 'rpcclient', from: 'samba-common-bin' },
+      { name: 'nmblookup', from: 'samba-common-bin' },
+      { name: 'enum4linux-ng', from: 'cddmp/enum4linux-ng' },
       { name: 'ldapsearch', from: 'ldap-utils' },
+      { name: 'ldapdomaindump', from: 'ldapdomaindump' },
+      { name: 'adidnsdump', from: 'adidnsdump' },
+      { name: 'bloodhound-python', from: 'bloodhound' },
+      { name: 'certipy', from: 'certipy-ad' },
+      { name: 'kerbrute', from: 'github.com/ropnop/kerbrute' },
+      { name: 'evil-winrm', from: 'evil-winrm' },
       { name: 'snmpwalk', from: 'snmp' },
       { name: 'impacket-*', from: 'impacket' },
+    ],
+  },
+  {
+    group: '字典与流量取证',
+    usage:
+      '字典生成（crunch 模式化、cewl 从目标站点爬关键词）：产出的字典落到 /tmp，**不要**在沙箱里跑大规模破解' +
+      '（见提示词里「交人类」那条：hashcat 那类 GPU 活、10^6 量级字典都不在沙箱硬跑）。' +
+      'tshark 用于读/分析已有 pcap；沙箱内没有入站端口，抓不到"别人发给你的流量"。',
+    tools: [
+      { name: 'crunch', from: 'crunch' },
+      { name: 'cewl', from: 'cewl' },
+      { name: 'tshark', from: 'tshark' },
     ],
   },
   {
@@ -391,9 +428,12 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
     group: '隧道与转发',
     usage:
       '建立可达性通道属于 `lateral_movement` 类别——**永远逐条人工放行**，且目标网段必须已在范围快照里。' +
-      '用完必须关闭并在后渗透阶段核查清理。',
+      'chisel 走 HTTP(S) 单端口最简单；ligolo-proxy 是沙箱侧的服务端（多层跳板更强），**ligolo-agent 是投放到' +
+      '目标上运行的二进制**——投递文件本身也要人类放行。用完必须关闭并在后渗透阶段核查清理。',
     tools: [
       { name: 'chisel', from: 'github.com/jpillora/chisel' },
+      { name: 'ligolo-proxy', from: 'github.com/nicocha30/ligolo-ng/cmd/proxy' },
+      { name: 'ligolo-agent', from: 'github.com/nicocha30/ligolo-ng/cmd/agent' },
       { name: 'socat', from: 'socat' },
       { name: 'proxychains4', from: 'proxychains4' },
       { name: 'ssh', from: 'openssh-client' },
@@ -408,7 +448,7 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
       '长输出**先落 /tmp 再用 jq/grep 处理**：容器输出有上限（超限截断，宿主侧还有一层缓冲上限）。' +
       'python3 预装了 requests / dnspython / beautifulsoup4 / lxml / paramiko / pyjwt / pycryptodome / scapy / pwntools / impacket。',
     tools: [
-      { name: 'python3', from: 'python:3.10-slim-bookworm' },
+      { name: 'python3', from: 'python:3.11-slim-bookworm' },
       { name: 'curl', from: 'curl' },
       { name: 'wget', from: 'wget' },
       { name: 'jq', from: 'jq' },

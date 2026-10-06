@@ -115,22 +115,42 @@ cd /c/Projects/Agent-projects/dsh-DCG-pentest
 docker build -t pentest-tools:dev docker/tools      # 上下文就是 docker/tools
 ```
 
-**构建期网络（2026-10-06 实测）**——决定了哪些工具能装、怎么装：
+**构建期网络（2026-10-06 二次实测）**——决定了哪些工具能装、怎么装。
+**注意这张表会变**：同一天早上 `github.com` 被拒、下午 200；出网本身也是间歇的（§6.5.9）。
+因此安装策略是"**优先走稳定源**（apt/pip/goproxy.cn/jsDelivr），只有 PyPI 没有的才走 GitHub，
+且一律钉 commit/tag"：
 
 | 源 | 可达 | 用途 |
 |---|---|---|
 | `deb.debian.org` | ✓ | apt 包（工具集主体） |
-| `pypi.org` | ✓ | python 工具与库 |
+| `pypi.org` | ✓ | python 工具与库（**未钉版本**，见下） |
 | `cdn.jsdelivr.net` | ✓ | 字典（逐字镜像 GitHub 内容，**钉 tag**） |
 | `goproxy.cn` + `sum.golang.google.cn` | ✓ | Go 工具（**版本钉死**，校验库保留） |
-| `github.com` | **✗** | Release 资产、netexec/enum4linux-ng 一类只能从 GitHub 装的工具 |
+| `rubygems.org` | ✓ | Evil-WinRM（只在 gem 发布；装完卸掉 ruby-dev/build-essential） |
+| `codeload.github.com` | ✓（稳定） | **GitHub 仓库归档**：`https://codeload.github.com/<owner>/<repo>/tar.gz/<tag 或 commit>`——源码安装优先走这里 |
+| `api.github.com` | ✓ | Release 元数据（assets 本身在 objects.githubusercontent.com，个别下载器能走通） |
+| `github.com` | **时通时不通** | `git clone`/网页/Release 直链都打这个域：2026-10-06 当天上午拒绝、下午 200、一小时后超时。**不要把它作为唯一安装路径** |
+| `raw.githubusercontent.com` | **✗** | 直接用 raw 链接下脚本/字典不可靠（用 jsDelivr 代替） |
 | `proxy.golang.org` | **✗** | 官方 Go 代理（已换 goproxy.cn） |
-| `api.github.com` | **✓**（2026-10-06 实测） | 只有走 API 的下载器能用：nuclei 首次运行时会**自动下载官方模板库**并成功 |
 
-推论：**MCP / Release 二进制 / GitHub 源码安装在本机一律不可用**；要用这类工具，只能
-（a）改走 apt/pip/jsDelivr/goproxy 里存在的等价物，或（b）由人在有网的机器上构建好镜像再导入。
+推论：**"只有 GitHub 有"的工具仍然装得上**——按 commit/tag 从 `codeload.github.com` 取 tar.gz
+（`enum4linux-ng` 就是这么装的），比 `git clone` 更稳、且同样钉得住版本。
 
-`api.github.com` 可达这一条有两个后果，都要记住：
+> **NetExec（`nxc`）不在镜像里，且是有意的**：它的依赖表里有**四个 git URL**
+> （certipy-ad / impacket / oscrypto / pynfsclient 各自指向一个 GitHub 仓库），装它必须
+> `github.com` 可达——而那个域在本环境**时通时不通**（2026-10-06 一天内翻转三次：拒绝 → 200 → 超时 → 200）。
+> 四条替代路都试过并否掉：钉 `dploot<4` 只解决另一个问题（SMB 模块的 dploot 4 API 断档）；
+> main 分支同样依赖 git URL；把四个 git 依赖改指 PyPI 能装上、但运行期 `nxc smb` 直接
+> `LibraryNotFoundError`（oscrypto 的 OpenSSL 3 检测，上游 pin git 版正是为此）；加重试只是把
+> 不确定性搬进构建。**结论**：镜像构建不依赖 flaky 网络；AD 面由 enum4linux-ng + impacket（73 个脚本）
+> + smbmap/smbclient/rpcclient + evil-winrm 覆盖。需要 `nxc` 时按 `docker/tools/Dockerfile`
+> "有意不装"清单里的那条命令，在 github 可达的机器上装好再导入。
+
+> **已知的复现性缺口**：pip 那段**没有钉版本**（Go 与 GitHub 专供件都钉了）。同一份 Dockerfile 在
+> 不同时间构建会装出不同的依赖树。要完全复现，得把 pip 依赖钉到具体 wheel 版本——这是一笔待还的账，
+> 不是"设计如此"。
+
+`api.github.com` 可达时有两个后果，都要记住（它不可达时 nuclei 拉不到、也就无所谓）：
 
 1. **我们仍然不装官方模板库**：`/opt/pentest-templates` 里只有 6 份自建、只读形态的模板
    （见下 ③）。官方库里有大量入侵性/破坏性用例，装进来等于把动作边界交给上游。
@@ -164,6 +184,9 @@ npm run verify:tool-image -- pentest-tools:dev
 - 装了新工具 → 加进对应分组（`from` 写 apt 包名 / pip 模块名 / go 模块路径 / COPY 来源）；
 - 有意不装 → **不要**写进声明，并在该组 `usage` 里写明"本镜像没有它、改用 X"；
 - `test/skill-pack.test.ts` 的 `ABSENT_IN_SANDBOX` 是同一事实的另一面：装了就从名单里删掉。
+- **有意不装的整份清单写在 `docker/tools/Dockerfile` 的注释块里**（hashcat / responder / sliver /
+  pwncat-cs / exploitdb / feroxbuster / gowitness / 云与 K8s 套件 / Windows 侧工件），每条都带理由；
+  要加回某个工具：删掉那条注释、按上面的规则补声明，并跑 ② 的自检。
 
 #### ④ 推 registry + 重钉摘要（**两处，别只改一处**）
 

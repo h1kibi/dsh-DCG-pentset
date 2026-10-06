@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [Nmap NSE 官方文档, OpenSSL s_client 文档, OWASP WSTG-CONF]
-  smoked: "沙箱实测@f239cd79a21d：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）"
+  smoked: "沙箱实测@8aba5d58ad5b：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）"
 ---
 
 # 服务面候选漏洞核验（vuln-service-checks）

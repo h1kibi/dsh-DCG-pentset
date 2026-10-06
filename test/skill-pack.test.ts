@@ -57,16 +57,20 @@ async function loadPack(): Promise<Map<string, { text: string; parsed: ParsedSki
  * 一条天天误报的测试等于没有测试。这里的名单是**冒烟跑出来的事实**，抓的是真故障模式：
  * 教 Agent 跑一条注定 `command not found` 的命令。
  *
- * 2026-10-06 复核：工具镜像升级后，`whatweb` / `httpx` / `gobuster` / `dirb` / `wfuzz` /
- * `hydra` / `masscan` / `smbclient` / `ldapsearch` / `subfinder` / `ssh` / `scp` 都已装进镜像，
- * 故从名单里删掉（留着会让 skill 作者以为"这个工具不能用"而绕路）。仍是缺的：
- * Debian 12 没有 `nikto`/`wpscan`/`medusa`，本项目**有意不装**的探测类武器（amass/gau/arjun）
- * 与 C2（msfconsole），以及精简基础镜像里没有的 `ss`/`ps`/`netstat`（用 `/proc` 或 `nc -z` 替代）。
+ * 2026-10-06 复核（第二批工具进镜像后）：`enum4linux-ng` / `arjun` / `dalfox` /
+ * `gospider` / `dirsearch` / `bloodhound-python` / `certipy` / `kerbrute` / `evil-winrm` /
+ * `crunch` / `cewl` / `tshark` / `rpcclient` / `nmblookup` 都已装进镜像，故从名单里删掉。
+ * 仍是缺的：Debian 12 没有 `nikto`/`wpscan`/`medusa`/`searchsploit`（exploitdb 包已从 bookworm 移除）；
+ * **NetExec（`nxc`/`netexec`）**——它的四个依赖是 git URL，装它必须 github.com 可达（本环境时通时不通），
+ * 理由与手工装法写在 `docker/tools/Dockerfile` 的"有意不装"清单里；
+ * 本项目**有意不装**的探测类武器（amass/gau/waybackurls）、`telnet`/`ftp`（明文协议，改用 nc/openssl）、
+ * C2（msfconsole）与 GPU 破解（hashcat，按提示词纪律交人类）；以及精简基础镜像里没有的
+ * `ss`/`ps`/`netstat`（用 `/proc` 或 `nc -z` 替代）。
  * 往镜像里加了工具，就把它从这份名单里删掉——这正是这条测试要逼人做的确认。
  */
 const ABSENT_IN_SANDBOX = [
-  'ss', 'ps', 'netstat', 'nikto', 'wpscan', 'medusa', 'netexec', 'enum4linux-ng',
-  'telnet', 'ftp', 'amass', 'gau', 'waybackurls', 'arjun', 'searchsploit', 'msfconsole',
+  'ss', 'ps', 'netstat', 'nikto', 'wpscan', 'medusa', 'nxc', 'netexec',
+  'telnet', 'ftp', 'amass', 'gau', 'waybackurls', 'searchsploit', 'msfconsole',
 ] as const;
 
 /** 抽出 ```bash 围栏里的所有 token，逐个对照黑名单（不做「哪一个是命令」的判断）。 */

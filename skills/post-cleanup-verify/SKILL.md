@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, MITRE ATT&CK Impact/Cleanup, NIST SP 800-115]
-  smoked: "沙箱实测@f239cd79a21d：/proc/net/tcp 十六进制解析（镜像无 ss/ps/netstat）读出监听口 5599 与 127.0.0.11:37273；nc -z exit=0；上传/临时路径探活 404；jq 清理清单管线读出 actions 表"
+  smoked: "沙箱实测@8aba5d58ad5b：/proc/net/tcp 十六进制解析（镜像无 ss/ps/netstat）读出监听口 5599 与 127.0.0.11:37273；nc -z exit=0；上传/临时路径探活 404；jq 清理清单管线读出 actions 表"
 ---
 
 # 清理核查（post-cleanup-verify）
