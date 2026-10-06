@@ -17,6 +17,11 @@ metadata:
   两者都只做「可判定 + 留证据」，不做利用链。
 
 ## 前提与边界
+- **能用结构化通道的地方先用它**：`pentest_scan` 的 `http_check`（六项只读核验：方法面、安全头、
+  robots、标题等）与 `exposure_check`（规范文件/备份档的存在性，只判形态、不回显内容）类别是
+  `active_discovery`，**不需要逐条人工放行**。下面手写 curl 的步骤走 `pentest_exec`
+  （`exploit_validation`），**每条都要人类点一次**——顺序是先结构化、覆盖不到再手写
+  （例如第 3 步 BOLA 需要"两个身份各取一次"，结构化通道没有这个形态）。
 - 每条命令经 `pentest_exec`（`direct_command` ⇒ `exploit_validation`）**逐条人工放行**；写法上一条命令一个目的。
 - **本技能只发只读请求**：`GET`/`HEAD`/`OPTIONS`，以及**一次**带标记的 `POST`（用于验证 mass assignment /
   Content-Type 判定）。任何写库、改状态、删数据的请求不在这里——那是利用阶段且逐条批。
