@@ -723,9 +723,17 @@ function scopeWorkerToolsBySession(
   enter: (workerSessionId: string, work: () => Promise<unknown>) => Promise<unknown>,
 ): WorkerToolDeps {
   const wrapped: Record<string, unknown> = {};
-  for (const [name, fn] of Object.entries(deps)) {
+  for (const [name, dep] of Object.entries(deps)) {
+    // **非函数依赖原样透传**：本包装只负责「按会话补作用域」，早先的实现假设每个成员
+    // 都是函数，于是对象形依赖（如 `workdir: {list,read,write}`）装配后变成了函数，
+    // 工具侧以 `access.list is not a function` 失败（2026-10-07 实测）——而单元测试
+    // 直接把依赖对象喂给 `createWorkerTools`，恰好绕过了这条装配路径。
+    if (typeof dep !== 'function') {
+      wrapped[name] = dep;
+      continue;
+    }
     wrapped[name] = async (input: unknown) => {
-      const call = (): Promise<unknown> => (fn as (value: unknown) => Promise<unknown>)(input);
+      const call = (): Promise<unknown> => dep(input);
       const workerSessionId = (input as { readonly workerSessionId?: unknown } | null | undefined)
         ?.workerSessionId;
       if (typeof workerSessionId !== 'string' || workerSessionId.length === 0) return call();

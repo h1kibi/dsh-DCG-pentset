@@ -11,6 +11,9 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventEmitter, once } from 'node:events';
 import { Pool, Client } from 'pg';
 
@@ -334,6 +337,48 @@ describe('组合根接线', { skip: DATABASE_URL === undefined ? '未设置 PENT
         `workerTools 缺少 ${m}`,
       );
     }
+  });
+
+  test('对象形依赖经会话作用域包装后仍是对象（回归：曾被包成函数，工具报 access.list is not a function）', async () => {
+    // 现场（2026-10-07，用户实测）：Agent 调 `pentest_workdir` 得到
+    // `access.list is not a function`。根因是 `scopeWorkerToolsBySession` 假设每个
+    // `workerTools` 成员都是函数，把对象形的 `workdir` 也包成了函数；而单元测试直接把
+    // 依赖对象喂给 `createWorkerTools`，**恰好绕过了这条装配路径**。
+    // 因此这条断言必须走 compose（真实装配），不是测试自己拼的依赖。
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-compose-mount-'));
+    writeFileSync(join(dir, 'hello.md'), '# hi\n');
+    const mounted = compose({
+      database: { url: DATABASE_URL! },
+      ledgerSecret: 'test-secret-not-from-env-32-bytes-min',
+      sandbox: { ...SANDBOX, mounts: [{ hostPath: dir, containerPath: '/work' }] },
+    });
+    try {
+      const workdir = (mounted.hostServices.workerTools as { workdir?: unknown }).workdir as
+        | {
+            list: (input: { path: string }) => Promise<unknown>;
+            read: (input: { path: string }) => Promise<unknown>;
+            write: (input: { path: string; content: string }) => Promise<unknown>;
+          }
+        | undefined;
+      assert.equal(typeof workdir, 'object', 'workdir 必须是对象（被包成函数即现场那个故障）');
+      assert.equal(typeof workdir?.list, 'function');
+      assert.equal(typeof workdir?.read, 'function');
+      assert.equal(typeof workdir?.write, 'function');
+      const listing = (await workdir!.list({ path: '.' })) as { entries: readonly { name: string }[] };
+      assert.deepEqual(listing.entries.map((e) => e.name), ['hello.md']);
+      const file = (await workdir!.read({ path: 'hello.md' })) as { text: string; containerPath: string };
+      assert.equal(file.text, '# hi\n');
+      assert.equal(file.containerPath, '/work/hello.md');
+    } finally {
+      await mounted.dispose();
+    }
+  });
+
+  test('未声明挂载时 workdir 依赖不出现（工具据此给 no_roots，而不是退回某个默认目录）', () => {
+    assert.equal(
+      (composed!.hostServices.workerTools as { workdir?: unknown }).workdir,
+      undefined,
+    );
   });
 
   test('compose 后 apply 能注册全部 Worker 工具（端到端装配）', async () => {
