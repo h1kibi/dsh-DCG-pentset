@@ -363,6 +363,10 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     HUMAN_QUESTION_TOOL,
     'pentest_submit_report',
     'pentest_write_status_note',
+    // 作业目录的读写（人类挂进来的宿主目录）：**不经过范围闸门**——空范围作业里
+    // `pentest_exec` 会被 out_of_scope 拒绝，而读作业资料（资产清单/既有报告）本就不该
+    // 需要目标授权。这不是目标工具，别把它当扩大攻击面的口子。
+    'pentest_workdir',
     'pentest_request_action_approval',
     'pentest_prepare_handoff',
     // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
@@ -381,6 +385,10 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     HUMAN_QUESTION_TOOL,
     'pentest_submit_report',
     'pentest_write_status_note',
+    // 作业目录的读写（人类挂进来的宿主目录）：**不经过范围闸门**——空范围作业里
+    // `pentest_exec` 会被 out_of_scope 拒绝，而读作业资料（资产清单/既有报告）本就不该
+    // 需要目标授权。这不是目标工具，别把它当扩大攻击面的口子。
+    'pentest_workdir',
     'pentest_request_action_approval',
     'pentest_prepare_handoff',
     // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
@@ -395,6 +403,10 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     HUMAN_QUESTION_TOOL,
     'pentest_submit_report',
     'pentest_write_status_note',
+    // 作业目录的读写（人类挂进来的宿主目录）：**不经过范围闸门**——空范围作业里
+    // `pentest_exec` 会被 out_of_scope 拒绝，而读作业资料（资产清单/既有报告）本就不该
+    // 需要目标授权。这不是目标工具，别把它当扩大攻击面的口子。
+    'pentest_workdir',
     'pentest_request_action_approval',
     'pentest_prepare_handoff',
     // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
@@ -412,6 +424,10 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     HUMAN_QUESTION_TOOL,
     'pentest_submit_report',
     'pentest_write_status_note',
+    // 作业目录的读写（人类挂进来的宿主目录）：**不经过范围闸门**——空范围作业里
+    // `pentest_exec` 会被 out_of_scope 拒绝，而读作业资料（资产清单/既有报告）本就不该
+    // 需要目标授权。这不是目标工具，别把它当扩大攻击面的口子。
+    'pentest_workdir',
     'pentest_request_action_approval',
     'pentest_prepare_handoff',
     // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
@@ -426,6 +442,10 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     HUMAN_QUESTION_TOOL,
     'pentest_submit_report',
     'pentest_write_status_note',
+    // 作业目录的读写（人类挂进来的宿主目录）：**不经过范围闸门**——空范围作业里
+    // `pentest_exec` 会被 out_of_scope 拒绝，而读作业资料（资产清单/既有报告）本就不该
+    // 需要目标授权。这不是目标工具，别把它当扩大攻击面的口子。
+    'pentest_workdir',
     'pentest_request_action_approval',
     'pentest_prepare_handoff',
     // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。

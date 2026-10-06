@@ -417,6 +417,9 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
         'pentest_recon',
         'pentest_request_action_approval',
         'pentest_submit_report',
+        // 作业目录读写：不进范围裁决的**非目标**通道（2026-10-07）——空范围作业里
+        // 它是唯一能读到作业资料的入口，因此每个阶段（含情报收集）默认都带。
+        'pentest_workdir',
         'pentest_write_status_note',
         'skill_load',
       ],

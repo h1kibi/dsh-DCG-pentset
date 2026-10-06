@@ -68,6 +68,9 @@ import { buildNormalizedCommand, createRegistry, portForScope, validateParams } 
 import { canonicalTargetString, derivePlanHash } from './execution/idempotency.ts';
 import { DockerSandbox } from './execution/docker-sandbox.ts';
 import type { DockerSandboxConfig, ProcessRunner } from './execution/docker-sandbox.ts';
+import { DEFAULT_MOUNT_CONTAINER_PATH } from './execution/docker-sandbox.ts';
+import { listWorkdir, readWorkdir, writeWorkdir } from './execution/workdir.ts';
+import type { WorkdirRoot } from './execution/workdir.ts';
 import { PgLeaseStore } from './workflow/pg-lease.ts';
 import { PgPolicyService, PgSessionDirectory, PgActionPolicySource } from './policy/pg-policy.ts';
 import { PgWorkflowService } from './workflow/pg-workflow.ts';
@@ -1374,6 +1377,13 @@ function installWorkflow(input: {
       },
     }),
   });
+  // 作业目录的挂载根（与沙箱 argv 同源：`config.sandbox.mounts`）。容器路径省略时与
+  // 沙箱一致地取 `/work`，两处必须同值——否则提示词说的路径与工具给的路径会不一致。
+  const workdirRoots: readonly WorkdirRoot[] = (config.sandbox.mounts ?? []).map((mount) => ({
+    hostPath: mount.hostPath,
+    containerPath: mount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH,
+    ...(mount.readOnly === undefined ? {} : { readOnly: mount.readOnly }),
+  }));
   const workerToolsRaw: WorkerToolDeps = {
     // 「会话即 intake」：把当前会话登记为作业的 intake。
     // 晚绑定 `workflowRef`：工作流服务在本对象之后构造（见下面 `workflowRef` 的说明），
@@ -1398,6 +1408,19 @@ function installWorkflow(input: {
     requestScopeConfirmation: pgTools.requestScopeConfirmation.bind(pgTools),
     requestApproval: pgTools.requestApproval.bind(pgTools),
     execute: makeWorkerExecute(execution),
+    // 作业目录的读写（§10.4）：**不经过范围裁决**——它不接触任何目标，只碰人类在
+    // profile 里显式挂进来的宿主目录。空范围作业里这是唯一能拿到作业资料的通道。
+    // 没有挂载就整块省略：工具随即给出 `no_roots` 的明确拒绝，不退回某个默认目录。
+    ...(config.sandbox.mounts === undefined || config.sandbox.mounts.length === 0
+      ? {}
+      : {
+          workdir: {
+            list: async (input: { readonly path: string }) => listWorkdir(workdirRoots, input.path),
+            read: async (input: { readonly path: string }) => readWorkdir(workdirRoots, input.path),
+            write: async (input: { readonly path: string; readonly content: string }) =>
+              writeWorkdir(workdirRoots, input.path, input.content),
+          },
+        }),
   };
 
   // 工具路径在**无外层作用域**下运行（agent loop 调用，不经控制台 RPC），

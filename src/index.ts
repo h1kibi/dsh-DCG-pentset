@@ -322,6 +322,9 @@ export async function applyPentest(ctx: Context, config: PluginConfig = {}): Pro
     tools.pentestRecon,
     // 结构化核验入口（漏洞分析阶段）。
     tools.pentestScan,
+    // 作业目录的读写（2026-10-07）：**不是目标工具**，不经过范围裁决——
+    // 空范围作业里它是唯一能读到作业资料的通道（`pentest_exec` 会被 out_of_scope 拒绝）。
+    tools.workdirTool,
   ];
   const names: string[] = [];
   for (const def of registered) {

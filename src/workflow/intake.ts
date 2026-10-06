@@ -172,6 +172,9 @@ export class IntakeFlow {
       HUMAN_QUESTION_TOOL,
       'pentest_request_scope_confirmation',
       'pentest_write_status_note',
+      // 读人类放进去的作业资料（资产清单、目标说明、既有报告）。**不经过范围闸门**——
+      // 这正是 intake 的自锁出口：要读资产清单才知道范围，而读它本身不该需要范围。
+      'pentest_workdir',
     ] as const;
 
     const staged = await this.#core.tx(async () => {

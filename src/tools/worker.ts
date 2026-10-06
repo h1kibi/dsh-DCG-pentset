@@ -44,6 +44,8 @@ export {
 } from '../execution/techniques.ts';
 export type { ReconTechniqueSpec, StructuredFamily, ReconIntentInput, ReconIntentOutcome } from '../execution/techniques.ts';
 import { buildStructuredIntent } from '../execution/techniques.ts';
+import { WorkdirError, WORKDIR_READ_LIMIT_BYTES } from '../execution/workdir.ts';
+import type { WorkdirFile, WorkdirListing, WorkdirWriteResult } from '../execution/workdir.ts';
 
 /** 工具实现依赖的服务面（全部由宿主注入，便于测试）。 */
 export interface WorkerToolDeps {
@@ -145,6 +147,18 @@ export interface WorkerToolDeps {
     /** 宿主工具调用的取消信号；必须继续传到沙箱执行。 */
     signal: AbortSignal;
   }): Promise<ExecuteOutcome>;
+  /**
+   * 作业目录（`sandbox.mounts` 声明的宿主目录）的读写。
+   *
+   * **不经过范围裁决**：它不接触任何目标，只碰人类自己挂进来的目录。空范围作业里
+   * 这是唯一能拿到作业资料的通道（`pentest_exec` 在范围版本 0 下会被 out_of_scope 拒绝）。
+   * 未声明挂载时省略——工具随即给出 `no_roots` 的明确拒绝，而不是退回某个默认目录。
+   */
+  readonly workdir?: {
+    list(input: { readonly path: string }): Promise<WorkdirListing>;
+    read(input: { readonly path: string }): Promise<WorkdirFile>;
+    write(input: { readonly path: string; readonly content: string }): Promise<WorkdirWriteResult>;
+  };
 }
 
 /**
@@ -971,6 +985,99 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     },
   });
 
+  /**
+   * 作业目录的读写（`sandbox.mounts` 声明的宿主目录）。
+   *
+   * 存在的理由是一个自锁：沙箱命令**每条**都要声明已授权目标，于是空范围作业
+   * （范围版本 0）里连 `ls /work` 都跑不了——「读你自己的作业资料」与目标无关，
+   * 却被目标闸门挡住。本工具不接触任何目标，只用一条路径约束（必须落在挂载根内）。
+   */
+  const workdirTool = defineTool({
+    name: 'pentest_workdir',
+    description:
+      '**读写人类挂进沙箱的作业目录**（profile 里 `sandbox.mounts` 声明的宿主目录；容器内路径也在返回值里给出）。' +
+      '**它不经过范围闸门**：空范围作业（范围版本 0）里 `pentest_exec` 会被 out_of_scope 拒绝，' +
+      '而本工具照常可用——读作业资料（资产清单、既有报告、目标说明、人类放进去的任何文件）就该用它。' +
+      `op：\`list\` 列目录、\`read\` 读文本（超 ${Math.round(WORKDIR_READ_LIMIT_BYTES / 1024)}KiB 会截断并标注）、` +
+      '`write` 写文本文件（会建父目录）。' +
+      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；也接受容器路径写法（`/work/...`）。' +
+      '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
+      '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。',
+    parameters: {
+      op: { type: 'string', required: true, description: 'list | read | write' },
+      path: { type: 'string', required: true, description: '相对挂载根的路径（目录用 list；读/写给到文件）' },
+      content: { type: 'string', description: 'op=write 时的正文' },
+    },
+    output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
+    async execute(args, exec) {
+      // 与其余 Worker 工具同口径：先确认调用方是本项目登记的会话（拿不到就报错）。
+      await workerSessionIdOf(deps, exec);
+      const op = args.op.trim().toLowerCase();
+      if (op !== 'list' && op !== 'read' && op !== 'write') {
+        return toJson(asError({
+          status: 'blocked',
+          code: 'classification_rejected',
+          message: `op 只能是 list / read / write（收到 ${JSON.stringify(args.op)}）`,
+          next_action: '改用 list 列目录、read 读文件、write 写文件',
+        }));
+      }
+      const access = deps.workdir;
+      if (access === undefined) {
+        return toJson(asError({
+          status: 'blocked',
+          code: 'classification_rejected',
+          message: '本部署没有挂载任何宿主目录（`sandbox.mounts` 为空）：作业目录不可读写。',
+          next_action: '让人类在 profile 的 `runtime.sandbox.mounts` 里声明作业目录并重启；要跑命令则需先有已确认的范围',
+        }));
+      }
+      try {
+        if (op === 'list') return toJson(await access.list({ path: args.path }));
+        if (op === 'read') return toJson(await access.read({ path: args.path }));
+        if (args.content === undefined) {
+          return toJson(asError({
+            status: 'blocked',
+            code: 'classification_rejected',
+            message: 'op=write 必须给出 content',
+            next_action: '补上 content 再调用',
+          }));
+        }
+        return toJson(await access.write({ path: args.path, content: args.content }));
+      } catch (error) {
+        if (error instanceof WorkdirError) {
+          // 策略性拒绝（越界/只读/没挂载）→ 稳定错误码；操作性未命中（不存在/是目录/超限）
+          // → 结构化数据，模型据此自我纠偏（比如先 list 父目录），不必当失败处置。
+          const policy = error.code === 'outside_roots' || error.code === 'bad_path' ||
+            error.code === 'no_roots' || error.code === 'read_only';
+          if (policy) {
+            return toJson(asError({
+              status: 'blocked',
+              code: 'classification_rejected',
+              message: error.message,
+              next_action:
+                error.code === 'read_only'
+                  ? '该挂载是只读的：把要写的东西交给人类，或让人类把挂载改成读写'
+                  : '只用相对挂载根的路径；越界路径不会被接受',
+            }));
+          }
+          return toJson({
+            ok: false,
+            reason: error.code,
+            message: error.message,
+            next_action:
+              error.code === 'not_found'
+                ? '先用 op=list 看上层目录，确认文件名（注意大小写与中文名）'
+                : error.code === 'is_dir' || error.code === 'not_dir'
+                  ? 'op 用错：目录用 list，文件用 read'
+                  : error.code === 'binary'
+                    ? '这是二进制文件：不要在上下文里搬它，需要处理就用沙箱命令（先有范围）'
+                    : '把内容拆小，或把大产物留在沙箱里再只回报结论',
+          });
+        }
+        throw error;
+      }
+    },
+  });
+
   return {
     bootstrapIntake: bootstrapIntakeTool,
     memorySearch,
@@ -985,6 +1092,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     pentestExec,
     pentestRecon,
     pentestScan,
+    workdirTool,
   };
 }
 
@@ -1009,6 +1117,9 @@ export const WORKER_TOOL_NAMES = [
   'pentest_exec',
   'pentest_recon',
   'pentest_scan',
+  // 作业目录的读写：**不是**目标工具（TARGET_TOOL_NAMES 里没有它）——它只碰人类
+  // 显式挂进来的宿主目录，因此不经过范围裁决，空范围作业里也能读作业资料。
+  'pentest_workdir',
 ] as const;
 
 /** 触及目标的工具（守卫与登记据此区分「本插件的目标工具」与宿主工具）。 */
