@@ -50,7 +50,8 @@ import { LeaseHeartbeat } from './workflow/heartbeat.ts';
 import type { LeaseHeartbeatOptions } from './workflow/heartbeat.ts';
 import type { IndexSchedulerOptions } from './memory/scheduler.ts';
 import type { EmbeddingProvider } from './memory/embedding.ts';
-import { EmbeddingRevisionRegistry } from './memory/embedding.ts';
+import { EmbeddingRevisionRegistry, RemoteEmbeddingProvider } from './memory/embedding.ts';
+import { projectCjkBigrams, projectCjkQuery } from './memory/text-projection.ts';
 import { PgExecutionStore } from './execution/pg-store.ts';
 import { spawnRunner } from './execution/docker-sandbox.ts';
 import {
@@ -148,6 +149,28 @@ interface RuntimeRlsContext {
  */
 // `RlsScope` 与 `RlsScopePort` 的**规范定义**在 `workflow/model.ts`：
 // 前者此前只在这里声明过，于是组合根与工作流各持一份「差不多」的形状（2026-10-05 质检合并）。
+
+/**
+ * profile 里可写的那种嵌入描述符。
+ *
+ * 为什么需要它：`EmbeddingProvider` 带 `embed()` **函数**，配置里写不出来；
+ * 因此配置面收一串可序列化参数，由 compose 构造成 `RemoteEmbeddingProvider`。
+ */
+interface RemoteEmbeddingDescriptorConfig {
+  readonly model: string;
+  readonly dimensions: number;
+  readonly revision: string;
+  readonly endpoint: string;
+  readonly apiKey: string;
+  readonly batchSize?: number;
+}
+
+/** 区分「进程内提供方」与「可序列化描述符」：只有提供方带 `embed()` 函数。 */
+function isEmbeddingProvider(
+  value: EmbeddingProvider | RemoteEmbeddingDescriptorConfig,
+): value is EmbeddingProvider {
+  return 'embed' in value && typeof value.embed === 'function';
+}
 
 /** 组合配置。密钥类字段只接受引用或已解析的值，本模块不读环境变量。 */
 export interface ComposeConfig {
@@ -256,11 +279,27 @@ export interface ComposeConfig {
    */
   readonly sessionCwd?: string;
   /**
-   * 嵌入提供方（§12.2 本地或远端）。省略则索引器**只做词法索引**——
-   * 分块仍落库（有版本、有全文索引），但没有向量，语义检索退化为词法。
-   * 这是明确降级而非静默失败：水位与结果里都会标明 `lexicalOnly`。
+   * 嵌入提供方。**两种写法**：
+   *
+   *  - **可序列化描述符**（推荐，profile 里就能写）：`{ model, dimensions, revision, endpoint, apiKey, batchSize? }`
+   *    由 compose 构造成 `RemoteEmbeddingProvider`（Ollama / 任何 OpenAI 兼容口都行）。
+   *    维度必须等于 1024（`memory_chunks.embedding` 是 `vector(1024)`），否则拒载。
+   *  - 进程内提供方（自带 `embed()`，由代码注入；测试与特化部署用）。
+   *
+   * 省略即**不启用语义路**：索引只做词法（分块仍落库、有版本与全文索引），检索退化为
+   * 词法 + 三元组。这是**明确降级而非静默失败**：水位与结果里都会标明 `lexicalOnly`，
+   * 会话提示词也会如实写"本部署未启用语义通道"。
    */
-  readonly embeddings?: EmbeddingProvider;
+  readonly embeddings?: EmbeddingProvider | RemoteEmbeddingDescriptorConfig;
+  /**
+   * 中文双字词投影，**默认开启**（2026-10-07）。
+   *
+   * 背景：`to_tsvector('simple', …)` 不切中文，一整段中文是一个词元 ⇒ 中文查询在词法路
+   * **必然 0 命中**（实测：库内 138 块，查询「网段」0 命中，同一查询在三元组路 15 命中）。
+   * 开启后索引侧与查询侧同时投影（相邻二字组），中文才走得了词法路；ASCII 原样放行，不受影响。
+   * 关掉它需要重建索引才生效（存量块的 `search_vector` 里已经带了二字组词元）。
+   */
+  readonly cjkProjection?: boolean;
   /** outbox 队列参数（§8.4）。省略即用模块默认。 */
   readonly outbox?: OutboxOptions;
   /**
@@ -1127,22 +1166,32 @@ function installIndexing(input: {
   //
   // 未配嵌入提供方时它只做词法索引（分块仍落库，有版本与全文索引，无向量）。
   // 配了嵌入时同时接上版本登记器：检索侧的「只取活跃版本」过滤依赖
+  // 配置里给的是描述符就构造提供方；给的是进程内提供方（带 embed()）就直接用。
+  const configuredEmbeddings = config.embeddings;
+  const embeddingProvider =
+    configuredEmbeddings === undefined
+      ? undefined
+      : isEmbeddingProvider(configuredEmbeddings)
+        ? configuredEmbeddings
+        : new RemoteEmbeddingProvider(configuredEmbeddings);
+  // 中文双字词投影默认开启（见 `ComposeConfig.cjkProjection`）；索引侧与查询侧必须同一个开关。
+  const projectForSearch = config.cjkProjection === false ? undefined : projectCjkBigrams;
   // `embedding_revisions` 有一行 is_active（事故 2026-10-05：登记器零调用，
   // 跨版本混比防护空转）。
-  const embeddingRevisions = config.embeddings === undefined
+  const embeddingRevisions = embeddingProvider === undefined
     ? undefined
     : new EmbeddingRevisionRegistry({ db: readDb, txDb });
   const indexer = new MemoryIndexer({
     db: readDb,
     txDb,
-    ...(config.embeddings === undefined ? {} : { embeddings: config.embeddings }),
+    ...(embeddingProvider === undefined ? {} : { embeddings: embeddingProvider }),
     ...(embeddingRevisions === undefined ? {} : {
       // 直接把记录交回索引器：`isActive` 决定这批分块会不会被检索面读到，
       // 因此索引器必须看到它（非生效版本要拒绝写入，见 indexer.ts 的版本登记）。
       ensureEmbeddingRevision: async (engagementId, descriptor) =>
         embeddingRevisions.ensureRevision(engagementId, descriptor),
     }),
-    ...(config.projectForSearch === undefined ? {} : { projectForSearch: config.projectForSearch }),
+    ...(projectForSearch === undefined ? {} : { projectForSearch }),
   });
 
   return { outbox, ledger, indexer };
@@ -1372,11 +1421,14 @@ function installWorkflow(input: {
     },
   );
 
+  // 查询侧投影与索引侧同开关（`Config.cjkProjection`）。只作用于词法路：三元组路拿原文比对。
+  const queryProjection = config.cjkProjection === false ? undefined : projectCjkQuery;
   const pgTools = new PgWorkerTools(readDb, {
     txDb,
     executor: execution,
     ledger,
     ...(config.embedQuery === undefined ? {} : { embedQuery: config.embedQuery }),
+    ...(queryProjection === undefined ? {} : { projectQuery: queryProjection }),
     ...(rlsContext === undefined ? {} : {
       rlsContext,
       resolveRlsEngagement: async (workerSessionId: string) => {

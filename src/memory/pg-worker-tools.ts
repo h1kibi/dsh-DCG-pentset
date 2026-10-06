@@ -150,6 +150,14 @@ export interface PgWorkerToolsOptions {
   readonly txDb?: DbClient;
   /** 查询向量化。未注入时检索跳过向量路。 */
   readonly embedQuery?: (text: string) => Promise<readonly number[]>;
+  /**
+   * 词法路的**查询侧投影**（必须与索引侧的 `projectForSearch` 是同一个函数的查询版）。
+   *
+   * 中文在 `simple` 配置下整段是一个词元 ⇒ 中文查询 0 命中（实测）。投影把中文切成二字组，
+   * 索引侧与查询侧对称后中文才走得了词法路。ASCII 不受影响（投影函数原样放行）。
+   * 注意只影响 `plainto_tsquery`：三元组路仍拿**原文**比对（`qtext`），那条路的语义是模糊匹配。
+   */
+  readonly projectQuery?: (text: string) => string;
   /** RLS 租户上下文；engagement 一律按会话反查，不再是进程级值。 */
   readonly rlsContext?: { readonly tenantId: string };
   /** 通过 SECURITY DEFINER 反查 worker session 所属 engagement。 */
@@ -341,6 +349,7 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
   readonly #txRunner: DbTransactionRunner;
   readonly #executor: Pick<ExecutionService, 'admit'>;
   readonly #embedQuery: PgWorkerToolsOptions['embedQuery'];
+  readonly #projectQuery: (text: string) => string;
   readonly #ledger: TransactionalLedger | undefined;
   readonly #rlsContext: PgWorkerToolsOptions['rlsContext'];
   readonly #resolveRlsEngagement: PgWorkerToolsOptions['resolveRlsEngagement'];
@@ -352,6 +361,7 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     this.#txRunner = transactionRunnerFor(this.#txDb);
     this.#executor = options.executor;
     this.#embedQuery = options.embedQuery;
+    this.#projectQuery = options.projectQuery ?? ((text: string) => text);
     this.#ledger = options.ledger;
     this.#rlsContext = options.rlsContext;
     this.#resolveRlsEngagement = options.resolveRlsEngagement;
@@ -706,6 +716,8 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
       return `$${params.length}`;
     };
     const qParam = bind(query.query);
+    // 词法路用投影后的查询（中文切二字组）；三元组路仍用 `qtext` 原文做模糊匹配。
+    const qLexParam = bind(this.#projectQuery(query.query));
     const thresholdParam = bind(TRIGRAM_WORD_SIMILARITY_THRESHOLD);
     const routeLimitParam = bind(
       Math.min(Math.max(limit * ROUTE_CANDIDATE_FACTOR, ROUTE_CANDIDATE_MIN), ROUTE_CANDIDATE_MAX),
@@ -752,7 +764,7 @@ ${sql.joins.join('\n')}
     LEFT JOIN pentest.memory_items mit ON mit.id = mc.memory_item_id
    WHERE ${sql.where}
 ),
-params AS (SELECT ${qParam}::text AS qtext, plainto_tsquery('simple', ${qParam}::text) AS tsq),
+params AS (SELECT ${qParam}::text AS qtext, plainto_tsquery('simple', ${qLexParam}::text) AS tsq),
 lexical AS (
   SELECT s.id, row_number() OVER (ORDER BY ts_rank_cd(s.search_vector, p.tsq) DESC, s.id) AS rank
     FROM scoped s, params p
