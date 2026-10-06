@@ -70,6 +70,19 @@ docker run -d --name fx-tls --network pentest-lab-internal python:3.10-slim-book
 
 靶标地址：**fx-web `172.29.0.2:8080`**、**fx-tls `172.29.0.3:8443`**（SNI `smoke.local`）。**别打别的地址。**
 
+需要 AD 面时再起一个实验室域控（域 `LAB.LOCAL`，构建与限制见 `docker/ad-dc/` 与 RUNBOOK §2.1⑤）：
+
+```bash
+docker build -t pentest-ad-dc:lab docker/ad-dc
+docker run -d --name ad-dc --privileged --network pentest-lab-internal --hostname dc1 \
+  --mount type=volume,src=ad-dc-samba,dst=/var/lib/samba pentest-ad-dc:lab
+docker inspect ad-dc --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+```
+
+写 AD 技能时记住这个夹具的两条限制（它们也是真实目标会遇到的形态，别当成夹具怪癖绕过去）：
+LDAP **SIMPLE 绑定可用、NTLM 被拒**（`ldapdomaindump -at SIMPLE`）；**Kerberos 需要域控名字可解析**
+且与 Samba KDC 存在 `KRB_AP_ERR_INAPP_CKSUM` 互操作问题。
+
 冒烟就在真实沙箱参数下跑（与宿主侧 `buildDockerArgs` 一致）：
 
 ```bash

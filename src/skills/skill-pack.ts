@@ -12,9 +12,9 @@ import type { Phase } from '../contracts.ts';
 
 /** 每个阶段出厂默认装载的 skill（名称即 `skills/<name>/SKILL.md` 的目录名）。 */
 export const SKILL_PACKS: Readonly<Record<Phase, readonly string[]>> = Object.freeze({
-  'intelligence-gathering': ['recon-network-surface', 'recon-web-surface', 'recon-dns-cert', 'internal-discovery'],
+  'intelligence-gathering': ['recon-network-surface', 'recon-web-surface', 'recon-dns-cert', 'internal-discovery', 'recon-ad-surface'],
   'threat-modeling': ['model-trust-boundaries', 'model-attack-paths', 'model-attack-trees', 'asset-graph', 'business-impact'],
-  'vulnerability-analysis': ['vuln-web-checks', 'vuln-service-checks', 'vuln-intel', 'vuln-triage'],
+  'vulnerability-analysis': ['vuln-web-checks', 'vuln-service-checks', 'vuln-intel', 'vuln-triage', 'vuln-ad-checks'],
   exploitation: ['exploit-minimal-poc', 'exploit-safety', 'exploit-auth-testing', 'exploit-evidence', 'exploit-approval-request'],
   'post-exploitation': ['post-impact-boundary', 'post-cleanup-verify', 'post-loop-handoff'],
 });

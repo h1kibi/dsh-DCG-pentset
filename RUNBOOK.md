@@ -199,14 +199,14 @@ sh scripts/dev-sandbox-up.sh up     # 建网 + 推镜像 + 打印要抄的 diges
 
 启动器预检会比对摘要，不一致直接拒绝启动（fail-closed）；代码只认 digest、不认标签。
 
-#### ⑤ 重跑 skill 冒烟证明（21 份）
+#### ⑤ 重跑 skill 冒烟证明（23 份）
 
 `skills/*/SKILL.md` 的 `metadata.smoked` 绑的是镜像摘要前 12 位，摘要一换 `test/skill-pack.test.ts` 就红——
 **这是刻意的**：逼人重跑命令，而不是让旧背书一直挂着。
 
 **注意顺序**：先**真的重跑**（见下），再改摘要——反了就是拿新摘要包装旧结论。
 
-改摘要这一步是机械的，用脚本（别手工改 21 份）：
+改摘要这一步是机械的，用脚本（别手工改 23 份）：
 
 ```bash
 npm run build  # 一次性检查文件没写坏
@@ -224,6 +224,30 @@ node scripts/resync-smoke-stamps.mjs <新摘要前 12 位>   # 输出：改了 N
 3. **占位符要替换成真实靶值**（`<目标>` → 实际地址），故意打不通的域名照原文跑——失败即预期。
 4. **自由命令的 shell 是 bash**（`SANDBOX_SHELL`，2026-10-06 起；Debian 的 `/bin/sh` 是 dash，
    技能与 Agent 写的都是 bash 方言）。这条修掉之后，`<(...)`、`[[ ]]` 这类写法才成立。
+
+**本轮冒烟用的靶标（实验室，可重复起）**：
+
+- **静态 Web**：`fx-web`（`172.29.0.x:8080`，含 `.env`/`.git/HEAD`/`swagger.json`/`robots.txt`/登录表单）
+  与 `fx-tls`（自签 TLS）——起法见 `skills/AUTHORING-SPEC.md` §4。
+- **AD 域**：`pentest-ad-dc:lab`（Samba AD DC，域 `LAB.LOCAL`，管理员 `Passw0rd!234`）：
+
+  ```bash
+  docker build -t pentest-ad-dc:lab docker/ad-dc
+  docker run -d --name ad-dc --privileged --network pentest-lab-internal --hostname dc1 \
+    --mount type=volume,src=ad-dc-samba,dst=/var/lib/samba pentest-ad-dc:lab
+  docker inspect ad-dc --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'   # 地址每次重建都可能变
+  ```
+
+  **必须 `--privileged`**：`samba-tool domain provision` 设置 sysvol 的 NT ACL 需要 Docker 默认不授予的能力，
+  否则报 `set_nt_acl_... NT_STATUS_ACCESS_DENIED`（换卷/换文件系统都无效，实测）。域数据落在命名卷里，
+  容器可反复删建（`provision.sh` 幂等）。域内对象：`svc-sql`（SPN `MSSQLSvc/…`）、`svc-web`（SPN `HTTP/…`）、
+  `nopreauth`（不要求预认证）、`Helpdesk` 组。
+
+  **这个夹具的两条已知限制**（写进 `recon-ad-surface` / `vuln-ad-checks` 的常见失败表，别再重新发现一遍）：
+  1. **拒绝 NTLM 的 LDAP 绑定**（Samba 策略；smb.conf 里 `ldap server require strong auth = no` 已设，
+     SIMPLE 绑定可用，NTLM 仍被掐断）⇒ `ldapdomaindump` 必须 `-at SIMPLE`，`adidnsdump`（只支持 NTLM）走不通；
+  2. **Kerberos 校验和互操作**：impacket/certipy 的 Kerberos 路径报 `KRB_AP_ERR_INAPP_CKSUM`（Samba KDC），
+     且 Kerberos 要求域控**名字**可解析（容器 DNS 不解析域内名字，需要临时 hosts 条目）。
 
 #### ⑥ 全量回归
 
