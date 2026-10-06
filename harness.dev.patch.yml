@@ -54,6 +54,13 @@
             # 起它：sh scripts/dev-sandbox-up.sh proxy
             proxyHost: pentest-proxy
             proxyPort: 8080
+            # ── 写进沙箱的宿主目录（§10.4）──
+            # 这里是**注释掉的示例**，因为挂载值天然是本机绝对路径（写死会让这份补丁无法共享）。
+            # 要用就取消注释并改成你自己的 engagement 目录：下面那个路径必须**存在且是目录**，
+            # 否则插件启动即失败（fail-loud）。行为见 RUNBOOK「怎么跑才算数」第 5 条。
+            # mounts:
+            #   - hostPath: C:/Projects/pentest/cdut
+            #     containerPath: /work
           # 模型路由。省略时插件内置默认也是这一对（与 harness 基础 bundle 的
           # agent-default-model 一致）；写出来是为了让换模型有个显眼的落点。
           # 注意 provider 必须是宿主**已注册**的路由名——写错不会在建会话时报错，

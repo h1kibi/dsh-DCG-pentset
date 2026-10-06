@@ -183,3 +183,36 @@ describe('限额 ↔ 执行侧：提示词里的数字必须等于真正生效�
     );
   });
 });
+
+describe('宿主目录挂载的提示词（§10.4）', () => {
+  it('声明的挂载必须写进提示词：容器路径 ⇄ 宿主路径 + 读写/只读', () => {
+    // 没有这一段时，模型在沙箱里看不见人类的工作目录——它会去猜、去报「读不到」，
+    // 而人类看到的是「Agent 说它读不了我的目录」这种看起来像权限问题、其实是配置没通气。
+    const brief = renderSandboxBrief('phase', [
+      { hostPath: 'C:/Projects/pentest/cdut', containerPath: '/work' },
+      { hostPath: 'D:/evidence', containerPath: '/mnt/evidence', readOnly: true },
+    ]);
+    assert.ok(brief.includes('/work'), '必须给出容器内路径');
+    assert.ok(brief.includes('C:/Projects/pentest/cdut'), '必须给出宿主路径（人类据此找东西）');
+    assert.match(brief, /读写/, '读写挂载必须写明可写');
+    assert.match(brief, /只读/, '只读挂载必须写明不可写');
+    assert.match(brief, /跨命令存在/, '必须说明它是唯一跨命令存在的路径');
+  });
+
+  it('未声明挂载时，提示词不出现任何挂载段落（默认行为不变）', () => {
+    const brief = renderSandboxBrief('phase');
+    assert.equal(brief.includes('/work'), false);
+    assert.match(brief, /不要指望留在容器里/, '零挂载时仍要强调「容器留不住东西」');
+  });
+
+  it('提示词明确要求绝对路径：实测命令的 cwd 是 /tmp，相对路径等于没挂载', () => {
+    const brief = renderSandboxBrief('phase', [{ hostPath: 'C:/x', containerPath: '/work' }]);
+    assert.match(brief, /绝对路径/, '必须写明用绝对路径');
+    assert.match(brief, /当前目录是 `\/tmp`/, '必须点出 cwd=/tmp 这个实测行为');
+  });
+
+  it('intake 会话同样是零挂载语义（它本来就不许执行目标动作）', () => {
+    const brief = renderSandboxBrief('intake', [{ hostPath: 'C:/x', containerPath: '/work' }]);
+    assert.equal(brief.includes('/work'), false, 'intake 不执行命令，不该出现挂载说明');
+  });
+});

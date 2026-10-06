@@ -1475,6 +1475,22 @@ export interface SkillFreezeEntry {
   readonly contentHash: string | null;
 }
 
+/**
+ * 宿主目录挂载（设计 §10.4：「只挂载当前 engagement 的授权目录」）。
+ *
+ * 定义在契约里而不是沙箱模块里：**提示词侧也要用它**（会话提示词必须告诉 Agent
+ * 「哪个容器路径对应人类的哪个目录、能不能写」），否则沙箱读不到文件的同时模型也不知道有这条路，
+ * 症状就是「Agent 说它看不见你的目录」。
+ */
+export interface SandboxMount {
+  /** 宿主绝对路径（Windows 写 `C:/x/y`；反斜杠会被规整）。 */
+  readonly hostPath: string;
+  /** 容器内路径；省略即 `/work`（`/work/*` 或 `/mnt/*`，见沙箱的校验）。 */
+  readonly containerPath?: string;
+  /** 省略即读写。 */
+  readonly readOnly?: boolean;
+}
+
 export interface StartedWorker {
   readonly workerSessionId: string;
   readonly dshSessionId: string;

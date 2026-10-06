@@ -539,6 +539,8 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
     ...(runtime.modelRoute === undefined ? { modelRoute: hostModel } : { modelRoute: runtime.modelRoute }),
     sessions: runtime.sessions ?? new DshSessionFactory(ctx, {
       ...(runtime.sessionCwd === undefined ? {} : { cwd: runtime.sessionCwd }),
+      // 会话提示词里的挂载说明必须与沙箱 argv 同源（见 DshSessionFactoryDeps.sandboxMounts）。
+      ...(runtime.sandbox.mounts === undefined ? {} : { sandboxMounts: runtime.sandbox.mounts }),
       ...(mountPreset === undefined ? {} : { mountPreset }),
       ...(presetId === undefined ? {} : { presetId }),
     }),

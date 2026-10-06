@@ -10,6 +10,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   DockerSandbox,
   buildDockerArgs,
@@ -438,4 +441,88 @@ test('宿主输出上限是容器内上限之外的**独立**兜底（两者不�
     HOST_OUTPUT_BUFFER_LIMIT_BYTES < 200 * 1024 * 1024,
     '宿主缓冲上限必须显著小于模板可声明的输出上限，否则兜底形同虚设',
   );
+});
+
+// ── 宿主目录挂载（设计 §10.4）：engagement 目录要能被 Agent 读到与写入 ──
+
+function mountDir(): string {
+  return mkdtempSync(join(tmpdir(), 'dsh-mount-'));
+}
+
+function configWith(mounts: DockerSandboxConfig['mounts']): DockerSandboxConfig {
+  return { ...CONFIG, mounts };
+}
+
+test('挂载：显式声明的宿主目录进 argv（cwd 不由它决定，见下一条注释）', () => {
+  // 症状回放：没有这条挂载时，Agent 在沙箱里 `ls` 会话目录只会得到 `No such file or directory`——
+  // 它看不见人类的工作目录。挂载是这条路径存在的**唯一**理由（对照组实测见 RUNBOOK §10）。
+  const dir = mountDir();
+  const argv = buildDockerArgs({
+    image: IMAGE,
+    plan: plan(),
+    config: configWith([{ hostPath: dir }]),
+    containerName: 'c',
+  });
+  const mountAt = argv.indexOf('-v');
+  assert.notEqual(mountAt, -1, '声明的挂载必须出现在 argv 里');
+  assert.equal(argv[mountAt + 1], `${dir.replace(/\\/g, '/')}:${'/work'}`);
+  // `-w` 只是兜底：模板入口 `pentest-tool` 在 `/tmp` 下执行命令（实测 `pwd` = `/tmp`），
+  // 所以提示词要求绝对路径。这里断言的是「有挂载时 -w 指向挂载点」，不是「命令会落在那里」。
+  const workdirAt = argv.indexOf('-w');
+  assert.equal(argv[workdirAt + 1], '/work', '有挂载时 docker -w 指向挂载目录');
+});
+
+test('挂载：readOnly 追加 :ro，容器路径可自定义（必须在 /work 或 /mnt 下）', () => {
+  const dir = mountDir();
+  const argv = buildDockerArgs({
+    image: IMAGE,
+    plan: plan(),
+    config: configWith([{ hostPath: dir, containerPath: '/mnt/case', readOnly: true }]),
+    containerName: 'c',
+  });
+  assert.ok(argv.includes(`${dir.replace(/\\/g, '/')}:/mnt/case:ro`));
+  assert.equal(argv[argv.indexOf('-w') + 1], '/mnt/case');
+});
+
+test('挂载：显式 workdir 优先于挂载点推导', () => {
+  const dir = mountDir();
+  const argv = buildDockerArgs({
+    image: IMAGE,
+    plan: plan(),
+    config: { ...configWith([{ hostPath: dir }]), workdir: '/tmp' },
+    containerName: 'c',
+  });
+  assert.equal(argv[argv.indexOf('-w') + 1], '/tmp');
+});
+
+test('挂载：不声明就是零挂载（默认行为不变）', () => {
+  const argv = argvFor(plan());
+  assert.equal(argv.includes('-v'), false, '未声明挂载时不得出现任何 -v');
+  assert.equal(argv.includes('-w'), false, '未声明挂载时也不该凭空多出 -w');
+});
+
+test('挂载校验：路径不存在 / 不是目录 / 盘根 / 容器路径越界 / 重复 —— 一律 fail loud', () => {
+  const dir = mountDir();
+  const file = join(dir, 'f.txt');
+  writeFileSync(file, 'x');
+
+  const rejects = (mounts: DockerSandboxConfig['mounts'], why: string): void => {
+    assert.throws(
+      () => {
+        assertSandboxConfig(configWith(mounts));
+      },
+      SandboxConfigError,
+      why,
+    );
+  };
+
+  rejects([{ hostPath: join(dir, 'nope') }], '不存在的宿主路径');
+  rejects([{ hostPath: file }], '宿主路径是文件而不是目录');
+  rejects([{ hostPath: 'C:/' }], '盘根');
+  rejects([{ hostPath: dir, containerPath: '/usr/local/bin' }], '容器路径会盖掉系统目录');
+  rejects([{ hostPath: dir, containerPath: '/' }], '容器路径是根');
+  rejects([{ hostPath: dir }, { hostPath: dir, containerPath: '/work' }], '容器路径重复');
+
+  // 合法声明必须通过（否则上面的校验就成了「拒绝一切」）
+  assertSandboxConfig(configWith([{ hostPath: dir }, { hostPath: dir, containerPath: '/mnt/case' }]));
 });

@@ -67,6 +67,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
 import { describeError } from '../contracts.ts';
+import type { SandboxMount } from '../contracts.ts';
 import { renderSandboxBrief } from './sandbox-brief.ts';
 import type {
   CreatedSession,
@@ -166,6 +167,12 @@ export interface DshSessionFactoryDeps {
    */
   readonly cwd?: string;
   /**
+   * 沙箱的宿主目录挂载（§10.4）。**只用于写进会话提示词**——真正生效的挂载在
+   * `execution/docker-sandbox.ts` 的 argv 里，两者必须来自同一份配置值，否则模型会按
+   * "我看得见你的目录" 去规划命令，而容器里根本没有那个路径（症状：`No such file or directory`）。
+   */
+  readonly sandboxMounts?: readonly SandboxMount[];
+  /**
    * 在 agent 作用域里挂载预设（由装配层注入）。
    *
    * ── 为什么是函数而不是预设 id ──
@@ -254,6 +261,7 @@ interface ToolRuntimeView {
 export class DshSessionFactory implements SessionFactory {
   readonly #ctx: Context;
   readonly #cwd: string | undefined;
+  readonly #sandboxMounts: readonly SandboxMount[];
   readonly #mountPreset: ((agentCtx: unknown) => Promise<void>) | undefined;
   readonly #presetId: string | undefined;
   readonly #live = new Map<string, LiveSession>();
@@ -262,6 +270,7 @@ export class DshSessionFactory implements SessionFactory {
   constructor(ctx: Context, deps: DshSessionFactoryDeps = {}) {
     this.#ctx = ctx;
     this.#cwd = deps.cwd;
+    this.#sandboxMounts = deps.sandboxMounts ?? [];
     this.#mountPreset = deps.mountPreset;
     this.#presetId = deps.presetId;
   }
@@ -313,10 +322,14 @@ export class DshSessionFactory implements SessionFactory {
         setup: async (agentCtx) => {
           await this.#applyPreset(agentCtx);
           // 按**事实**校正工具面：预设没挂上时它贡献的工具也不存在（见方法注释）。
-          installFrozenCapabilities(agentCtx, {
-            ...input,
-            toolAllow: this.#toolAllowWithPresetFacts(input.toolAllow),
-          });
+          installFrozenCapabilities(
+            agentCtx,
+            {
+              ...input,
+              toolAllow: this.#toolAllowWithPresetFacts(input.toolAllow),
+            },
+            this.#sandboxMounts,
+          );
         },
       });
     } catch (error) {
@@ -530,7 +543,11 @@ export class DshSessionFactory implements SessionFactory {
  * 所以这里是「要么冻结成功，要么根本没有这个会话」。任何 seam 缺失都抛
  * `SessionFactoryError`——降级成一个没有能力限制的会话比创建失败危险得多。
  */
-function installFrozenCapabilities(agentCtx: AgentScopedContextView, input: FrozenSessionInput): void {
+function installFrozenCapabilities(
+  agentCtx: AgentScopedContextView,
+  input: FrozenSessionInput,
+  mounts: readonly SandboxMount[],
+): void {
   const tools = agentCtx.tools;
   if (tools === undefined || typeof tools.restrict !== 'function') {
     throw new SessionFactoryError(
@@ -572,7 +589,7 @@ function installFrozenCapabilities(agentCtx: AgentScopedContextView, input: Froz
   prompt.section({
     name: SECTION_CAPABILITY,
     order: SECTION_ORDER_CAPABILITY,
-    text: renderCapabilitySection(input),
+    text: renderCapabilitySection(input, mounts),
   });
 
   // 行为预设：注入的是**指引**而不是硬边界（2026-10-04 决定）。预设决定「要多安静 / 覆盖到什么
@@ -626,7 +643,7 @@ function renderRetrievalChannels(channels: readonly string[] | undefined): strin
 }
 
 /** 冻结能力分节：把「什么被冻结了」讲到模型不需要猜。 */
-function renderCapabilitySection(input: FrozenSessionInput): string {
+function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly SandboxMount[]): string {
   const skills =
     input.skillIds.length === 0
       ? '（本次未装载任何 skill——这是合法状态，但不等于可以使用未勾选的 skill）'
@@ -669,7 +686,7 @@ function renderCapabilitySection(input: FrozenSessionInput): string {
     `可用工具（工具面之外的工具对本会话根本不可见）：${input.toolAllow.length === 0 ? '（无）' : input.toolAllow.join('、')}`,
     `需要逐次人工放行的动作类别：${approval}`,
     '',
-    renderSandboxBrief(input.sessionKind),
+    renderSandboxBrief(input.sessionKind, mounts),
     '',
     input.sessionKind === 'intake'
       ? ''

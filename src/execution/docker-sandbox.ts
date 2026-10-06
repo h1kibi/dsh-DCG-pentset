@@ -44,8 +44,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import type { ToolRunResult } from '../contracts.ts';
-import type { ExecutionPlan } from '../contracts.ts';
+import { existsSync, statSync } from 'node:fs';
+import type { ExecutionPlan, SandboxMount, ToolRunResult } from '../contracts.ts';
 import type { SandboxExecutor, SandboxRunRequest } from './service.ts';
 
 /** 已允许的镜像：按 digest 固定，不用标签。 */
@@ -87,9 +87,42 @@ export interface DockerSandboxConfig {
   readonly proxyHost: string;
   readonly proxyPort: number;
   readonly limits?: Partial<SandboxLimits>;
-  /** 容器内的工作目录。 */
+  /** 容器内的工作目录（docker `-w`）。注意：模板入口在 `/tmp` 下执行命令，实测 `pwd` 是 `/tmp`。 */
   readonly workdir?: string;
+  /**
+   * 显式声明的宿主目录挂载——设计文档 §10.4「只挂载当前 engagement 的授权目录」的实现。
+   *
+   * 语义与约束（每一条都有理由，别放宽）：
+   *   - **只有这里列出的目录**会进容器；不写就是零挂载（默认，等于之前的行为）。
+   *   - `containerPath` 必须落在 `/work` 或 `/mnt` 下（见 `MOUNT_CONTAINER_PATH`）——
+   *     防止配置写错把 `/`、`/tmp`、`/usr/local/bin` 这类路径盖掉（那会让工具镜像失去工具，
+   *     症状是"所有命令突然 command not found"，极难归因）。
+   *   - 默认**读写**：人类要在那里写证据、脚本、中间产物（这也是"容器一次性"的天然补偿——
+   *     挂载目录里的东西跨命令存在）。要收紧就显式 `readOnly: true`。
+   *   - 宿主路径必须**存在且是目录**，不允许盘根（`C:\`）——这些在 `assertSandboxConfig` 里 fail loud。
+   *   - 同一个容器路径只能挂一次（重复会让后一个静默覆盖前一个）。
+   */
+  readonly mounts?: readonly SandboxMount[];
 }
+
+/**
+ * 挂载形状定义在 `contracts.ts`（提示词侧与沙箱侧必须同一份），这里只做转出，
+ * 让执行模块的使用者不必再跨一层 import。
+ */
+export type { SandboxMount } from '../contracts.ts';
+
+/**
+ * 允许挂进容器的容器路径形态：`/work`、`/mnt` 及其子路径（如 `/work/case`、`/mnt/evidence`）。
+ *
+ * 为什么是白名单式而非黑名单式：挂载会**盖掉**镜像里那个路径（根文件系统可写，盖住
+ * `/usr/local/bin` 这种地方等于把工具藏起来）。黑名单永远列不全，白名单只有两个前缀、一眼可审。
+ * 注意**默认值 `/work` 本身也必须合法**（曾经写成 `/(work|mnt)/<名>`，于是不写 containerPath 的
+ * 最常见配置被自己的校验拒掉——被同一批测试抓到）。
+ */
+export const MOUNT_CONTAINER_PATH = /^\/(work|mnt)(\/[A-Za-z0-9._-]+)*$/;
+
+/** 默认容器路径（`containerPath` 省略时）。 */
+export const DEFAULT_MOUNT_CONTAINER_PATH = '/work';
 
 /**
  * 容器资源限额的**默认值**（导出给提示词用：会话提示词里的限额必须与真正生效的这份一致，
@@ -139,6 +172,43 @@ export function assertSandboxConfig(config: DockerSandboxConfig): void {
   if (limits.pidsLimit <= 0 || limits.maxWallClockMs <= 0) {
     throw new SandboxConfigError('资源限额必须为正数：pidsLimit / maxWallClockMs');
   }
+  assertMounts(config.mounts ?? []);
+}
+
+/**
+ * 挂载声明的校验：**fail loud，不做降级**。
+ *
+ * 为什么在这里校验而不是等容器起不来：宿主路径写错时 Docker 会直接报错，但那条错误出现在
+ * 某一次动作的执行日志里，看起来像"目标不可达"；而这些问题是**配置错**，应该在建实例时就炸。
+ */
+function assertMounts(mounts: readonly SandboxMount[]): void {
+  const seenContainerPaths = new Set<string>();
+  for (const mount of mounts) {
+    const hostPath = mount.hostPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (hostPath.length === 0) {
+      throw new SandboxConfigError('挂载的 hostPath 为空');
+    }
+    if (!/^([A-Za-z]:\/|\/)/.test(hostPath)) {
+      throw new SandboxConfigError(`挂载的 hostPath 必须是绝对路径（实际 ${mount.hostPath}）`);
+    }
+    if (/^[A-Za-z]:$/.test(hostPath) || hostPath === '') {
+      throw new SandboxConfigError(`不允许挂载盘根（实际 ${mount.hostPath}）：那是整块盘，不是 engagement 目录`);
+    }
+    if (!existsSync(mount.hostPath) || !statSync(mount.hostPath).isDirectory()) {
+      throw new SandboxConfigError(`挂载的 hostPath 不存在或不是目录：${mount.hostPath}`);
+    }
+    const containerPath = mount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH;
+    if (!MOUNT_CONTAINER_PATH.test(containerPath)) {
+      throw new SandboxConfigError(
+        `挂载的 containerPath 只允许 ${String(MOUNT_CONTAINER_PATH)}（实际 ${containerPath}）：` +
+          '它必须落在 /work 或 /mnt 下，否则会盖掉镜像里的系统路径',
+      );
+    }
+    if (seenContainerPaths.has(containerPath)) {
+      throw new SandboxConfigError(`containerPath 重复：${containerPath}（后者会静默覆盖前者）`);
+    }
+    seenContainerPaths.add(containerPath);
+  }
 }
 
 /**
@@ -156,6 +226,12 @@ export function buildDockerArgs(input: {
   const { image, plan, config, containerName } = input;
   const limits = { ...DEFAULT_SANDBOX_LIMITS, ...config.limits };
   const timeoutMs = Math.min(plan.timeoutMs, limits.maxWallClockMs);
+  const mounts = config.mounts ?? [];
+  const firstMount = mounts[0];
+  // 命令默认落在「人类的工作目录」里：显式 workdir 优先，否则取第一个挂载点。
+  const workdir =
+    config.workdir ??
+    (firstMount === undefined ? undefined : (firstMount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH));
 
   // 首元素是**可执行文件本身**，不是子命令：返回值是一条完整命令行，
   // `spawnRunner` 只做 `spawn(argv[0], argv.slice(1))`。
@@ -196,7 +272,20 @@ export function buildDockerArgs(input: {
     // ── 硬超时由宿主侧计时器实现；这里给容器内一个自超时 ──
     '-e', `PENTEST_TIMEOUT_MS=${timeoutMs}`,
     '-e', `PENTEST_MAX_OUTPUT_BYTES=${plan.maxOutputBytes}`,
-    ...(config.workdir === undefined ? [] : ['-w', config.workdir]),
+    // ── 显式声明的宿主目录挂载（设计 §10.4：只挂载当前 engagement 的授权目录）──
+    // 默认读写：那里是人类的工作目录（证据/脚本/中间产物），也是「容器一次性」的补偿——
+    // 挂载目录跨命令存在，而 /tmp 不跨命令。不声明就是零挂载（与之前行为一致）。
+    ...mounts.flatMap((mount) => [
+      '-v',
+      `${mount.hostPath.replace(/\\/g, '/')}:${mount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH}` +
+        (mount.readOnly === true ? ':ro' : ''),
+    ]),
+    // ── 工作目录：显式 workdir 优先；否则取第一个挂载点 ──
+    // **注意这不决定命令的当前目录**：模板入口 `pentest-tool` 在 `/tmp` 下执行命令
+    // （2026-10-07 实测：带 `-w /work` 时容器内 `pwd` 仍是 `/tmp`）。因此提示词里
+    // 要求 Agent 用**绝对路径**引用挂载文件，而不是靠 cwd。`-w` 仍设上（人工排障
+    // 直接 `docker run … bash` 时有意义），但不要在任何文案里承诺 cwd。
+    ...(workdir === undefined ? [] : ['-w', workdir]),
     // 镜像必须用 digest 引用（不是标签）
     `${image.name}@${image.digest}`,
     // 命令文本由模板实例化产生；目标已由选择器注入（§10.2.1）

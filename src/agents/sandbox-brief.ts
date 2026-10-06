@@ -28,7 +28,7 @@ import {
   SANDBOX_TOOL_GROUPS,
   SANDBOX_WORDLISTS,
 } from '../contracts.ts';
-import type { SessionKind } from '../contracts.ts';
+import type { SandboxMount, SessionKind } from '../contracts.ts';
 import { SANDBOX_TMPFS_SIZE, DEFAULT_SANDBOX_LIMITS, HOST_OUTPUT_BUFFER_LIMIT_BYTES } from '../execution/docker-sandbox.ts';
 import { RECON_TECHNIQUES, VULN_TECHNIQUES } from '../execution/techniques.ts';
 
@@ -42,7 +42,10 @@ function humanBytes(bytes: number): string {
 /** 模板自己的输出上限（`docker/tools/pentest-tool` 与 templates.ts 一致）：写在这里只作提示，不参与判定。 */
 const TYPICAL_OUTPUT_CAP = 256 * 1024;
 
-export function renderSandboxBrief(sessionKind: SessionKind): string {
+export function renderSandboxBrief(
+  sessionKind: SessionKind,
+  mounts: readonly SandboxMount[] = [],
+): string {
   if (sessionKind === 'intake') {
     return [
       '【沙箱环境】intake 阶段**不得执行目标动作**：没有目标工具、没有动作模板、不申请放行。',
@@ -64,12 +67,30 @@ export function renderSandboxBrief(sessionKind: SessionKind): string {
     '- 没有跨命令的持久状态：容器里装的东西、写的文件、起的进程，下一条命令都看不见；',
     '  ⇒ **`/tmp` 产物只在那一条命令内有效**：要「先落盘再筛」就必须把两步写在**同一条命令**里',
     '  （`curl … -o /tmp/x && jq … /tmp/x`）；分开写会得到 `No such file or directory`（实测）。',
+    // 挂载是「一次性容器」的唯一例外：列在这里的目录跨命令存在，且是人类能直接拿到的东西。
+    ...(mounts.length === 0
+      ? []
+      : [
+          '**人类的工作目录挂进容器了（唯一跨命令存在的路径）**：',
+          ...mounts.map(
+            (mount) =>
+              `  - \`${mount.containerPath ?? '/work'}\` ⇄ 宿主 \`${mount.hostPath}\`（${
+                mount.readOnly === true ? '只读' : '读写'
+              }）`,
+          ),
+          '  ⇒ 需要跨命令存在、或要交给人复核的东西（证据、脚本、中间产物）写这里：容器销毁它仍在。',
+          '  ⇒ 命令是在**容器里**跑的：引用文件用容器路径（`/work/...`），宿主路径只用于向人类说明「东西在哪」。',
+          '  ⇒ 而且**要用绝对路径**：命令的当前目录是 `/tmp`（模板入口行为，实测 `pwd` = `/tmp`），',
+          '    相对路径（`./x`、`evidence.txt`）会落到 `/tmp` 里，等于没挂载。',
+        ]),
     '- 没有入站端口、没有常驻监听（不能等目标回连，也不能开一个"下次再用"的会话）；',
     '- 容器内是 root、有 `NET_RAW`（`nmap -sS` 可用）、根文件系统可写、`/tmp` 是 tmpfs。',
     '- 命令由 `bash -c` 执行（**是 bash 不是 dash**）：`$RANDOM`、`<(...)`、`[[ ]]`、数组都能用。',
     '- 出入网**直连不经代理**；本部署**可出网，但出网是间歇的**（同一批请求两次结果可能相反）——',
     '  依赖公网的步骤要有离线退路，别把「能连上」当前提；连不上时把失败形态原样记进证据，不要重试到超预算。',
-    '因此需要留存的东西**当场落进记忆**（status_note / 报告 / 证据），不要指望留在容器里。',
+    mounts.length === 0
+      ? '因此需要留存的东西**当场落进记忆**（status_note / 报告 / 证据），不要指望留在容器里。'
+      : '因此需要留存的东西**当场落进记忆**（status_note / 报告 / 证据）；先落到上面那个挂载目录再整理也可以，但记忆里的状态才是交接的依据。',
     '',
     '**限额**（按这个规划命令，超限即失败或截断）：',
     `- 墙钟：单条命令最长 ${String(wallClockMinutes)} 分钟；结构化动作另有更小的默认（端口扫描 5 分钟、nuclei/爬取 3 分钟、探针类 1 分钟）`,
