@@ -1282,6 +1282,8 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
       );
 
       const engagementUpdate = await tx.query<{ state_version: number | string }>(
+        // version-bump-registered:worker-report —— 理由见 transition-table.ts 的登记表：
+        // Agent 侧提交报告，图上那条边 `recorded: false`，因此只有版本推进、不写转移行。
         `UPDATE pentest.engagements
             SET current_status = 'waiting_human_review',
                 state_version = state_version + 1,

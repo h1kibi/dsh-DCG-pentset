@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, MITRE ATT&CK Discovery/Collection, NIST SP 800-115]
-  smoked: "沙箱实测@a197af1d36f6：nc -z 端口判定（open/closed 退出码）；curl 状态码与 /proc/net/tcp 解析"
+  smoked: "沙箱实测@f239cd79a21d：nc -z 判定 open（172.29.0.3:8443 exit=0）；curl 200；范围限读 `-r 0-255` 得 200/171B（服务端忽略 Range 返回全文，如实记录）；handoff/scope 的 jq 读取"
 ---
 
 # 影响边界核查（post-impact-boundary）

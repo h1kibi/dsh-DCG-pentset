@@ -29,6 +29,7 @@ import type {
   AssetScopeDecision,
   ErrorCode,
   ExecutionPlan,
+  MainStatus,
   NormalizedTarget,
   PolicyService,
   PortRange,
@@ -44,6 +45,7 @@ import type {
 import {
   ACTION_CLASSES,
   DEFAULT_DISABLED_CLASSES,
+  MAIN_STATUSES,
   PER_ACTION_APPROVAL_CLASSES,
   RUN_MARKERS,
   SESSION_STATUSES,
@@ -96,6 +98,8 @@ interface SessionRow {
   readonly policy_epoch: number | string;
   /** engagement 的运行标记（§5.1）。 */
   readonly engagement_status: string;
+  /** engagement 的主状态（§5.1 的另一层）：执行闸门的另一半。 */
+  readonly engagement_main_status: string;
 }
 
 interface LeaseRow {
@@ -137,7 +141,8 @@ const SQL_ASSET_DECISIONS = `select a.canonical_target, a.kind, a.labels, d.deci
       order by a.canonical_target`;
 
 /** 会话绑定：会话冻结的范围版本（§10.2.2）+ engagement 的单调策略 epoch（§10.3.1）。 */
-const SQL_SESSION = `select s.engagement_id, s.status, s.scope_version, e.policy_epoch, e.status as engagement_status
+const SQL_SESSION = `select s.engagement_id, s.status, s.scope_version, e.policy_epoch,
+              e.status as engagement_status, e.current_status as engagement_main_status
        from pentest.worker_sessions s
        join pentest.engagements e on e.id = s.engagement_id
       where s.id = $1`;
@@ -286,6 +291,18 @@ function parseRunMarker(value: unknown): RunMarker {
     return value as RunMarker;
   }
   return 'blocked';
+}
+
+/**
+ * 解析主状态（§5.1）。与运行标记同一条纪律：**不认识的取值按保守处理**——
+ * 落到 `auth_pending`（不在 `EXECUTION_MAIN_STATUSES` 里，因此动作被拒），
+ * 而不是当作一个可执行状态。
+ */
+function parseMainStatus(value: unknown): MainStatus {
+  if (typeof value === 'string' && (MAIN_STATUSES as readonly string[]).includes(value)) {
+    return value as MainStatus;
+  }
+  return 'auth_pending';
 }
 
 function parseRevocationReason(value: unknown): SessionLease['revokedReason'] {
@@ -1002,6 +1019,7 @@ export class PgSessionDirectory implements SessionDirectory {
       // 遇到未来新增的标记）。不认识的标记**按最保守处理**——不当作 running，
       // 因此会让动作被拒。fail-closed。
       engagementStatus: parseRunMarker(row.engagement_status),
+      mainStatus: parseMainStatus(row.engagement_main_status),
       scopeVersion: toNumber(row.scope_version, 'scope_version'),
       policyEpoch: toNumber(row.policy_epoch, 'policy_epoch'),
       lease: leaseRow === undefined ? null : toSessionLease(leaseRow),

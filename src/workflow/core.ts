@@ -16,7 +16,7 @@
 
 import { transactionRunnerFor, DbTransactionRunner } from '../memory/ledger.ts';
 import type { ActionClass, ApprovalMode, ApprovalRecord, BehaviorProfile, BudgetLimits, MainStatus, Phase, RetryRequest, RunMarker, ScopeEntryProfile, ScopeProposal, SessionKind, SkillFreezeEntry, TransitionType, WorkflowSnapshot } from '../contracts.ts';
-import { ACTION_CLASSES, EXEC_TOOL_NAME, BEHAVIOR_PROFILES, SCOPE_ENTRY_PROFILES, TERMINAL_SESSION_STATUSES } from '../contracts.ts';
+import { ACTION_CLASSES, EXEC_TOOL_NAME, BEHAVIOR_PROFILES, SCOPE_ENTRY_PROFILES, TERMINAL_SESSION_STATUSES, runActionAvailability } from '../contracts.ts';
 import { expandBehaviorProfile, policyContentHash, unknownPolicyOverrideKeys } from '../policy/behavior-profile.ts';
 import type { ExpandedBehaviorProfile } from '../policy/behavior-profile.ts';
 import { normalizeScope } from '../policy/scope-snapshot.ts';
@@ -367,6 +367,7 @@ export class WorkflowCore {
     policyEpoch?: number;
   }): Promise<void> {
     await this.deps.txDb.query(
+      // version-bump-sanctioned:transition —— §5.4 步骤 7：转移事务内的状态版本推进。
       `update pentest.engagements
           set current_status = coalesce($3, current_status),
               current_phase = case when $4::boolean then $5 else current_phase end,
@@ -703,8 +704,8 @@ export class WorkflowCore {
    *     intake Agent 提交报告后就把自己置为等人类，人类正是在**那一刻之后**才看到方案；
    *   - 主状态 ∈ {`auth_pending`, `waiting_human_review`}：`auth_pending` 是 §13.1
    *     「人类确认授权与范围」那条边的前置；`waiting_human_review` 是历史数据里
-   *     intake 报告误推主状态留下的状态（写入点已修，见 `finishWorker`），
-   *     不认它等于让那些作业**永远确认不了**。
+   *     intake 报告误推主状态留下的状态（写入点已修：报告路径现在直接拒绝 intake 会话，
+   *     见 `PgWorkerTools.submitReport`），不认它等于让那些作业**永远确认不了**。
    *
    * 两处各写一份判据必然漂移——实战里已经漂移过：守卫只认 `auth_pending` +
    * 会话 `active`，而正常流程走完就是 `waiting_human_review` + `waiting_human`，
@@ -830,6 +831,20 @@ export class WorkflowCore {
   ): Promise<WorkflowSnapshot> {
     await this.tx(async () => {
       const row = await this.lockEngagement(input.engagementId, input.expectedStateVersion);
+      // 前置：运行标记可用性的**单源判定**在契约层（`runActionAvailability`），
+      // 客户端按同一函数禁用按钮。此前只有客户端挡、服务端不挡，实测后果是
+      // 「终止 → 暂停 → 恢复」能把已终结的作业复活成僵尸（见契约里的说明）。
+      const availability = runActionAvailability({
+        mainStatus: row.current_status,
+        runMarker: row.status,
+        activeWorkerSessionId: row.active_agent_session_id,
+      });
+      if (type === 'pause' && !availability.canPause) {
+        throw new WorkflowRejection('classification_rejected', runMarkerRejection('pause', row));
+      }
+      if (type === 'abort' && !availability.canAbort) {
+        throw new WorkflowRejection('classification_rejected', runMarkerRejection('abort', row));
+      }
       const planned = planTransition({ type, fromStatus: row.current_status, toStatus: row.current_status });
       this.assertPlan(planned);
 
@@ -858,6 +873,7 @@ export class WorkflowCore {
       });
       // 运行标记与主状态分列：current_status 保持不变
       await this.deps.txDb.query(
+        // version-bump-sanctioned:transition —— 与同一事务里的 `pause` / `abort` 转移行成对。
         `update pentest.engagements set status = $2, state_version = $3, updated_at = now()
           where id = $1::uuid`,
         [input.engagementId, marker, input.expectedStateVersion + 1],
@@ -1479,6 +1495,102 @@ export class WorkflowCore {
     }
   }
 
+  /**
+   * 投递失败后的处置：会话置 `failed`（吊销租约）+ 作业置 `blocked` + 记一条事件。
+   *
+   * ── 为什么需要它 ──
+   *
+   * 人类动作（插话唤醒、重做复用）是**先提交转移、再投递消息**：转移在事务里落库，
+   * 投递在事务外。此前投递失败只把异常抛出去，于是库里停在「主状态 worker_running、
+   * 会话 active」，而消息根本没送到——人类看到报错、界面显示运行中，两处事实相反，
+   * 也没有任何补偿动作（对照 `revertHandoffDrafting` 是有显式回退的）。
+   *
+   * ── 为什么不回退主状态 ──
+   *
+   * `worker_running → waiting_human_review` 在状态图上**没有可记账的取值**
+   * （那是 Agent 侧动作、`recorded: false`）。硬改列会在账本里留下读不出来的跳跃，
+   * 回放时看到的状态与实际不符。因此这里走「交给人类」（§15.2）的形态：
+   * 置 `blocked`，人类的出口是 `resume`（blocked → running）或 `abort`。
+   *
+   * ── 失败面 ──
+   *
+   * 本方法**不抛**：它是在错误路径上执行的补偿，掩盖原始错误（会话不可达）比补偿
+   * 本身失败更糟。补偿失败只记警告——与原错误一起出现在日志里，人能看到全貌。
+   */
+  async markDeliveryFailure(input: {
+    readonly engagementId: string;
+    readonly workerSessionId: string;
+    readonly detail: string;
+  }): Promise<void> {
+    try {
+      // 会话转终态要连租约一起吊销：留着有效租约会让「谁还能提交」有第二个答案。
+      await this.closeSession(input.workerSessionId, 'failed', `投递失败：${input.detail}`);
+    } catch (error) {
+      console.warn(
+        `[dsh-pentest] 投递失败后终结会话也失败了（会话 ${input.workerSessionId}）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    // 与 `createDshSessionOrMarkFailed` 同一处置形态：状态行写失败不掩盖主因（原错误由调用方抛）。
+    await this.deps.db
+      .query(
+        `update pentest.worker_sessions
+            set status = 'failed', status_reason = $2, ended_at = now()
+          where id = $1::uuid`,
+        [input.workerSessionId, `投递失败：${input.detail}`],
+      )
+      .catch(() => undefined);
+    await this.deps.db
+      .query(
+        // **不覆盖终态标记**：人类可能在投递失败的同时按下终止（abort 是终态）。
+        // 无条件写 `blocked` 会把「已终止」改成「可恢复的阻塞」——那是把人类的决定
+        // 弹回去，而且 blocked 有恢复出口，等于凭空开了一条复活路径。
+        `update pentest.engagements set status = 'blocked', updated_at = now()
+          where id = $1::uuid and status not in ('aborted', 'failed')`,
+        [input.engagementId],
+      )
+      .catch(() => undefined);
+    try {
+      await this.audit(input.engagementId, input.workerSessionId, 'workflow.delivery_failed', {
+        detail: input.detail,
+      });
+    } catch (error) {
+      console.warn(
+        `[dsh-pentest] 投递失败事件未写入账本（会话 ${input.workerSessionId}）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * 把一条会话收进终态并吊销它的租约（§5.1「会话状态 → 租约处置」表）。
+   *
+   * 两件事必须一起做：会话状态落终态、租约吊销。只做前者会留下**有效租约**——
+   * 该租约仍能通过准入（表现为「已结束的会话还能提交」），终止流程里就踩过这一条
+   * （2026-10-05 实测：会话已关闭、租约仍有效，清空作业被「仍有 N 份有效租约」拦住）。
+   *
+   * **必须在事务外调用**：租约端口用自己那条连接去锁 `worker_sessions`，
+   * 嵌进调用方的事务会自锁死（与 `startWorker` 的说明同因）。
+   * 幂等：已经是终态的会话再收一次不会重复吊销（租约端口按行判定）。
+   */
+  async closeSession(workerSessionId: string, status: 'closed' | 'failed', reason: string): Promise<void> {
+    await applySessionStatusChange(this.deps.leases, {
+      workerSessionId,
+      status,
+      now: this.now(),
+    });
+    await this.deps.db.query(
+      // 只收**非终态**的行：并发场景下人类可能已经终止（abort 会把所有会话置 `closed`），
+      // 那时把 `closed` 改写成 `failed` 是在别人的合法收尾上盖一个更糟的结论。
+      `update pentest.worker_sessions
+          set status = $2, status_reason = $3, ended_at = now()
+        where id = $1::uuid and status not in ('closed', 'superseded', 'failed')`,
+      [workerSessionId, status, reason],
+    );
+  }
+
   async getScopeProposal(engagementId: string): Promise<ScopeProposal | null> {
     const result = await this.deps.db.query<ScopeProposalRow>(
       `select id, engagement_id, worker_session_id, objective, proposed_targets,
@@ -1520,4 +1632,24 @@ export class WorkflowCore {
       authorizationExpiresAt: readAuthorizationExpiry(row.scope_snapshot),
     };
   }
+}
+
+/**
+ * 运行标记前置失败时的拒绝文案：**两个正交字段都要报出来**（运行标记 + 主状态）。
+ *
+ * 只说「不行」会让人分不清是「已经终止了」还是「作业已签字导出」——那两者的处置
+ * 完全不同（前者无事可做，后者本就不该再动）。规则本身在契约层
+ * （`runActionAvailability`），这里只负责把事实讲清楚。
+ */
+function runMarkerRejection(
+  action: 'pause' | 'abort',
+  row: { readonly status: RunMarker; readonly current_status: MainStatus },
+): string {
+  const what = action === 'pause' ? '暂停' : '终止';
+  const requirement = action === 'pause' ? '运行中（running）' : '未终止（非 aborted / failed）';
+  const why =
+    row.current_status === 'complete'
+      ? '；作业已签字导出（complete），运行期动作不再有意义'
+      : `；当前运行标记 ${row.status}、主状态 ${row.current_status}`;
+  return `只有${requirement}才能${what}${why}`;
 }

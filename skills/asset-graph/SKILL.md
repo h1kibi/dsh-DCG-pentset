@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP WSTG-INFO, MITRE ATT&CK T1016]
-  smoked: "沙箱实测@a197af1d36f6：jq 节点/边管线：MISSING ref 被点名、孤立节点与 GAP 计数"
+  smoked: "沙箱实测@f239cd79a21d：jq 节点/边台账：ref 缺失点名为 MISSING、悬空引用与 GAP 计数；本轮抓到并修掉步骤 4 的孤立节点配方——原文 `$ids | index(.id)` 让 jq 报 `Cannot index array with string \"id\"` 且 exit 5，改成 `.id as $i | ($ids | index($i))` 后实测输出 x9"
 ---
 
 # 资产图与信任边界（asset-graph）
@@ -48,7 +48,7 @@ jq -r '.edges[] | select(.crosses_boundary==true) | [.from, .to, (.auth // "unkn
 ### 4. 找孤立节点与覆盖缺口
 ```bash
 jq -r --argjson ids "$(jq '[.edges[].from,.edges[].to]|unique' /tmp/graph.json)" \
-  '.nodes[] | select(($ids | index(.id)) == null) | .id' /tmp/graph.json
+  '.nodes[] | select(.id as $i | ($ids | index($i)) == null) | .id' /tmp/graph.json
 ```
 **期望**：没有入边也没有出边的节点 id。
 **判据**：孤立节点二选一处理——补一条有依据的边，或明确标成「独立资产（未观测到与其他资产的连接）」。**不允许留在灰色状态**：灰色节点在后续阶段会被当成「有连接但没写」。

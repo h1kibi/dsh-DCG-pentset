@@ -343,27 +343,97 @@ function readAuthorizationExpiry(scopeSnapshot: unknown): string | null {
 const DEFAULT_MODEL_ROUTE: ModelRoute = { provider: 'deepseek-official', model: 'deepseek-flash' };
 
 /**
- * 阶段 Worker 的默认工具白名单（五个阶段共用一份）。
+ * 阶段 Worker 的默认工具白名单（**按阶段**）。
  *
- * 抽成模块常量是因为它现在有**两个消费者**：会话创建（注入 `toolAllow`）与
- * 「进入下一阶段」的**服务端起稿**（`beginHandoff` 用它填草稿的工具建议）。
- * 两处各写一份必然漂移——而漂移的后果是「人类在编辑器里看到的工具面」与
- * 「Agent 实际拿到的工具面」不一致。
+ * 抽成模块常量是因为它有两个消费者：会话创建（注入 `toolAllow`）与「进入下一阶段」的
+ * **服务端起稿**（`beginHandoff` 用它填草稿的工具建议）。两处各写一份必然漂移——
+ * 而漂移的后果是「人类在编辑器里看到的工具面」与「Agent 实际拿到的工具面」不一致。
+ *
+ * **为什么按阶段**（2026-10-06）：此前五个阶段共用一份 9 工具的清单，于是
+ * 「阶段即 Agent」在能力面上退化成「同一把刀换个名字」——情报收集与利用验证拿到的
+ * 工具完全一样。现在把**只读侦察动作**（`pentest_recon`，全部按 `active_discovery`/
+ * `passive_read` 记账）发给需要它的阶段，其余阶段维持原面：
+ * 能力只增不减的例外由人类在控制台勾选，不由模型自己扩。
  */
-export const DEFAULT_PHASE_TOOL_ALLOW: readonly string[] = [
-  'memory_search',
-  'memory_read',
-  'artifact_read',
-  // 阶段 Agent 同样要能「停下来问并让人点选」：歧义与岔路口都发生在这里。
-  HUMAN_QUESTION_TOOL,
-  'pentest_submit_report',
-  'pentest_write_status_note',
-  'pentest_request_action_approval',
-  // 交接指路：人类说「进入下一阶段」时，Agent 用它拿到「该去哪儿点」并转告人类。
-  // 它**不产出草稿**（§6.3：草稿是人类的写操作）。
-  'pentest_prepare_handoff',
-  EXEC_TOOL_NAME,
-];
+export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>> = Object.freeze({
+  'intelligence-gathering': [
+    'memory_search',
+    'memory_read',
+    'artifact_read',
+    HUMAN_QUESTION_TOOL,
+    'pentest_submit_report',
+    'pentest_write_status_note',
+    'pentest_request_action_approval',
+    'pentest_prepare_handoff',
+    // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
+    // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
+    'skill_load',
+    // 情报收集的**主力**：结构化侦察动作（端口/指纹/TLS/Web/DNS/WHOIS/CT）。
+    // 它们不需要逐条人批（类别是 active_discovery / passive_read），
+    // 但只打已裁决地址、参数只有枚举——比让它手写 nmap 命令既安全又可复现。
+    'pentest_recon',
+    EXEC_TOOL_NAME,
+  ],
+  'threat-modeling': [
+    'memory_search',
+    'memory_read',
+    'artifact_read',
+    HUMAN_QUESTION_TOOL,
+    'pentest_submit_report',
+    'pentest_write_status_note',
+    'pentest_request_action_approval',
+    'pentest_prepare_handoff',
+    // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
+    // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
+    'skill_load',
+    EXEC_TOOL_NAME,
+  ],
+  'vulnerability-analysis': [
+    'memory_search',
+    'memory_read',
+    'artifact_read',
+    HUMAN_QUESTION_TOOL,
+    'pentest_submit_report',
+    'pentest_write_status_note',
+    'pentest_request_action_approval',
+    'pentest_prepare_handoff',
+    // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
+    // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
+    'skill_load',
+    // 漏洞分析的核验面：只读、非破坏性（类别 active_discovery，不需要逐条人批）。
+    // 它**不拿** pentest_recon——侦察是情报收集阶段的事，两个阶段的判据不同。
+    'pentest_scan',
+    EXEC_TOOL_NAME,
+  ],
+  exploitation: [
+    'memory_search',
+    'memory_read',
+    'artifact_read',
+    HUMAN_QUESTION_TOOL,
+    'pentest_submit_report',
+    'pentest_write_status_note',
+    'pentest_request_action_approval',
+    'pentest_prepare_handoff',
+    // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
+    // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
+    'skill_load',
+    EXEC_TOOL_NAME,
+  ],
+  'post-exploitation': [
+    'memory_search',
+    'memory_read',
+    'artifact_read',
+    HUMAN_QUESTION_TOOL,
+    'pentest_submit_report',
+    'pentest_write_status_note',
+    'pentest_request_action_approval',
+    'pentest_prepare_handoff',
+    // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
+    // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
+    'skill_load',
+    EXEC_TOOL_NAME,
+  ],
+});
 
 export /** 内置默认能力：五个阶段共用一份声明（真实部署由 Profile 目录覆盖）。 */
 function defaultCapabilities(
@@ -390,7 +460,8 @@ function defaultCapabilities(
         // 由 `scripts/seed-skills.ts` 播种进库）。人类在控制台仍可改勾选——这里只是默认值；
         // 库中没有的名字不会让会话创建失败（`skill_load` 只认已装载且在库的）。
         defaultSkillIds: SKILL_PACKS[phase],
-        defaultToolAllow: [...DEFAULT_PHASE_TOOL_ALLOW],
+        // 工具面按阶段给：情报收集多一把 `pentest_recon`（见常量的说明）。
+        defaultToolAllow: [...DEFAULT_PHASE_TOOL_ALLOW[phase]],
         // 现取：同一份 resolver 在不同时刻会给出不同的模型（人类换模型后立刻生效）。
         modelRoute: resolveRoute(),
       };

@@ -317,6 +317,11 @@ export async function applyPentest(ctx: Context, config: PluginConfig = {}): Pro
     tools.prepareHandoff,
     tools.skillLoad,
     tools.pentestExec,
+    // 结构化侦察入口（2026-10-06）：与 WORKER_TOOL_NAMES 一一对应——
+    // 漏登记会以「注册数比清单少一个」的形式被 assemble/compose 的断言抓到。
+    tools.pentestRecon,
+    // 结构化核验入口（漏洞分析阶段）。
+    tools.pentestScan,
   ];
   const names: string[] = [];
   for (const def of registered) {

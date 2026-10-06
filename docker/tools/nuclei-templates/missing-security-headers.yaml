@@ -1,0 +1,30 @@
+id: missing-security-headers
+
+info:
+  name: 缺少安全响应头（信息级）
+  author: dsh-pentest
+  severity: info
+  description: |
+    响应里缺 x-frame-options / content-security-policy / x-content-type-options 中的至少一个。
+    **这是观察不是结论**：是否构成风险取决于应用形态（纯 API 与带会话的站点结论不同），
+    写进报告前要结合 vuln-web-checks 的判据。一条 matcher = 一条头，便于归因。
+  tags: misconfig,headers
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: header
+        words:
+          - "x-frame-options"
+        negative: true
+      - type: word
+        part: header
+        words:
+          - "content-security-policy"
+        negative: true

@@ -54,15 +54,19 @@ async function loadPack(): Promise<Map<string, { text: string; parsed: ParsedSki
  *
  * 为什么是黑名单而不是「白名单校验每条命令」：bash 的循环/数组/续行语法会让白名单提取器
  * 产生大量假阳性（`for h in x-frame-options …; do` 会被切出 `x-frame-options` 这种「命令」），
- * 一条天天误报的测试等于没有测试。这里的名单是**冒烟跑出来的事实**（`ss`/`ps`/`netstat` 在镜像里
- * 不存在、`whatweb`/`httpx` 没有、`nikto`/`gobuster`/`hydra` 没装），抓的是真故障模式：
+ * 一条天天误报的测试等于没有测试。这里的名单是**冒烟跑出来的事实**，抓的是真故障模式：
  * 教 Agent 跑一条注定 `command not found` 的命令。
+ *
+ * 2026-10-06 复核：工具镜像升级后，`whatweb` / `httpx` / `gobuster` / `dirb` / `wfuzz` /
+ * `hydra` / `masscan` / `smbclient` / `ldapsearch` / `subfinder` / `ssh` / `scp` 都已装进镜像，
+ * 故从名单里删掉（留着会让 skill 作者以为"这个工具不能用"而绕路）。仍是缺的：
+ * Debian 12 没有 `nikto`/`wpscan`/`medusa`，本项目**有意不装**的探测类武器（amass/gau/arjun）
+ * 与 C2（msfconsole），以及精简基础镜像里没有的 `ss`/`ps`/`netstat`（用 `/proc` 或 `nc -z` 替代）。
  * 往镜像里加了工具，就把它从这份名单里删掉——这正是这条测试要逼人做的确认。
  */
 const ABSENT_IN_SANDBOX = [
-  'ss', 'ps', 'netstat', 'whatweb', 'httpx', 'nikto', 'gobuster', 'dirb', 'wfuzz',
-  'hydra', 'medusa', 'masscan', 'ssh', 'scp', 'telnet', 'ftp', 'smbclient', 'ldapsearch',
-  'amass', 'subfinder', 'gau', 'waybackurls', 'arjun', 'wpscan', 'searchsploit', 'msfconsole',
+  'ss', 'ps', 'netstat', 'nikto', 'wpscan', 'medusa', 'netexec', 'enum4linux-ng',
+  'telnet', 'ftp', 'amass', 'gau', 'waybackurls', 'arjun', 'searchsploit', 'msfconsole',
 ] as const;
 
 /** 抽出 ```bash 围栏里的所有 token，逐个对照黑名单（不做「哪一个是命令」的判断）。 */

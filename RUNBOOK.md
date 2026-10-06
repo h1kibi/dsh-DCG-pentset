@@ -102,6 +102,118 @@ sh scripts/dev-sandbox-up.sh smoke
 
 `direct` 只用于实验室目标的镜像/argv 诊断，不属于正常实战路径，因为它绕过代理。
 
+### 2.1 升级工具镜像（改 `docker/tools/` 之后**必读**）
+
+沙箱里有什么工具、有什么限额，**会以提示词的形式进每一个新会话**（`src/agents/sandbox-brief.ts`）。
+因此升级镜像不是一个孤立的构建动作，而是**五步**——跳过任何一步，症状都是"Agent 在实战里反复失败"，
+而插件本身一切正常：
+
+#### ① 改镜像并构建
+
+```bash
+cd /c/Projects/Agent-projects/dsh-DCG-pentest
+docker build -t pentest-tools:dev docker/tools      # 上下文就是 docker/tools
+```
+
+**构建期网络（2026-10-06 实测）**——决定了哪些工具能装、怎么装：
+
+| 源 | 可达 | 用途 |
+|---|---|---|
+| `deb.debian.org` | ✓ | apt 包（工具集主体） |
+| `pypi.org` | ✓ | python 工具与库 |
+| `cdn.jsdelivr.net` | ✓ | 字典（逐字镜像 GitHub 内容，**钉 tag**） |
+| `goproxy.cn` + `sum.golang.google.cn` | ✓ | Go 工具（**版本钉死**，校验库保留） |
+| `github.com` | **✗** | Release 资产、netexec/enum4linux-ng 一类只能从 GitHub 装的工具 |
+| `proxy.golang.org` | **✗** | 官方 Go 代理（已换 goproxy.cn） |
+| `api.github.com` | **✓**（2026-10-06 实测） | 只有走 API 的下载器能用：nuclei 首次运行时会**自动下载官方模板库**并成功 |
+
+推论：**MCP / Release 二进制 / GitHub 源码安装在本机一律不可用**；要用这类工具，只能
+（a）改走 apt/pip/jsDelivr/goproxy 里存在的等价物，或（b）由人在有网的机器上构建好镜像再导入。
+
+`api.github.com` 可达这一条有两个后果，都要记住：
+
+1. **我们仍然不装官方模板库**：`/opt/pentest-templates` 里只有 6 份自建、只读形态的模板
+   （见下 ③）。官方库里有大量入侵性/破坏性用例，装进来等于把动作边界交给上游。
+2. **必须显式关掉 nuclei 的自动更新**，否则它会自己去拉官方库：所有 nuclei 调用都要带
+   `-disable-update-check`（`src/agents/sandbox-brief.ts` 里的用法行已写明）。容器是 `--rm`，
+   运行期拉下来的模板随容器消失，但**在这一次会话里它已经生效了**——那正是我们要避免的。
+
+#### ② 自检：声明的工具在镜像里**真的存在**
+
+```bash
+npm run verify:tool-image -- pentest-tools:dev
+```
+
+逐个 `command -v`（含字典、模板目录），缺哪个打印哪个。**全绿再往下走**——这一步挡的是
+"包名写错 / pip 包没有 console script / Go 二进制因 CGO 成了坏链接"这类只有真跑才知道的错。
+
+**它第一次运行就抓到 2 处偏差（2026-10-06 实测）**，两处都不是镜像错、而是**我们对镜像的想象错**：
+
+| 声明里写的 | 实际 | 修法 |
+|---|---|---|
+| `testssl.sh` | Debian 包 `testssl.sh` 的二进制叫 `testssl` | 改声明的**名字**，`from` 仍是包名 |
+| `impacket-*` | 在 `/usr/bin`（Debian `python3-impacket`，随 apt 的 smbmap 进来），不在 `/usr/local/bin`；pip 那套是 `secretsdump.py` 这类 `.py` 结尾的 | 改**检查脚本**：两个 bin 目录都查 |
+
+修完 60/60 通过。教训：**声明与镜像之间必须有一台机器来对账**，肉眼核对会漏。
+
+#### ③ 提示词与声明必须同步
+
+工具集在 `src/contracts.ts` 的 `SANDBOX_TOOL_GROUPS` 里声明（分组 + 一句话用法 + 出处），
+`test/sandbox-environment.test.ts` 会**逐条回到 Dockerfile 核对出处**：
+
+- 装了新工具 → 加进对应分组（`from` 写 apt 包名 / pip 模块名 / go 模块路径 / COPY 来源）；
+- 有意不装 → **不要**写进声明，并在该组 `usage` 里写明"本镜像没有它、改用 X"；
+- `test/skill-pack.test.ts` 的 `ABSENT_IN_SANDBOX` 是同一事实的另一面：装了就从名单里删掉。
+
+#### ④ 推 registry + 重钉摘要（**两处，别只改一处**）
+
+```bash
+sh scripts/dev-sandbox-up.sh up     # 建网 + 推镜像 + 打印要抄的 digest 行（见 §2 的环境变量要求）
+```
+
+- 个人 profile：`~/.dsh/profiles/pentest/cordis.patch.yml` 的 `runtime.sandbox.allowedImages[0].digest`
+- 仓库开发补丁层：`harness.dev.patch.yml` 的同字段（它同时是 skill 冒烟摘要的**比对源**）
+
+启动器预检会比对摘要，不一致直接拒绝启动（fail-closed）；代码只认 digest、不认标签。
+
+#### ⑤ 重跑 skill 冒烟证明（21 份）
+
+`skills/*/SKILL.md` 的 `metadata.smoked` 绑的是镜像摘要前 12 位，摘要一换 `test/skill-pack.test.ts` 就红——
+**这是刻意的**：逼人重跑命令，而不是让旧背书一直挂着。
+
+**注意顺序**：先**真的重跑**（见下），再改摘要——反了就是拿新摘要包装旧结论。
+
+改摘要这一步是机械的，用脚本（别手工改 21 份）：
+
+```bash
+npm run build  # 一次性检查文件没写坏
+node scripts/resync-smoke-stamps.mjs <新摘要前 12 位>   # 输出：改了 N 份、M 处，并打印替换前的摘要值
+```
+
+**怎么跑才算数（2026-10-06 这一轮踩出来的）**：
+
+1. **跑技能里的原文配方，不要跑"等价命令"**。这一轮的教训是：`asset-graph` 步骤 4 与
+   `internal-discovery` 步骤 5 的配方**根本跑不通**（前者 jq 报 `Cannot index array with string "id"`；
+   后者有两层错——`<(...)` 在当时的 dash 下语法错，且 `--slurpfile` 本就吃不了非 JSON 行，**换成 bash 也只修掉第一层**），
+   而上一版背书里写着做过。**等价命令能跑通，不等于技能交给 Agent 的那一条能跑通。**
+2. **先铺输入再跑**：配方读的 `/tmp/*.json` 台账要先按技能正文描述的结构造出来，否则你测的是
+   "文件不存在"，不是配方。
+3. **占位符要替换成真实靶值**（`<目标>` → 实际地址），故意打不通的域名照原文跑——失败即预期。
+4. **自由命令的 shell 是 bash**（`SANDBOX_SHELL`，2026-10-06 起；Debian 的 `/bin/sh` 是 dash，
+   技能与 Agent 写的都是 bash 方言）。这条修掉之后，`<(...)`、`[[ ]]` 这类写法才成立。
+
+#### ⑥ 全量回归
+
+```bash
+npm run build && npm run verify && npm test
+```
+
+> **为什么 14 个结构化动词属于这一类**：`port_scan` / `service_probe` / `nse_run` / `tls_probe` /
+> `http_probe` / `content_discover` / `web_crawl` / `dns_enum` / `dns_axfr` / `dns_brute` /
+> `whois_query` / `ct_lookup`（`pentest_recon`）与 `http_check` / `exposure_check`（`pentest_scan`）
+> 都实现在分发器里、随镜像分发。**镜像不重建，这些 technique 全部以 usage_error 失败**。
+> 它们在容器内只打宿主注入的已裁决地址（`PENTEST_RESOLVED_ADDRESSES`），该变量为空时直接拒绝（刻意 fail-closed）。
+
 ---
 
 ## 3. 配置
@@ -283,7 +395,7 @@ POST /api/pentest/startWorker
    "params":{"engagementId":"...","phase":"intelligence-gathering","taskPrompt":"..."},
    "reason":"为什么这么做",            ← 变更类端点强制要
    "idempotencyKey":"唯一值"          ← 变更类端点强制要
-   "expectedStateVersion":0           ← lock=actor/envelope 的端点强制要
+   "expectedStateVersion":0           ← lock=actor 的端点强制要（lock=none 的端点不要求）
  }}}}
 ```
 
@@ -598,6 +710,15 @@ drain 等常驻路径会在事务之外用同一条连接——pg@8 会把语句
   - 「打不通」的归因因此要重新学：`ENETUNREACH` 不再是默认答案，先分清是目标侧过滤、DNS、限速还是服务没起；
   - 授权目标与沙箱仍应同网（直连、不经代理）；目标没接进网络就是超时（见坑 6）；
   - 回退到封闭动作集：网络重建为 `--internal`（同网段）并删掉 `allowEgress`（预检据此拒绝非 internal 网络）。
+
+**但它是间歇的（2026-10-06 实测，同一天两次结果相反）**：同一条命令上午 `curl -m 8 http://example.com/` = 200、
+`nvd=200 osv=200`，下午同一批请求变成 `curl: (7) ... after 4201 ms` 全超时、`Could not resolve host: api.osv.dev`。
+所以：
+
+- **不要把「有出网」当作可靠前提**：任何依赖外网的步骤（`vuln-intel` 查 NVD/OSV/CISA、给 nuclei 拉模板……
+  ）都必须有**离线退化分支**，而且要把失败形态原样记进证据——「解析不了 / 超时」本身就是要写进报告的事实。
+- `vuln-intel` 的正文把「外部线索不可用」写成兜底分支，实际用下来它是**常态路径**，不要把它当异常。
+- 归因顺序也要跟着改：先看是不是网络抖（重试一次、看 `%{http_code}` 是不是 000），再怀疑目标。
 代理容器仍在，但只服务「经代理出网」的部署形态——它**不是**沙箱的出口边界，
 白名单同步（`EGRESS_ALLOW`）也只维护代理自己。探测任意**授权端口**：端口写在 `target` 里
 （`http://host:3002/`、`https://host:3002/` 都行，**不限于 80/443**）。
@@ -782,7 +903,7 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 
 - **阶段轨道**：五个阶段**横向**排列，节点之间画边（虚线=时间顺序，实线+彩色=交接/重做/
   有证据的关系），回环发生时另画一条折回的弧线。节点上是状态色、会话数、重做次数与最新便签。
-- **运行控制**：启动 / 暂停 / 恢复 / 插话 / 终止，每个禁用都写明确原因。
+- **运行控制**：启动 / 暂停 / 恢复 / 插话 / 终止 / **结束技术测试**（生成报告草稿，进入报告阶段），每个禁用都写明确原因。
 - **会话时间轴**：每个会话一行，带阶段、状态、时间与便签。
 - **八个面板**：总览与时间轴 / 报告审阅 / 记忆浏览器 / 放行队列 / 交接编辑 / Skill 库 / 范围管理 / **公共记忆**。
 
@@ -795,6 +916,12 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 界面上一切正常但 Agent 不动时，看两处：**模型**（落地上如果显示的不是你配的模型，路由就是错的）和 **`~/.dsh/settings.yaml` 的 `agent-presets`**（preset 装载失败会让**任何**新会话都建不起来，见 §7）。
 
 ## 7. 已知边界
+
+- **「结束技术测试」会被在途动作或未处置的放行凭证拦住**（§13.8 第二步，拒绝文案会写明是哪一类）：
+  放行凭证在放行队列里处置或撤销即可；工具执行要**等它结束**。例外是**孤儿执行**——宿主在它运行
+  中途重启、而心跳仍在为那条会话续租时，它既等不到结束，也进不了对账的结算集合（对账只结算
+  超过 16 分钟的执行，且要求该作业进入扫描范围）。此时受支持的出口是**终止该作业**（放弃报告）。
+  待决凭证只统计**未过期**的：过期的谁也处置不了，不计入（否则永久结束不了技术测试）。
 
 - **`agent-presets` 坏掉会让整个 dsh（不只是本插件）用不了**。本机踩过**两处同类漂移**，都在 `~/.dsh/.agent-presets/anchored-standard/`：
   1. `agent.cordis.yml` 的 `persona` 段写 `text:`，而插件 schema 是 `prefix:`（`z.string().required()`）→ **任何新会话都建不起来**（落地上「选择工作区」失败）；错误只在浏览器 console 里以 `warning` 出现（`agent-preset/invalid`）。

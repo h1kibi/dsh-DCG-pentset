@@ -32,11 +32,12 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 
-import type { ApprovalMode, Phase, RunMarker } from '../../contracts.ts';
-import { APPROVAL_MODES, PHASES } from '../../contracts.ts';
+import type { ApprovalMode, MainStatus, Phase, RunMarker } from '../../contracts.ts';
+import type { RunActionAvailability as SharedRunActionAvailability } from '../../contracts.ts';
+import { APPROVAL_MODES, PHASES, runActionAvailability as decideRunActions } from '../../contracts.ts';
 import { APPROVAL_MODE_HINTS, APPROVAL_MODE_LABELS } from '../presets.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatCount, phaseLabel, runMarkerLabel } from '../format.ts';
+import { formatCount, mainStatusLabel, phaseLabel, runMarkerLabel } from '../format.ts';
 import { Badge, Button, Card, Field, TextArea, TextInput } from '../ui.tsx';
 
 /** 启动 Agent 时可选填写的预算上限。留空即不设限（由阶段默认值决定）。 */
@@ -122,55 +123,72 @@ export function startBlockers(input: {
   return gates;
 }
 
-/** 运行期动作的可用性。单独成函数以便测试穷举状态组合。 */
-interface RunActionAvailability {
-  readonly canPause: boolean;
-  readonly canResume: boolean;
-  readonly canAbort: boolean;
-  readonly canInterject: boolean;
+/**
+ * 运行期动作的可用性 + 客户端渲染的禁用原因。
+ *
+ * **判定字段继承契约层**（`RunActionAvailability`）：契约新增一条动作时，这里跟着报错，
+ * 而不是静默少渲染一个按钮的可用性。
+ */
+interface RunActionAvailability extends SharedRunActionAvailability {
   readonly pauseReason: string | null;
   readonly resumeReason: string | null;
   readonly abortReason: string | null;
   readonly interjectReason: string | null;
+  readonly finishTestingReason: string | null;
 }
 
 /**
  * 按两个正交字段判定四个运行期动作。
  *
- * 终止在**任何非终态**都可用：它是人类的兜底手段，连「阻塞」也要能终止
- * （否则一个卡住的 engagement 只能靠改库收场）。
+ * **判定取契约层的单源实现**（`contracts.ts` 的 `runActionAvailability`）：
+ * 服务端把它当前置（拒绝并报出具体标记），这里按同一函数禁用按钮。此前两边各写一份，
+ * 于是「界面挡住、经端点直调却能生效」——终止后还能暂停、再恢复出僵尸作业
+ * （2026-10-05 复核 F1）。文案仍留在客户端渲染（服务端只回事实）。
  */
 export function runActionAvailability(
-  state: { readonly mainStatus: string; readonly runMarker: RunMarker; readonly activeWorkerSessionId: string | null } | null,
+  state: { readonly mainStatus: MainStatus; readonly runMarker: RunMarker; readonly activeWorkerSessionId: string | null } | null,
 ): RunActionAvailability {
   if (state === null) {
     const why = '尚未选中 engagement';
     return {
       canPause: false, canResume: false, canAbort: false, canInterject: false,
-      pauseReason: why, resumeReason: why, abortReason: why, interjectReason: why,
+      canFinishTesting: false, canExtendBudget: false,
+      pauseReason: why, resumeReason: why, abortReason: why, interjectReason: why, finishTestingReason: why,
     };
   }
   const marker = state.runMarker;
-  const aborted = marker === 'aborted';
-  const failed = marker === 'failed';
-  const terminal = aborted || failed;
-
+  const decided = decideRunActions(state);
   const active = state.activeWorkerSessionId !== null;
   return {
-    canPause: marker === 'running',
-    canResume: marker === 'paused',
+    ...decided,
+    pauseReason: decided.canPause
+      ? null
+      : state.mainStatus === 'complete'
+        ? `作业已签字导出（complete），运行期动作不再有意义`
+        : `只有运行中才能暂停（当前运行标记：${runMarkerLabel(marker)}）`,
+    resumeReason: decided.canResume
+      ? null
+      : state.mainStatus === 'complete'
+        ? '作业已签字导出（complete），运行期动作不再有意义'
+        : `只有已暂停（paused）或已阻塞（blocked）可以恢复（当前运行标记：${runMarkerLabel(marker)}）`,
     // 终止对「已终止」「已失败」无意义——它们已经是终态，再终止只会产生噪音记录。
-    canAbort: !terminal,
-    // 插话需要在跑的会话：暂停时投递无人消费，「等待人类」时人类该做的是交接而不是插话。
-    canInterject: active && marker === 'running',
-    pauseReason: marker === 'running' ? null : `只有运行中才能暂停（当前运行标记：${runMarkerLabel(marker)}）`,
-    resumeReason: marker === 'paused' ? null : `只有已暂停才能恢复（当前运行标记：${runMarkerLabel(marker)}）`,
-    abortReason: terminal ? `已经是终态（${runMarkerLabel(marker)}），终止没有意义` : null,
-    interjectReason: !active
-      ? '当前没有活动 Worker 会话'
-      : marker === 'running'
-        ? null
+    // complete 单独说：那时标记可能还是 `running`，按标记措辞会写成「已经是终态（运行中）」，
+    // 前半句与事实相反（封禁来自主状态，不是标记）。
+    abortReason: decided.canAbort
+      ? null
+      : state.mainStatus === 'complete'
+        ? '作业已签字导出（complete），终止没有意义'
+        : `已经是终态（${runMarkerLabel(marker)}），终止没有意义`,
+    interjectReason: decided.canInterject
+      ? null
+      : !active
+        ? '当前没有活动 Worker 会话'
         : `插话只在运行中送达（当前运行标记：${runMarkerLabel(marker)}）`,
+    finishTestingReason: decided.canFinishTesting
+      ? null
+      : state.mainStatus === 'complete'
+        ? '作业已签字导出（complete），不能再次结束技术测试'
+        : `只有「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可以结束技术测试（当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}）`,
   };
 }
 
@@ -495,6 +513,19 @@ export function RunControls(props: RunControlsProps): ReactNode {
             availability.abortReason ??
             (!abortConfirmed ? '终止不可撤销，需勾选二次确认' : busy ? '正在提交' : undefined)
           }
+        />
+        <Button
+          label="结束技术测试"
+          // 这条边此前**没有界面入口**：服务端有 `finishTechnicalTesting`（§13.8），
+          // 但没有任何视图调用它，人类只能看着报告面板提示「先完成技术测试」却点不到。
+          // 它不接阶段切换（那是「下一阶段」按钮的事），只把作业送进 report_ready 并生成草稿。
+          onClick={() => {
+            settle(props.controller.finishTechnicalTesting('人类结束技术测试'), () => {
+              setNotice('已结束技术测试：报告草稿已生成（可在报告面板复核与签字）。');
+            });
+          }}
+          disabled={!availability.canFinishTesting || busy}
+          reason={availability.finishTestingReason ?? (busy ? '正在提交' : undefined)}
         />
       </div>
 

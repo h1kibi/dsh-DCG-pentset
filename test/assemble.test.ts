@@ -258,8 +258,8 @@ test('状态机类能力不被注册为模型工具（§4.2 人类专属）', as
   }
 });
 
-test('唯一触及目标的工具是 pentest_exec', () => {
-  assert.deepEqual([...TARGET_TOOL_NAMES], ['pentest_exec']);
+test('目标通路有三条：逐条人批的 pentest_exec、结构化侦察的 pentest_recon、结构化核验的 pentest_scan', () => {
+  assert.deepEqual([...TARGET_TOOL_NAMES], ['pentest_exec', 'pentest_recon', 'pentest_scan']);
   for (const t of TARGET_TOOL_NAMES) {
     assert.ok(WORKER_TOOL_NAMES.includes(t), `${t} 必须是 Worker 工具之一`);
   }

@@ -86,10 +86,46 @@ test('runActionAvailability：终态不再允许终止（避免制造噪音记�
     const a = runActionAvailability(workflowState({ runMarker: marker }));
     assert.equal(a.canAbort, false, `${marker} 已是终态`);
     assert.equal(a.canPause, false);
-    assert.equal(a.canResume, false);
+    assert.equal(a.canResume, false, '终态不得被恢复——那是僵尸作业的入口');
   }
-  // 但「阻塞」仍要能终止：一个卡住的 engagement 若无终止入口，只能靠改库收场。
-  assert.equal(runActionAvailability(workflowState({ runMarker: 'blocked' })).canAbort, true);
+  // 但「阻塞」仍要能终止与恢复：一个卡住的 engagement 若无出口，只能靠改库收场。
+  const blocked = runActionAvailability(workflowState({ runMarker: 'blocked' }));
+  assert.equal(blocked.canAbort, true);
+  assert.equal(blocked.canResume, true, '阻塞必须有受支持的出口：恢复（处置完继续）');
+});
+
+test('runActionAvailability：已签字导出的作业不再接受运行期动作', () => {
+  // 主状态 complete 之后标记仍是 running（签字只改主状态），若只看标记，
+  // 界面会在一个已结束的作业上继续提供暂停/终止按钮。
+  const complete = runActionAvailability(
+    workflowState({ mainStatus: 'complete', runMarker: 'running', activeWorkerSessionId: 'w1' }),
+  );
+  assert.equal(complete.canPause, false);
+  assert.equal(complete.canAbort, false);
+  assert.equal(complete.canResume, false);
+  assert.equal(complete.canInterject, false);
+  assert.equal(complete.canFinishTesting, false);
+  assert.equal(complete.canExtendBudget, false);
+  assert.match(String(complete.pauseReason), /签字导出/, '理由要说清是 complete 而非标记');
+  // 禁用理由不得自相矛盾：complete 下标记可能还是 running，说「已经是终态（运行中）」是假话。
+  assert.match(String(complete.abortReason), /签字导出/);
+  assert.doesNotMatch(String(complete.abortReason), /已经是终态/);
+  // 「complete + paused」可达（在 report_ready 暂停，再签字导出）：恢复与追加预算都要拒。
+  const completePaused = runActionAvailability(workflowState({ mainStatus: 'complete', runMarker: 'paused' }));
+  assert.equal(completePaused.canExtendBudget, false);
+  assert.match(String(completePaused.resumeReason), /签字导出/);
+});
+
+test('runActionAvailability：追加预算只对运行中/已暂停开放', () => {
+  assert.equal(runActionAvailability(workflowState({ runMarker: 'running' })).canExtendBudget, true);
+  assert.equal(runActionAvailability(workflowState({ runMarker: 'paused' })).canExtendBudget, true);
+  for (const runMarker of ['blocked', 'aborted', 'failed'] as const) {
+    assert.equal(
+      runActionAvailability(workflowState({ runMarker })).canExtendBudget,
+      false,
+      `${runMarker} 时不得追加预算：先恢复或终止`,
+    );
+  }
 });
 
 test('runActionAvailability：插话需要在跑的会话，且只在运行标记为 running 时', () => {
@@ -101,6 +137,29 @@ test('runActionAvailability：插话需要在跑的会话，且只在运行标�
 
   const ok = runActionAvailability(workflowState({ runMarker: 'running', activeWorkerSessionId: 'w1' }));
   assert.equal(ok.canInterject, true);
+});
+
+test('runActionAvailability：结束技术测试只在「运行中 + 两个起点主状态」可用（§5.2 的两条边）', () => {
+  // §5.2 有两条边指向 report_ready：worker_running（人类决定收工）与 waiting_human_review。
+  for (const mainStatus of ['worker_running', 'waiting_human_review'] as const) {
+    const a = runActionAvailability(workflowState({ mainStatus, runMarker: 'running' }));
+    assert.equal(a.canFinishTesting, true, `${mainStatus} + running 必须能结束技术测试`);
+    assert.equal(a.finishTestingReason, null);
+  }
+  // 暂停/阻塞/终态：先恢复或终止，别把「停止工作」混进中间态。
+  for (const runMarker of ['paused', 'blocked', 'aborted', 'failed'] as const) {
+    const a = runActionAvailability(workflowState({ mainStatus: 'waiting_human_review', runMarker }));
+    assert.equal(a.canFinishTesting, false, `${runMarker} 时不得结束技术测试`);
+    assert.match(String(a.finishTestingReason), /结束技术测试/, '不可用时必须说明原因');
+  }
+  // 起点主状态之外的（例如授权向导、报告已就绪、已完成）同样不可用。
+  for (const mainStatus of ['auth_pending', 'ready', 'report_ready', 'complete'] as const) {
+    assert.equal(
+      runActionAvailability(workflowState({ mainStatus, runMarker: 'running' })).canFinishTesting,
+      false,
+      `${mainStatus} 不是结束技术测试的合法起点`,
+    );
+  }
 });
 
 test('runActionAvailability：每个不可用动作都给出非空原因（禁用不能没有解释）', () => {
@@ -191,7 +250,7 @@ test('RunControls：未选中 engagement 时整块不渲染（不摆一排永远
   assert.equal(html, '');
 });
 
-test('RunControls：运行中渲染五个动作；**暂停不需要填理由**（2026-10-05 人类要求）', () => {
+test('RunControls：运行中渲染六个动作；**暂停不需要填理由**（2026-10-05 人类要求）', () => {
   const html = renderToStaticMarkup(
     createElement(RunControls, {
       controller: inertController(),
@@ -199,7 +258,7 @@ test('RunControls：运行中渲染五个动作；**暂停不需要填理由**�
       now: NOW,
     }),
   );
-  for (const label of ['启动 Agent', '暂停', '恢复', '发送插话', '终止']) {
+  for (const label of ['启动 Agent', '暂停', '恢复', '发送插话', '终止', '结束技术测试']) {
     assert.ok(html.includes(label), `应渲染「${label}」`);
   }
   // 理由输入框已按人类要求移除：不再有任何「必须填写…理由」的闸门。
@@ -207,7 +266,30 @@ test('RunControls：运行中渲染五个动作；**暂停不需要填理由**�
   assert.ok(!html.includes('暂停理由'), '理由输入框必须删除');
   assert.ok(!html.includes('终止理由'), '理由输入框必须删除');
   // 恢复在运行中不可用，且说明为什么（可用性说明保留——那是状态，不是要人写作文）
-  assert.ok(html.includes('只有已暂停才能恢复'), '恢复的禁用原因必须出现');
+  assert.ok(html.includes('只有已暂停（paused）或已阻塞（blocked）可以恢复'), '恢复的禁用原因必须出现');
+  // 「结束技术测试」必须在界面上有入口：服务端早就实现了这条边，但没有视图调用它，
+  // 人类只能看到报告面板提示「先完成技术测试」却点不到任何按钮。
+  assert.ok(html.includes('结束技术测试'), '结束技术测试必须渲染出按钮');
+  // 这个快照是主状态 ready（还没启动任何 Worker）：按钮存在但不可用，且说明原因。
+  assert.ok(
+    html.includes('只有「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可以结束技术测试（当前主状态：'),
+    '非法起点必须给出禁用原因（按钮存在 ≠ 可用）',
+  );
+});
+
+test('RunControls：等待人工判断时「结束技术测试」可用（§5.2 的边有界面入口）', () => {
+  const html = renderToStaticMarkup(
+    createElement(RunControls, {
+      controller: inertController(),
+      snapshot: snapshotWith(workflowState({ mainStatus: 'waiting_human_review', runMarker: 'running' })),
+      now: NOW,
+    }),
+  );
+  assert.ok(html.includes('结束技术测试'));
+  assert.ok(
+    !html.includes('时可以结束技术测试（当前'),
+    '合法起点不得显示禁用原因——否则按钮永远点不动，等于没有入口',
+  );
 });
 
 test('RunControls：终止只要二次确认（不可撤销的防手滑），不再要求理由', () => {

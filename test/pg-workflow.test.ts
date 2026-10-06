@@ -396,10 +396,15 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     const frozen = sessions.created.at(-1);
     assert.ok(frozen, '会话工厂必须被调用');
     assert.equal(frozen.dshSessionId, started.dshSessionId);
-    // 内置默认能力声明的就是这九个（其中 pentest_exec 是唯一触及目标的出口；
+    // 内置默认能力声明的就是这一份（其中 pentest_exec 是触及目标的出口；
     // ask_user_question 是官方提问通道，让 Agent 能把岔路口摆成可点的选项；
     // pentest_prepare_handoff 让「进入下一阶段」有明确去处（指路到控制台按钮），不反问人类——它一度
-    // 只存在于工具注册表里、没进这份默认装载，等于那个修复没生效，故在此钉住。
+    // 只存在于工具注册表里、没进这份默认装载，等于那个修复没生效，故在此钉住；
+    // skill_load 是 skill 正文的唯一读取入口（能力快照只给名字+描述）——它同样一度缺失，
+    // 结果是 21 份 skill 的正文一条都取不到（2026-10-06 补）；
+    // pentest_recon 是同一批新增的**结构化侦察**入口，只发给需要它的阶段——
+    // 本用例用的阶段是情报收集，因此它在列表里；其它阶段的工具面由
+    // `test/action-templates.test.ts` 的边界断言钉住。
     assert.deepEqual(
       [...frozen.toolAllow].sort(),
       [
@@ -409,9 +414,11 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
         'memory_search',
         'pentest_exec',
         'pentest_prepare_handoff',
+        'pentest_recon',
         'pentest_request_action_approval',
         'pentest_submit_report',
         'pentest_write_status_note',
+        'skill_load',
       ],
       '省略时必须拿到阶段能力的默认工具面，而不是空集',
     );
@@ -542,47 +549,6 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     );
   });
 
-  test('finishWorker：进入等待人工判断，且**不改阶段**、不写转移记录', async () => {
-    const before = await service.getState(engagementId);
-    const sessionId = before.activeWorkerSessionId!;
-    const beforeTransitions = (
-      await pool.query(`select count(*)::int as n from pentest.state_transitions where engagement_id = $1::uuid`, [
-        engagementId,
-      ])
-    ).rows[0]!.n as number;
-    const beforeDecisions = (
-      await pool.query(`select count(*)::int as n from pentest.human_decisions where engagement_id = $1::uuid`, [
-        engagementId,
-      ])
-    ).rows[0]!.n as number;
-
-    const after = await service.finishWorker({
-      workerSessionId: sessionId,
-      report: { status: 'report_ready', objective: 'o', summary: '情报收集完成', payload: {} },
-    });
-
-    assert.equal(after.mainStatus, 'waiting_human_review', '报告后必须停下等人');
-    assert.equal(after.currentPhase, before.currentPhase, '报告不得改变阶段（I-04）');
-    assert.equal(after.activeWorkerSessionId, sessionId, '报告不得创建新会话');
-
-    // Agent 侧动作：不写 state_transitions、不写 human_decisions（§5.4 只规范人类操作）
-    const afterTransitions = (
-      await pool.query(`select count(*)::int as n from pentest.state_transitions where engagement_id = $1::uuid`, [
-        engagementId,
-      ])
-    ).rows[0]!.n as number;
-    const afterDecisions = (
-      await pool.query(`select count(*)::int as n from pentest.human_decisions where engagement_id = $1::uuid`, [
-        engagementId,
-      ])
-    ).rows[0]!.n as number;
-    assert.equal(afterTransitions, beforeTransitions, 'Agent 侧动作不得新增转移记录');
-    assert.equal(afterDecisions, beforeDecisions, 'Agent 侧动作不得新增人工决策');
-
-    const ws = await pool.query(`select status from pentest.worker_sessions where id = $1::uuid`, [sessionId]);
-    assert.equal(ws.rows[0]!.status, 'waiting_human');
-  });
-
   test('signReport 只接受服务端报告版本哈希，并把真实版本写入签字审计', async () => {
     const id = await newEngagement();
     await pool.query(
@@ -645,6 +611,11 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
   });
 
   test('暂停：只改运行标记，主状态与租约都不变（§5.1 / §10.6）', async () => {
+    // 起点摆在「等待人工判断」：这条用例需要「主状态 ≠ worker_running」才能证明暂停不改写它。
+    // （此前这个状态由同一个文件里那份已删除的 `finishWorker` 用例顺手留下——那是隐式依赖，
+    // 现在显式摆放。）
+    const seed = await service.getState(engagementId);
+    await markWaitingHuman(engagementId, seed.activeWorkerSessionId!);
     const before = await service.getState(engagementId);
     const leaseBefore = await pool.query(
       `select count(*)::int as n from pentest.session_leases
@@ -684,10 +655,14 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
   });
 
   test('插话唤醒：等待人工 → 运行中，写 interject_wake 且不递增迭代', async () => {
+    // 唤醒路径的起点必须是「等待人工判断 + 会话 waiting_human」——显式摆放（同上）。
+    const seed = await service.getState(engagementId);
+    await markWaitingHuman(engagementId, seed.activeWorkerSessionId!);
     const before = await service.getState(engagementId);
     const result = await service.interject({
       workerSessionId: before.activeWorkerSessionId!,
       message: '请先看 10.0.0.5 这台',
+      expectedStateVersion: before.stateVersion,
     });
     assert.equal(result.delivered, true);
     assert.equal(result.transitionType, 'interject_wake');
@@ -739,10 +714,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
   test('重做：默认复用当前会话，执行次数递增且不创建新会话', async () => {
     // 先让会话回到等待人工
     const s0 = await service.getState(engagementId);
-    await service.finishWorker({
-      workerSessionId: s0.activeWorkerSessionId!,
-      report: { status: 'report_ready', objective: 'o', summary: 's', payload: {} },
-    });
+    await markWaitingHuman(engagementId, s0.activeWorkerSessionId!);
     const s1 = await service.getState(engagementId);
     const sessionsBefore = sessions.created.length;
 
@@ -838,10 +810,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
 
   test('重做（新建会话）：旧会话被取代、其租约被吊销', async () => {
     const s0 = await service.getState(engagementId);
-    await service.finishWorker({
-      workerSessionId: s0.activeWorkerSessionId!,
-      report: { status: 'report_ready', objective: 'o', summary: 's', payload: {} },
-    });
+    await markWaitingHuman(engagementId, s0.activeWorkerSessionId!);
     const s1 = await service.getState(engagementId);
     const oldId = s1.activeWorkerSessionId!;
 
@@ -1302,6 +1271,26 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       [id, sessionId],
     );
     return { id, sessionId };
+  }
+
+  /**
+   * 把会话推到「等待人工判断」——与生产实现（`PgWorkerTools.submitReport`）同一套状态效果。
+   *
+   * 为什么不用服务方法：会话流程里那份 `finishWorker` 是**重复实现**，2026-10-05 复核
+   * （F3）已删除——生产只走 `PgWorkerTools.submitReport`，而本文件不需要真跑一遍提交
+   * （提交的准入、账本与环境断言在 `pg-worker-tools.test.ts`）。这里只做**状态摆放**，
+   * 供「重做 / 交接」等用例把起点摆好。
+   */
+  async function markWaitingHuman(target: string, sessionId: string): Promise<void> {
+    await pool.query(`update pentest.worker_sessions set status = 'waiting_human' where id = $1::uuid`, [
+      sessionId,
+    ]);
+    await pool.query(
+      `update pentest.engagements
+          set current_status = 'waiting_human_review', state_version = state_version + 1
+        where id = $1::uuid`,
+      [target],
+    );
   }
 
   test('起稿：省略目标阶段时按状态机的推荐推进（人类只说「进入下一阶段」）', async () => {
@@ -1843,18 +1832,14 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.ok(transitionRow.rows[0]?.human_decision_id !== undefined);
   });
 
-  test('intake 会话提交报告后主状态仍是 AUTH_PENDING，人类确认能成功（实战主路径）', async () => {
-    // 人类报障：在会话里点确认只拿到 `classification_rejected 当前任务没有可确认的 intake 范围`。
-    // 原因不是陈旧的界面，而是**两个过窄的判据**都只在「Agent 还没交接」时成立：
-    //   finishWorker 把主状态推成 `waiting_human_review`（不限会话种类），
-    //   确认侧还要求 intake 会话 `status = 'active'`——而它提交报告后就变成 `waiting_human`。
-    // 于是「Agent 提方案 → 人类确认」这条正常时序**永远走不通**。
-    const { engagementId: id, intakeId, proposalId } = await newIntakeProposal();
-
-    await service.finishWorker({
-      workerSessionId: intakeId,
-      report: { status: 'report_ready', objective: 'o', summary: '方案已提交，等你确认', payload: {} },
-    });
+  test('intake 提方案 → 人类确认：主状态停在 AUTH_PENDING，预览与确认结论一致（实战主路径）', async () => {
+    // 这条路径曾因**两个过窄的判据**走不通：会推主状态的报告路径不限会话种类
+    // （intake 一提报告就把 `auth_pending` 推成 `waiting_human_review`），而确认侧又要求
+    // intake 会话仍是 `active`——人类点确认只拿到「当前任务没有可确认的 intake 范围」。
+    // 现在 intake 会话**根本不允许**走报告路径（`PgWorkerTools.submitReport` 对 intake
+    // 直接 `classification_rejected`，见 `pg-worker-tools.test.ts`），因此确认之前主状态
+    // 只会是 `auth_pending`；这里锁的是「预览与确认给同一结论」。
+    const { engagementId: id, proposalId } = await newIntakeProposal();
 
     const row = await pool.query<{ current_status: string }>(
       `select current_status from pentest.engagements where id = $1::uuid`,
@@ -1863,7 +1848,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.equal(
       row.rows[0]?.current_status,
       'auth_pending',
-      'intake 阶段的「等人类」就是 AUTH_PENDING（§13.1 人类边的前置），Agent 报告不得把它推走',
+      'intake 阶段的「等人类」就是 AUTH_PENDING（§13.1 人类边的前置）',
     );
 
     // 预览与确认必须给出同一个结论：此刻预览里不该有任何 intake 相关的 blocker。
@@ -2798,6 +2783,23 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
         `账本出现图上不存在的边：${row.transition_type} ${row.from_status} → ${row.to_status}`,
       );
     }
+    // 版本推进与转移行必须同向：`resulting_version` 是那一行的落点，而
+    // `engagements.state_version` 是所有推进（含登记在案的非转移推进）之后的当前值。
+    // 因此**当前版本不得低于任何一行的落点**——低了说明有人写了转移行却没推进版本，
+    // 那种账本回放时会读出「状态没变但发生过转移」。
+    const versions = await pool.query<{ state_version: number | string; max_resulting: number | string | null }>(
+      `select e.state_version,
+              (select max(t.resulting_version) from pentest.state_transitions t
+                where t.engagement_id = e.id) as max_resulting
+         from pentest.engagements e where e.id = $1::uuid`,
+      [target],
+    );
+    const current = Number(versions.rows[0]?.state_version ?? 0);
+    const maxResulting = Number(versions.rows[0]?.max_resulting ?? 0);
+    assert.ok(
+      current >= maxResulting,
+      `state_version（${current}）低于账本最大落点（${maxResulting}）：有转移行没有推进版本`,
+    );
   }
 
   test('结束技术测试不写图上不存在的边；重新打开必须挂回活动会话（REQ-8a / AD-1 回归锁）', async () => {
@@ -2851,7 +2853,11 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     const before = await countTransitions(waiting.id);
 
     await assert.rejects(
-      () => service.interject({ workerSessionId: waiting.sessionId, message: '先看 10.0.0.5' }),
+      () => service.interject({
+        workerSessionId: waiting.sessionId,
+        message: '先看 10.0.0.5',
+        expectedStateVersion: inHandoff.stateVersion,
+      }),
       (error: unknown) =>
         error instanceof WorkflowRejection &&
         error.code === 'classification_rejected' &&
@@ -2920,6 +2926,340 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       '状态必须保持不变：草稿仍可确认（换目标阶段）或取消',
     );
     await assertLedgerLegal(waiting.id);
+  });
+
+  // ── 运行期动作前置、blocked 出口与投递失败补偿（2026-10-05 复核 F1/F5/F6 的回归锁）──
+
+  test('运行标记前置：终止后不能暂停/恢复，已签字导出后一切运行期动作无意义', async () => {
+    const id = await newEngagement();
+    await pool.query(
+      `update pentest.engagements set status = 'paused', current_status = 'waiting_human_review'
+        where id = $1::uuid`,
+      [id],
+    );
+    const paused = await service.getState(id);
+    await assert.rejects(
+      () => service.pause({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: paused.stateVersion }),
+      (e: unknown) => e instanceof WorkflowRejection && e.code === 'classification_rejected',
+      '对已暂停的再暂停是空操作，必须拒绝（客户端按同一份判定禁用按钮）',
+    );
+
+    // 阻塞态：**有受支持的出口**——恢复（处置完继续），且不改写主状态。
+    await pool.query(`update pentest.engagements set status = 'blocked' where id = $1::uuid`, [id]);
+    const blocked = await service.getState(id);
+    const resumed = await service.resume({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '处置完毕',
+      expectedStateVersion: blocked.stateVersion,
+    });
+    assert.equal(resumed.runMarker, 'running');
+    assert.equal(resumed.mainStatus, 'waiting_human_review', '恢复回到原主状态（§5.1）');
+
+    // 终止是终态：暂停会把它弹回 paused、恢复再弹回 running——这条复活链必须断在服务端。
+    const running = await service.getState(id);
+    const aborted = await service.abort({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '',
+      expectedStateVersion: running.stateVersion,
+    });
+    assert.equal(aborted.runMarker, 'aborted');
+    for (const attempt of [
+      () => service.pause({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: aborted.stateVersion }),
+      () => service.resume({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: aborted.stateVersion }),
+      () => service.abort({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: aborted.stateVersion }),
+    ]) {
+      await assert.rejects(
+        attempt,
+        (e: unknown) => e instanceof WorkflowRejection && e.code === 'classification_rejected',
+        '终态作业的运行期动作必须全部拒绝（否则出现「标记运行中、会话全关闭」的僵尸）',
+      );
+    }
+    assert.equal((await service.getState(id)).runMarker, 'aborted');
+
+    // 已签字导出（complete）：同样全部拒绝。
+    await pool.query(
+      `update pentest.engagements set status = 'running', current_status = 'complete' where id = $1::uuid`,
+      [id],
+    );
+    const complete = await service.getState(id);
+    assert.equal(complete.mainStatus, 'complete');
+    for (const attempt of [
+      () => service.pause({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: complete.stateVersion }),
+      () => service.abort({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: complete.stateVersion }),
+      () => service.resume({ engagementId: id, operatorId: 'op', reason: '', expectedStateVersion: complete.stateVersion }),
+    ]) {
+      await assert.rejects(
+        attempt,
+        (e: unknown) => e instanceof WorkflowRejection && e.code === 'classification_rejected',
+      );
+    }
+  });
+
+  test('追加预算只加额度：主状态不被改写，且阻塞作业不能靠它恢复', async () => {
+    const { id, sessionId } = await newWaitingHumanSession();
+    const s0 = await service.getState(id);
+    const paused = await service.pause({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '预算触顶',
+      expectedStateVersion: s0.stateVersion,
+    });
+    const extended = await service.extendBudget({
+      workerSessionId: sessionId,
+      operatorId: 'op',
+      reason: '加额度',
+      expectedStateVersion: paused.stateVersion,
+      additionalTokens: 1000,
+    });
+    assert.equal(extended.runMarker, 'running', '追加预算即恢复会话（§10.5）');
+    assert.equal(
+      extended.mainStatus,
+      'waiting_human_review',
+      '追加预算不是「回到运行中」：主状态必须原样不动（此前会被改写成 worker_running）',
+    );
+    const budget = await pool.query<{ budget_max_tokens: number | null }>(
+      `select budget_max_tokens from pentest.worker_sessions where id = $1::uuid`,
+      [sessionId],
+    );
+    assert.equal(Number(budget.rows[0]?.budget_max_tokens), 1000);
+
+    // 阻塞态：先恢复或终止，不能靠追加预算当第二条恢复路径。
+    await pool.query(`update pentest.engagements set status = 'blocked' where id = $1::uuid`, [id]);
+    const blocked = await service.getState(id);
+    await assert.rejects(
+      () =>
+        service.extendBudget({
+          workerSessionId: sessionId,
+          operatorId: 'op',
+          reason: '绕过阻塞',
+          expectedStateVersion: blocked.stateVersion,
+          additionalTokens: 1000,
+        }),
+      (e: unknown) => e instanceof WorkflowRejection && e.code === 'classification_rejected',
+    );
+    assert.equal((await service.getState(id)).runMarker, 'blocked', '拒绝不得顺手改标记');
+
+    // 「complete + paused」也必须拒绝：在 report_ready 暂停、再签字导出就是这个形态，
+    // 放行会把已经结束的作业的运行标记复活成 running（2026-10-05 质检发现）。
+    await pool.query(
+      `update pentest.engagements set status = 'paused', current_status = 'complete' where id = $1::uuid`,
+      [id],
+    );
+    const signed = await service.getState(id);
+    await assert.rejects(
+      () =>
+        service.extendBudget({
+          workerSessionId: sessionId,
+          operatorId: 'op',
+          reason: '再给点额度',
+          expectedStateVersion: signed.stateVersion,
+          additionalTokens: 1000,
+        }),
+      (e: unknown) =>
+        e instanceof WorkflowRejection && e.code === 'classification_rejected' && /签字导出/.test(e.message),
+    );
+    assert.equal((await service.getState(id)).runMarker, 'paused', '拒绝不得复活已签字导出的作业');
+  });
+
+  test('结束技术测试：worker_running 那条边可用，且关掉在跑的会话、吊销其租约', async () => {
+    const id = await newEngagement();
+    const started = await service.startWorker({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '开跑',
+      expectedStateVersion: (await service.getState(id)).stateVersion,
+      phase: 'intelligence-gathering',
+      taskPrompt: '情报收集',
+      skillIds: [],
+      toolAllow: [],
+    });
+    const before = await service.getState(id);
+    assert.equal(before.mainStatus, 'worker_running', '前置条件：Agent 正在跑');
+
+    // §13.8 第二步：有在途执行或待决放行时不得结束技术测试（否则那条执行留在半空，
+    // 而作业已经宣布「技术测试结束」）。
+    await pool.query(
+      `insert into pentest.tool_runs
+         (engagement_id, worker_session_id, idempotency_key, tool_name, action_class,
+          arguments_json, policy_decision, status)
+       values ($1::uuid, $2::uuid, 'wf-inflight', 'pentest_exec', 'active_discovery',
+               '{}'::jsonb, '{}'::jsonb, 'running')`,
+      [id, started.workerSessionId],
+    );
+    await assert.rejects(
+      () =>
+        service.finishTechnicalTesting({
+          engagementId: id,
+          operatorId: 'op',
+          reason: '还有在途动作',
+          expectedStateVersion: before.stateVersion,
+        }),
+      (e: unknown) =>
+        e instanceof WorkflowRejection && e.code === 'classification_rejected' && /在途|运行中的工具执行/.test(e.message),
+      '在途工具执行必须拦住「结束技术测试」（§13.8）',
+    );
+    await pool.query(`delete from pentest.tool_runs where engagement_id = $1::uuid and status = 'running'`, [id]);
+
+    // 过期的待决凭证**不拦**：它谁也处置不了（人类入口对已过期一律抛 approval_expired，
+    // 界面把它置为不可交互，且没有任何生产路径会写 decision='expired'），若把它计入，
+    // 「Agent 申请放行 → 人类忘了处理 → 过期」会让结束技术测试**永久被拒**（2026-10-05 质检发现）。
+    await pool.query(
+      `insert into pentest.approvals
+         (engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
+          plan_hash, risk_summary, decision, expires_at)
+       values ($1::uuid, $2::uuid, 'active_discovery', '{}'::jsonb, '{}'::jsonb,
+               'expired-plan', '低', 'pending', now() - interval '1 minute')`,
+      [id, started.workerSessionId],
+    );
+
+    const draft = await service.finishTechnicalTesting({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '就此收工',
+      expectedStateVersion: before.stateVersion,
+    });
+    assert.equal(draft.engagementId, id);
+    const after = await service.getState(id);
+    assert.equal(after.mainStatus, 'report_ready', '§5.2 的 worker_running → report_ready 边必须能走');
+    assert.equal(after.activeWorkerSessionId, null);
+
+    const session = await pool.query<{ status: string }>(
+      `select status from pentest.worker_sessions where id = $1::uuid`,
+      [started.workerSessionId],
+    );
+    assert.equal(session.rows[0]?.status, 'closed', '在跑的会话必须收进终态，否则 Agent 继续烧预算');
+    const leases = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.session_leases
+        where worker_session_id = $1::uuid and revoked_at is null`,
+      [started.workerSessionId],
+    );
+    assert.equal(leases.rows[0]?.n, 0, '会话终结必须连带吊销租约（否则死凭证仍能通过准入）');
+    await assertLedgerLegal(id);
+  });
+
+  test('暂停中不能结束技术测试：先恢复或终止（服务端与界面共用同一份判定）', async () => {
+    const id = await newEngagement();
+    await service.startWorker({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '开跑',
+      expectedStateVersion: (await service.getState(id)).stateVersion,
+      phase: 'intelligence-gathering',
+      taskPrompt: '情报收集',
+      skillIds: [],
+      toolAllow: [],
+    });
+    const running = await service.getState(id);
+    const paused = await service.pause({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '先停一下',
+      expectedStateVersion: running.stateVersion,
+    });
+    await assert.rejects(
+      () =>
+        service.finishTechnicalTesting({
+          engagementId: id,
+          operatorId: 'op',
+          reason: '暂停中收工',
+          expectedStateVersion: paused.stateVersion,
+        }),
+      (e: unknown) =>
+        e instanceof WorkflowRejection && e.code === 'classification_rejected' && /结束技术测试/.test(e.message),
+    );
+    assert.equal((await service.getState(id)).mainStatus, 'worker_running', '拒绝不得改状态');
+  });
+
+  test('投递失败的补偿：会话 failed、作业 blocked、账本留事件，且仍有恢复出口', async () => {
+    const { id, sessionId } = await newWaitingHumanSession();
+    await pool.query(
+      `insert into pentest.session_leases (engagement_id, worker_session_id, generation, expires_at)
+       values ($1::uuid, $2::uuid, 1, now() + interval '10 minutes')`,
+      [id, sessionId],
+    );
+    // 让投递必然失败：假工厂把「已关闭」的 dsh 标识一律拒收。
+    sessions.closed.push(`dsh-${sessionId}`);
+    const before = await service.getState(id);
+    await assert.rejects(
+      () =>
+        service.interject({
+          workerSessionId: sessionId,
+          message: '唤醒',
+          expectedStateVersion: before.stateVersion,
+        }),
+      (e: unknown) => e instanceof WorkflowRejection && e.code === 'lease_revoked',
+    );
+
+    const after = await service.getState(id);
+    assert.equal(after.runMarker, 'blocked', '投递失败必须交给人类处置，而不是停在「运行中」');
+    const session = await pool.query<{ status: string }>(
+      `select status from pentest.worker_sessions where id = $1::uuid`,
+      [sessionId],
+    );
+    assert.equal(session.rows[0]?.status, 'failed');
+    const leases = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.session_leases
+        where worker_session_id = $1::uuid and revoked_at is null`,
+      [sessionId],
+    );
+    assert.equal(leases.rows[0]?.n, 0, '终结会话必须连带吊销租约');
+    const events = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.context_events
+        where engagement_id = $1::uuid and event_type = 'workflow.delivery_failed'`,
+      [id],
+    );
+    assert.equal(events.rows[0]?.n, 1, '补偿动作必须留痕');
+
+    // 人类处置后仍有出口：blocked → running（主状态保持投递前的位置）。
+    const resumed = await service.resume({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '换会话继续',
+      expectedStateVersion: after.stateVersion,
+    });
+    assert.equal(resumed.runMarker, 'running');
+  });
+
+  test('插话的乐观锁：两条路径都消费 expectedStateVersion（不再「比对必然通过」）', async () => {
+    const { id, sessionId } = await newWaitingHumanSession();
+    const before = await service.getState(id);
+    await assert.rejects(
+      () =>
+        service.interject({
+          workerSessionId: sessionId,
+          message: '基于过期快照',
+          expectedStateVersion: before.stateVersion + 1,
+        }),
+      (e: unknown) => e instanceof WorkflowRejection && e.code === 'stale_state_version',
+    );
+
+    const woken = await service.interject({
+      workerSessionId: sessionId,
+      message: '请先看 10.0.0.5',
+      expectedStateVersion: before.stateVersion,
+    });
+    assert.equal(woken.transitionType, 'interject_wake');
+    const running = await service.getState(id);
+
+    // 运行中投递不改状态，但同样要核对版本：否则双击会把同一条指令投两次。
+    await assert.rejects(
+      () =>
+        service.interject({
+          workerSessionId: sessionId,
+          message: '再投一次',
+          expectedStateVersion: running.stateVersion + 5,
+        }),
+      (e: unknown) => e instanceof WorkflowRejection && e.code === 'stale_state_version',
+    );
+    const delivered = await service.interject({
+      workerSessionId: sessionId,
+      message: '按当前版本投递',
+      expectedStateVersion: running.stateVersion,
+    });
+    assert.equal(delivered.transitionType, 'none');
+    assert.equal(delivered.delivered, true);
   });
 
 });

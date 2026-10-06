@@ -1,0 +1,27 @@
+id: directory-listing-enabled
+
+info:
+  name: 目录列表开启
+  author: dsh-pentest
+  severity: low
+  description: |
+    目标对根目录（或常见子目录）返回自动生成的目录索引。
+    只读探测：判定索引形态（Apache/nginx/Python http.server 三种模板），不递归抓取。
+  tags: exposure,misconfig
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+      - "{{BaseURL}}/uploads/"
+      - "{{BaseURL}}/files/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        words:
+          - "Index of /"
+          - "<title>Directory listing for"
+        condition: or

@@ -353,6 +353,8 @@ export class EngagementFlow {
         ],
       );
       await this.#core.deps.txDb.query(
+        // version-bump-registered:policy-snapshot-switch —— 理由见 transition-table.ts 的登记表：
+        // 审批模式切换要推进版本（旧凭证与在途计划当场失效），但它不是状态转移。
         `update pentest.engagements
             set policy_version = $2, policy_snapshot = $3::jsonb, policy_snapshot_hash = $4,
                 policy_epoch = $5, state_version = state_version + 1, updated_at = now()

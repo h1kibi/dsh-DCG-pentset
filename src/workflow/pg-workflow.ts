@@ -16,7 +16,7 @@
  * （102 行逐字重复，2026-10-05 复核删除），两处漂移过就没人知道该信哪份。
  */
 
-import type { ApprovalModeChange, ApprovalModeChangeRef, ArchiveEngagementInput, PurgeEngagementInput, PurgePreview, PurgeResult, ApprovalDetail, ApprovalRecord, BootstrapIntakeInput, BootstrapIntakeResult, BudgetExtension, CandidateAsset, ConfirmScopeProposalInput, ConfirmedScopeProposal, CreateEngagementInput, EngagementMemory, EngagementSummary, GetEngagementMemoryInput, GetScopeInput, HandoffDraft, HumanAbort, HumanApprovalDecision, HumanApprovalRevocation, HumanCancel, HumanFinishTesting, HumanPause, HumanReopen, HumanResume, HumanReportSignature, HumanWorkflowService, IntakeStatus, IntakeStatusInput, Interjection, InterjectionResult, ListApprovalsInput, ListCandidateAssetsInput, ListEngagementsInput, ListWorkerSessionsInput, OpenTaskInput, OpenTaskResult, PolicyPreview, PolicyPreviewInput, PreviewScopeInput, ReportDraft, ReportVersionRef, RejectScopeProposalInput, RetryRequest, ScopeAmendment, ScopeDetail, ScopePreview, ScopeProposal, ScopeVersionRef, StartWorkerInput, StartedWorker, SystemPauseRequest, SystemWorkflowService, TransitionConfirmation, TransitionResult, UpdateEngagementMemoryInput, WorkerReportInput, WorkerSessionSummary, WorkflowSnapshot,
+import type { ApprovalModeChange, ApprovalModeChangeRef, ArchiveEngagementInput, PurgeEngagementInput, PurgePreview, PurgeResult, ApprovalDetail, ApprovalRecord, BootstrapIntakeInput, BootstrapIntakeResult, BudgetExtension, CandidateAsset, ConfirmScopeProposalInput, ConfirmedScopeProposal, CreateEngagementInput, EngagementMemory, EngagementSummary, GetEngagementMemoryInput, GetScopeInput, HandoffDraft, HumanAbort, HumanApprovalDecision, HumanApprovalRevocation, HumanCancel, HumanFinishTesting, HumanPause, HumanReopen, HumanResume, HumanReportSignature, HumanWorkflowService, IntakeStatus, IntakeStatusInput, Interjection, InterjectionResult, ListApprovalsInput, ListCandidateAssetsInput, ListEngagementsInput, ListWorkerSessionsInput, OpenTaskInput, OpenTaskResult, PolicyPreview, PolicyPreviewInput, PreviewScopeInput, ReportDraft, ReportVersionRef, RejectScopeProposalInput, RetryRequest, ScopeAmendment, ScopeDetail, ScopePreview, ScopeProposal, ScopeVersionRef, StartWorkerInput, StartedWorker, SystemPauseRequest, SystemWorkflowService, TransitionConfirmation, TransitionResult, UpdateEngagementMemoryInput, WorkerSessionSummary, WorkflowSnapshot,
   Phase,
 } from '../contracts.ts';
 import type { WorkflowServiceDeps } from './model.ts';
@@ -151,12 +151,6 @@ export class PgWorkflowService implements HumanWorkflowService, SystemWorkflowSe
 
   async startWorker(input: StartWorkerInput): Promise<StartedWorker> {
     return this.#sessionFlow.startWorker(input);
-  }
-
-  // ───────────────────────── Worker 自报成果（工具调用，非人类） ─────────────────────────
-
-  async finishWorker(input: { workerSessionId: string; report: WorkerReportInput }): Promise<WorkflowSnapshot> {
-    return this.#sessionFlow.finishWorker(input);
   }
 
   // ───────────────────────── 交接草稿与切换 ─────────────────────────

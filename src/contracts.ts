@@ -48,6 +48,105 @@ export type MainStatus = (typeof MAIN_STATUSES)[number];
 export const RUN_MARKERS = ['running', 'paused', 'blocked', 'aborted', 'failed'] as const;
 export type RunMarker = (typeof RUN_MARKERS)[number];
 
+/**
+ * 运行期动作（暂停 / 恢复 / 终止 / 插话）的可用性——**服务端与客户端共用同一份判定**。
+ *
+ * ── 为什么是单源 ──
+ *
+ * 这三条规则此前只在客户端实现（`RunControls` 的按钮禁用），服务端不设前置：界面挡住
+ * 的操作，经控制台端点直调照样生效。实测过的后果有两条：
+ *
+ *   1. `abort` 之后还能 `pause`，再 `resume`——而终止已经把所有会话置为 `closed`、
+ *      吊销了全部租约，于是作业留下「运行标记 running、主状态 worker_running、
+ *      活动会话指向一行已关闭的会话」的僵尸；
+ *   2. 签字导出（主状态 `complete`）之后仍能暂停/终止——那只是噪音，且会让
+ *      「终态」这个词在账本里失去意义。
+ *
+ * 因此判定收进契约层：服务端把它当**前置**（拒绝并给出具体标记），客户端把它当
+ * **禁用依据**（文案各自渲染，判定不各写一份）。
+ *
+ * ── 各条规则 ──
+ *
+ * - `complete`（已签字导出）：一切运行期动作无意义，全 false；
+ * - `canPause`：只有 `running` 能暂停（对已暂停的再暂停是空操作，对终止后的暂停是复活入口）；
+ * - `canResume`：`paused` 与 `blocked` 都可以恢复。`blocked` 由启动对账（§15.2）与
+ *   会话创建失败写入，语义是「等人类处置」——人类处置完必须有一条受支持的出口，
+ *   否则堵塞的作业只能靠改库收场；
+ * - `canAbort`：终止是人类的兜底手段，除 `aborted` / `failed` 两个终态外都可用
+ *   （连 `blocked` 也要能终止，理由同上）；
+ * - `canInterject`：只对「正在运行的标记 + 有活动会话」开放。暂停或阻塞时投递无人消费，
+ *   等待人工时人类该做的是交接而不是插话（§6.7）。
+ */
+export interface RunActionAvailability {
+  readonly canPause: boolean;
+  readonly canResume: boolean;
+  readonly canAbort: boolean;
+  readonly canInterject: boolean;
+  /**
+   * 「结束技术测试」（§5.2 那两条指向 `report_ready` 的边）的可用性。
+   *
+   * 允许的起点是**等待人工判断**（Agent 已交报告）与 **Agent 正在跑**（人类决定就此收工），
+   * 且运行标记为 `running`：暂停/阻塞时先恢复或终止，别把「停止工作」混进中间态。
+   */
+  readonly canFinishTesting: boolean;
+  /**
+   * 「追加预算」（§10.5）的可用性：运行中或已暂停，且作业**没有签字导出**。
+   *
+   * 它是契约层判定的一部分而不是服务方法里现拼的条件——现拼过一版
+   * （`canPause || runMarker === 'paused'`），漏掉了 `complete`：在 `report_ready` 时暂停、
+   * 再签字导出的作业会停在「complete + paused」，于是追加预算把已经结束的作业的
+   * 运行标记复活成 `running`（2026-10-05 质检发现）。
+   */
+  readonly canExtendBudget: boolean;
+}
+
+export function runActionAvailability(state: {
+  readonly mainStatus: MainStatus;
+  readonly runMarker: RunMarker;
+  readonly activeWorkerSessionId: string | null;
+}): RunActionAvailability {
+  if (state.mainStatus === 'complete') {
+    return {
+      canPause: false,
+      canResume: false,
+      canAbort: false,
+      canInterject: false,
+      canFinishTesting: false,
+      canExtendBudget: false,
+    };
+  }
+  const terminal = state.runMarker === 'aborted' || state.runMarker === 'failed';
+  return {
+    canPause: state.runMarker === 'running',
+    canResume: state.runMarker === 'paused' || state.runMarker === 'blocked',
+    canAbort: !terminal,
+    canInterject: state.activeWorkerSessionId !== null && state.runMarker === 'running',
+    canFinishTesting:
+      state.runMarker === 'running' &&
+      (state.mainStatus === 'worker_running' || state.mainStatus === 'waiting_human_review'),
+    canExtendBudget: state.runMarker === 'running' || state.runMarker === 'paused',
+  };
+}
+
+/**
+ * **允许触及目标动作的主状态**（§10.2 的执行闸门）。
+ *
+ * 只有两个：`worker_running`（Agent 正在干活）与 `waiting_human_review`
+ * （Agent 交完报告等人类判断——人类**批准某条放行后**唤醒它继续，所以这一态必须能执行）。
+ *
+ * 其余主状态一律不执行：
+ *   - `auth_pending`（未授权）、`handoff_drafting` / `transition_confirmation`（交接中，
+ *     §16.1 明确「起草不授予任何工具权限」）、`report_ready`（人类已宣布结束技术测试）、
+ *     `complete`（已签字导出）。
+ *
+ * 为什么它必须和运行标记一起进**执行侧的原子条件**：运行标记只管暂停/阻塞/终止，
+ * 看不见「作业已经收工」。少了这一半，`结束技术测试` 之后仍在跑的会话照样能把动作
+ * 提交上去（2026-10-05 质检发现的时间窗：结束测试的事务提交后、租约被吊销前，
+ * 一条在等的 `commitRun` 会重新求值并通过）。因此它与 `runActionAvailability`
+ * 一样是**单源**：执行侧的受理闸门与提交语句都消费这一份。
+ */
+export const EXECUTION_MAIN_STATUSES = ['worker_running', 'waiting_human_review'] as const;
+
 /** 会话级状态。终态为 closed / superseded / failed（存活索引不覆盖它们）。 */
 export const SESSION_STATUSES = [
   'starting',
@@ -188,24 +287,166 @@ export const DEFAULT_DISABLED_CLASSES = [
 ] as const satisfies readonly ActionClass[];
 
 /**
- * 沙箱工具镜像里**实际装好**的命令（权限放开后的真实工具面）。
+ * 沙箱工具镜像的**声明源**：既进会话提示词（每个新会话都注入一套「有什么、怎么用」），
+ * 又与 `docker/tools/Dockerfile` 做**源码级一致性核对**（`test/sandbox-environment.test.ts`：
+ * 每个工具的 `from` 都必须能在 Dockerfile 的 apt / pip / go 清单里找到）。
  *
- * 它进会话提示词，让 Agent 知道手上有什么（否则它会以为只有模板那几个动作）。
- * 唯一事实来源是 `docker/tools/Dockerfile`——改镜像时必须同步这一行，否则提示词会撒谎。
+ * 为什么必须是同源：提示词里写着一个镜像里没有的工具，模型会反复调用失败并把它归因成
+ * 「目标不可达」——这种谎言的代价是整轮侦察跑偏，而它在纯文本层面看不出任何异常。
+ *
+ * `usage` 是给模型看的一句话（什么时候用、用的时候注意什么），不是给人看的简介。
  */
-export const SANDBOX_TOOLBELT = [
-  'nmap',
-  'curl',
-  'wget',
-  'nc',
-  'dig',
-  'openssl',
-  'jq',
-  'whois',
-  'ping',
-  'ffuf',
-  'sqlmap',
+export interface SandboxTool {
+  readonly name: string;
+  /** 出处：apt 包名 / pip 模块名 / go 模块路径 / base 镜像自带——测试回到 Dockerfile 核对。 */
+  readonly from: string;
+}
+
+export interface SandboxToolGroup {
+  readonly group: string;
+  readonly usage: string;
+  readonly tools: readonly SandboxTool[];
+}
+
+export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
+  {
+    group: '侦察与资产测绘',
+    usage:
+      '先端口与服务、再指纹与 DNS/子域：结构化通道（pentest_recon）能覆盖的就别手写命令。' +
+      'masscan 只在人类明确要求高速扫描时用（很响）；arp-scan/nbtscan 仅对同网段有意义。',
+    tools: [
+      { name: 'nmap', from: 'nmap' },
+      { name: 'masscan', from: 'masscan' },
+      { name: 'subfinder', from: 'github.com/projectdiscovery/subfinder' },
+      { name: 'dnsx', from: 'github.com/projectdiscovery/dnsx' },
+      { name: 'httpx', from: 'github.com/projectdiscovery/httpx' },
+      { name: 'katana', from: 'github.com/projectdiscovery/katana' },
+      { name: 'whatweb', from: 'whatweb' },
+      { name: 'dnsenum', from: 'dnsenum' },
+      { name: 'dig', from: 'dnsutils' },
+      { name: 'ip', from: 'iproute2' },
+      { name: 'whois', from: 'whois' },
+      { name: 'fping', from: 'fping' },
+      { name: 'traceroute', from: 'traceroute' },
+      { name: 'mtr', from: 'mtr-tiny' },
+      { name: 'arp-scan', from: 'arp-scan' },
+      { name: 'nbtscan', from: 'nbtscan' },
+    ],
+  },
+  {
+    group: 'Web 内容与核验',
+    usage:
+      '目录/文件枚举用 ffuf 或 feroxbuster（先量软 404 基线）；nuclei 只用镜像自带的只读模板' +
+      '（/opt/pentest-templates），**不要**从网上下载模板——上游模板集含入侵性用例。sqlmap 属利用类动作，逐条人批。',
+    tools: [
+      { name: 'ffuf', from: 'ffuf' },
+      { name: 'gobuster', from: 'gobuster' },
+      { name: 'dirb', from: 'dirb' },
+      { name: 'wfuzz', from: 'wfuzz' },
+      { name: 'nuclei', from: 'github.com/projectdiscovery/nuclei' },
+      { name: 'sqlmap', from: 'sqlmap' },
+      { name: 'commix', from: 'commix' },
+    ],
+  },
+  {
+    group: '凭据与杂凑',
+    usage:
+      '**默认禁止爆破/喷洒**（见 skills/exploit-auth-testing：单账号 ≤5 次、间隔 ≥1s，且必须人类逐条放行）。' +
+      'john 用于离线杂凑破解（拿到杂凑后在本机算，不打目标）；hashid 只做形态识别。',
+    tools: [
+      { name: 'hydra', from: 'hydra' },
+      { name: 'john', from: 'john' },
+      { name: 'hashid', from: 'hashid' },
+    ],
+  },
+  {
+    group: 'AD / Windows 服务',
+    usage:
+      '只读枚举优先（`smbclient -L`/`smbmap -H`/`impacket-…` 的只读用法）；任何写 share、改配置的动作都属于' +
+      '带破坏性的类别，要人类逐条放行。impacket 在本镜像里**有两套名字**（2026-10-06 实测）：' +
+      '`impacket-<脚本>`（如 impacket-smbclient，来自 apt 的 python3-impacket，随 smbmap 进来，在 /usr/bin）' +
+      '与 73 个上游原名 `*.py`（如 GetNPUsers.py / secretsdump.py，来自 pip 的 impacket，在 /usr/local/bin）。' +
+      '两套都能用，找不到 `impacket-x` 时试 `x.py`。' +
+      '**netexec / enum4linux-ng 本镜像没有**：两者只从 GitHub 安装，而构建网络不可达 github.com——' +
+      '需要它们的一体化 AD 用例时改用 impacket 逐条命令，或由人类在本机导入镜像。',
+    tools: [
+      { name: 'smbclient', from: 'smbclient' },
+      { name: 'smbmap', from: 'smbmap' },
+      { name: 'ldapsearch', from: 'ldap-utils' },
+      { name: 'snmpwalk', from: 'snmp' },
+      { name: 'impacket-*', from: 'impacket' },
+    ],
+  },
+  {
+    group: 'TLS / 加密',
+    usage: '证书与协议面从「已裁决地址」拨号（--connect <地址>:<端口>），域名只作 SNI/Host。',
+    tools: [
+      { name: 'openssl', from: 'openssl' },
+      { name: 'sslscan', from: 'sslscan' },
+      { name: 'testssl', from: 'testssl.sh' },
+      { name: 'sslyze', from: 'sslyze' },
+    ],
+  },
+  {
+    group: '隧道与转发',
+    usage:
+      '建立可达性通道属于 `lateral_movement` 类别——**永远逐条人工放行**，且目标网段必须已在范围快照里。' +
+      '用完必须关闭并在后渗透阶段核查清理。',
+    tools: [
+      { name: 'chisel', from: 'github.com/jpillora/chisel' },
+      { name: 'socat', from: 'socat' },
+      { name: 'proxychains4', from: 'proxychains4' },
+      { name: 'ssh', from: 'openssh-client' },
+      { name: 'scp', from: 'openssh-client' },
+      { name: 'sshpass', from: 'sshpass' },
+      { name: 'nc', from: 'netcat-openbsd' },
+    ],
+  },
+  {
+    group: '脚本与数据处理',
+    usage:
+      '长输出**先落 /tmp 再用 jq/grep 处理**：容器输出有上限（超限截断，宿主侧还有一层缓冲上限）。' +
+      'python3 预装了 requests / dnspython / beautifulsoup4 / lxml / paramiko / pyjwt / pycryptodome / scapy / pwntools / impacket。',
+    tools: [
+      { name: 'python3', from: 'python:3.10-slim-bookworm' },
+      { name: 'curl', from: 'curl' },
+      { name: 'wget', from: 'wget' },
+      { name: 'jq', from: 'jq' },
+      { name: 'git', from: 'git' },
+      { name: 'rsync', from: 'rsync' },
+      { name: 'xxd', from: 'xxd' },
+      { name: 'file', from: 'file' },
+    ],
+  },
 ] as const;
+
+/** 扁平清单（兼容旧用法：能力快照里的「工具名列表」由它生成，不再手写第二份）。 */
+export const SANDBOX_TOOLBELT: readonly string[] = SANDBOX_TOOL_GROUPS.flatMap((group) =>
+  group.tools.map((tool) => tool.name),
+);
+
+/** 自建 nuclei 模板的容器内路径（提示词与测试都用它，避免两处字面量）。 */
+export const SANDBOX_TEMPLATE_DIR = '/opt/pentest-templates';
+
+/**
+ * 镜像里预置的字典（`/usr/share/wordlists/`）。同样进提示词并与 Dockerfile 核对——
+ * 模型不知道有什么字典时，要么裸猜路径，要么自己造一份很差的小字典。
+ */
+export interface SandboxWordlist {
+  readonly file: string;
+  readonly purpose: string;
+}
+
+export const SANDBOX_WORDLISTS: readonly SandboxWordlist[] = [
+  { file: 'common.txt', purpose: '通用目录/文件名（约 4700 条；内容发现的首选）' },
+  { file: 'raft-small-directories.txt', purpose: '目录名（小字典，递归发现用）' },
+  { file: 'raft-small-files.txt', purpose: '文件名（备份/配置/脚本后缀）' },
+  { file: 'quickhits.txt', purpose: '高价值敏感路径（配置、凭据、管理面板）' },
+  { file: 'api-endpoints.txt', purpose: 'API 端点命名' },
+  { file: 'subdomains-5000.txt', purpose: '子域标签（DNS 枚举/爆破）' },
+  { file: 'top-usernames.txt', purpose: '用户名短表（**不用于爆破**，只用于单次猜测）' },
+  { file: 'top-passwords-1000.txt', purpose: '口令短表（同上：单次猜测，禁爆破）' },
+];
 /** 服务端展开的范围入口；只描述入口语义，不改变具体 ScopeTarget kind。 */
 export const SCOPE_ENTRY_PROFILES = ['ip', 'domain', 'cidr', 'custom'] as const;
 export type ScopeEntryProfile = (typeof SCOPE_ENTRY_PROFILES)[number];
@@ -556,6 +797,8 @@ export const DOMAIN_EVENT_TYPES = [
   'worker.session.closed',
   'session.reconciled',
   'engagement.blocked_by_recovery',
+  'workflow.delivery_failed',
+  'workflow.close_session_failed',
   'tool.run.marked_unknown',
   'worker.report',
   'worker.status_note',
@@ -728,7 +971,6 @@ export interface HumanWorkflowService {
   listCandidateAssets(input: ListCandidateAssetsInput): Promise<readonly CandidateAsset[]>;
   getState(engagementId: string): Promise<WorkflowSnapshot>;
   startWorker(input: StartWorkerInput): Promise<StartedWorker>;
-  finishWorker(input: FinishWorkerInput): Promise<WorkflowSnapshot>;
   /**
    * 「进入下一阶段」的**服务端起稿**：不经过 Agent，按阶段定义与当前状态给出可直接编辑的
    * 提示词与上下文（人类在编辑器里改完再确认）。
@@ -1427,11 +1669,6 @@ export interface RejectScopeProposalInput extends HumanActor {
 }
 
 
-interface FinishWorkerInput {
-  readonly workerSessionId: string;
-  readonly report: WorkerReportInput;
-}
-
 export interface WorkerReportInput {
   readonly status: 'report_ready' | 'blocked';
   readonly objective: string;
@@ -1570,7 +1807,15 @@ export interface Interjection {
   readonly workerSessionId: string;
   readonly message: string;
   readonly operatorId?: string;
-
+  /**
+   * 人类读到的那一版状态。**必填**——插话是投进模型上下文的消息，重放或双击会把
+   * 同一条指令送进会话两次（对模型可见的副作用），因此它必须和别的写操作一样带锚点。
+   *
+   * 此前这个字段不存在：控制台端点的 `lock` 是 `envelope`，本层的注释自己写着
+   * 「这是服务契约的缺口」——信封要求携带版本，但输入里没有它，服务只能在内部自取
+   * 当前版本，于是比对必然通过。现在补齐：`lock: 'actor'`、两条路径都消费它。
+   */
+  readonly expectedStateVersion: number;
 }
 
 export interface InterjectionResult {

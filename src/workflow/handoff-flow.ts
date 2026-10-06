@@ -636,7 +636,7 @@ export function seedHandoffContent(input: {
   ].filter((section): section is string => section !== null);
   const prompt = sections.join('\n\n');
   const suggestedSkillIds = [...SKILL_PACKS[input.toPhase]];
-  const allowed = [...DEFAULT_PHASE_TOOL_ALLOW];
+  const allowed = [...DEFAULT_PHASE_TOOL_ALLOW[input.toPhase]];
   const limitations = [
     '初始内容由服务端按阶段定义与当前状态生成（没有 Agent 起草）：请逐项核对、按需改写后再确认。',
   ];

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@a197af1d36f6：nmap -sS -Pn -p 8000 → 8000/tcp open；-sT 端口表与 banner 形态"
+  smoked: "沙箱实测@f239cd79a21d：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open"
 ---
 
 # 网络面清点（recon-network-surface）
@@ -22,6 +22,18 @@ metadata:
 - 速率：宿主按行为预设限速（stealth 1/s、deep 10/s）。**命令里不要自己加 `--min-rate` 去顶**，被限速器排队才是预期。
 
 ## 步骤
+
+> **优先用 `pentest_recon`（结构化侦察入口），不要手写 nmap。** 它的参数只有枚举与整数、
+> 目标从选择器注入、容器只打**已裁决地址**，类别是 `active_discovery`——**不需要逐条人工放行**，
+> 由范围/租约/节奏约束；而下面这些 ```bash 形态（经 `pentest_exec` 走）类别是 `exploit_validation`，
+> **每条都要人类点一次**。只有当本 skill 需要 `pentest_recon` 未覆盖的选项时才手写命令。
+
+| 本 skill 的步骤 | 用这个 technique | 关键参数 |
+|---|---|---|
+| 1 可达性 | `port_scan` | `scope=top100`、`ping=syn` |
+| 2 端口清点 | `port_scan` | `scope=top1000`（或 `ports=8000,8080-8090` 显式表达式；`none` 表示按档位） |
+| 3 服务指纹 | `service_probe` | `ports=<上一步 open 的端口>`、`intensity=light` |
+| 4 只读脚本核验 | `nse_safe` | `port=<端口>`、`scripts=http-title,http-headers`（白名单由沙箱强制） |
 
 ### 1. 先确认可达（一次，成本最低）
 ```bash

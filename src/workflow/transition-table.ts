@@ -165,7 +165,55 @@ export const TRANSITION_DISPATCH: Readonly<Record<TransitionType, TransitionDisp
   },
 };
 
-// ───────────────────────────── 不变量 ─────────────────────────────
+// ───────────────────────────── 版本推进的记账登记 ─────────────────────────────
+
+/**
+ * **不经转移行**推进 `engagements.state_version` 的登记表。
+ *
+ * §5.4 要求「每次转移都推进状态版本」；反过来「每次推进都有对应转移行」**并不成立**，
+ * 因为有三类写入发生在转移之外：
+ *
+ *   1. **Agent 侧提交报告**（`worker_running → waiting_human_review`，图上 `recorded: false`）；
+ *   2. **intake 暂存/复位**：作业在 `auth_pending` 的起点上还没有转移记录
+ *      （§5.2 的图从 `AUTH_PENDING` 开始，`[*] → AUTH_PENDING` 没有取值）；
+ *   3. **策略快照切换**（审批模式变更）：写新策略版本与 policy epoch，旧凭证当场失效，
+ *      版本必须推进——但它不是状态转移。
+ *
+ * 这些推进**不能静默**：登记在此，`test/state-ledger.test.ts` 扫描全仓
+ * `state_version` 的赋值点，凡未带登记的 tag、又不属于转移内的合法推进（
+ * `version-bump-sanctioned:transition`）的，直接红。
+ *
+ * 与 `scripts/verify-promises.ts` 同一思路的棘轮：新增一处漏记账的版本推进，
+ * 必须同时在这张表里写下理由——「账本出现无法解释的版本跳跃」才会在评审时被看见，
+ * 而不是等到回放对不上状态。
+ */
+export const NON_TRANSITION_VERSION_BUMPS = [
+  {
+    id: 'worker-report',
+    file: 'src/memory/pg-worker-tools.ts',
+    reason:
+      'Agent 侧提交报告：`worker_running → waiting_human_review` 是 `recorded: false` 的边（§5.2/§5.4 只规范人类操作），版本要推进但账本不写行。',
+  },
+  {
+    id: 'intake-staging',
+    file: 'src/workflow/intake.ts',
+    reason:
+      'intake 暂存与复位：作业停在 `auth_pending`，图上还没有可记账的边；版本推进用于让其它控制台手上的旧版本失效。',
+  },
+  {
+    id: 'policy-snapshot-switch',
+    file: 'src/workflow/engagement.ts',
+    reason:
+      '审批模式切换写新策略版本与 policy epoch：不是状态转移，但必须推进版本，使旧放行凭证与在途计划当场失效（§10.3）。',
+  },
+] as const;
+
+/** 登记项的 id 集合（测试用；新增登记项即自动纳入检查）。 */
+export const NON_TRANSITION_VERSION_BUMP_IDS: readonly string[] = NON_TRANSITION_VERSION_BUMPS.map(
+  (entry) => entry.id,
+);
+
+
 
 type DispatchProblemKind =
   | 'unknown_type'

@@ -1,0 +1,27 @@
+id: exposed-api-spec
+
+info:
+  name: 暴露的 API 规范（swagger / openapi）
+  author: dsh-pentest
+  severity: low
+  description: |
+    API 规范文件可公开读取：给出完整端点与参数清单，是后续核验的地图。
+    只读探测，不调用规范里描述的任何端点。
+  tags: exposure,swagger,api
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/swagger.json"
+      - "{{BaseURL}}/openapi.json"
+      - "{{BaseURL}}/v2/api-docs"
+      - "{{BaseURL}}/v3/api-docs"
+      - "{{BaseURL}}/api/swagger.json"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: regex
+        part: body
+        regex:
+          - '"(swagger|openapi)"\s*:'

@@ -37,14 +37,17 @@ metadata:
 
 ## 3. 沙箱的真实约束（写技能时必须遵守）
 
-镜像里装好了：`nmap curl wget nc dig openssl jq whois ping ffuf sqlmap` + python3
-（`requests` / `dnspython` / `beautifulsoup4`）+ 字典 `/usr/share/wordlists/{common.txt,raft-small-directories.txt,subdomains-5000.txt}`。
+**工具集的权威清单在 `src/contracts.ts` 的 `SANDBOX_TOOL_GROUPS`**（分组 + 一句话用法 + 出处），
+`test/sandbox-environment.test.ts` 会逐条回到 `docker/tools/Dockerfile` 核对——**不要在这里抄一份**，
+抄一份的结果是两边逐渐不一致（本节原先写着「镜像里装好了 nmap curl wget nc dig openssl jq whois ping ffuf sqlmap」，
+而镜像早已多出 nuclei / httpx / katana / subfinder / dnsx / hashcat / testssl / smbmap / chisel / iproute2 等几十个工具）。
+要确认某个工具在不在：`npm run verify:tool-image -- <镜像引用>` 全量列一遍。
 
+- **shell 是 bash**（2026-10-06 起；此前是 dash）。`$RANDOM`、`<(...)`、`[[ ]]`、数组都能用。
 - 容器内是 **root**，有 **NET_RAW**（`nmap -sS` 可用），`/tmp` 可写可执行，根可写，`--rm` 即弃。
-- **网络**：沙箱接入部署方指定的那张网；本部署 2026-10-05 起该网非 internal ⇒ **可出网**（可达范围与宿主一致，DNS 用宿主解析器）。写 skill 时别把「只能到授权目标」当成网络事实——它是**规则**（范围闸门 + 逐次放行）。
-  凡需要公网的步骤（查 CVE 网站、下载模板、外部解析器、外部 whois），必须写清两件事：
-  **证据纪律**（外部结果标来源；2026-10-05 起沙箱可出网，但外部资料不是目标证据）与
-  **取不到时怎么办**（改用人类提供的材料 / 记忆检索 / 由人类在控制台完成）。
+- **凭据与范围**：沙箱接的网本部署非 internal ⇒ **可出网**，但出网是**间歇的**（2026-10-06 实测同一天两次结果相反）。
+  凡需要公网的步骤（查 CVE、下载模板、外部解析器、外部 whois），必须写清两件事：
+  **证据纪律**（外部结果标来源，外部资料不是目标证据）与**取不到时怎么办**（改用人类提供的材料 / 记忆检索 / 由人类在控制台完成）。
 - 目标地址用**选择器给的已裁决地址**，不要自己解析域名。
 - 宿主按行为预设限速（stealth 1/s、standard 5/s、deep 10/s）。**不要**用 `--min-rate` 之类去顶；
   被排队是预期行为，不是故障，不要重试绕过。
@@ -52,15 +55,37 @@ metadata:
 
 ## 4. 允许的验证（每个 pack 至少冒烟一次）
 
+**先起一对实验室靶标**（2026-10-06 起用的就是这一对；比单个静态站更能覆盖技能里的判据：
+`.env`/`.git/HEAD`/`swagger.json`/`robots.txt`/登录表单 + 自签 TLS）：
+
+```bash
+FIX="$TEMP/dsh-fixture"            # 建好 index.html/page2.html/robots.txt/.env/.git/HEAD/swagger.json
+docker run -d --name fx-web --network pentest-lab-internal -v "$FIX:/srv:ro" \
+  --entrypoint python3 python:3.10-slim-bookworm -m http.server 8080 --bind 0.0.0.0 --directory /srv
+docker run -d --name fx-tls --network pentest-lab-internal python:3.10-slim-bookworm sh -c \
+  "openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/k.pem -out /tmp/c.pem -days 1 \
+     -subj /CN=smoke.local -addext subjectAltName=DNS:smoke.local >/dev/null 2>&1 && \
+   openssl s_server -quiet -accept 8443 -cert /tmp/c.pem -key /tmp/k.pem -www"
+```
+
+靶标地址：**fx-web `172.29.0.2:8080`**、**fx-tls `172.29.0.3:8443`**（SNI `smoke.local`）。**别打别的地址。**
+
+冒烟就在真实沙箱参数下跑（与宿主侧 `buildDockerArgs` 一致）：
+
 ```bash
 docker run --rm --network pentest-lab-internal --cap-drop ALL --cap-add NET_RAW \
   --security-opt no-new-privileges --pids-limit 512 --cpus 2.0 --memory 2g \
-  --tmpfs /tmp:rw,exec,nosuid,size=512m \
-  --entrypoint /bin/sh 127.0.0.1:5005/pentest-tools@sha256:a197af1d36f678eee84372309e7f08d2c81151af93915cd454fd6fa02abe4bae \
+  --tmpfs /tmp:rw,exec,nosuid,size=512m --entrypoint /bin/bash \
+  "$(grep -A1 'name: 127.0.0.1:5005/pentest-tools' harness.dev.patch.yml | grep digest | awk '{print "127.0.0.1:5005/pentest-tools@"$2}')" \
   -c "<你的命令>"
 ```
 
-实验室靶标：`172.29.0.3:8000`（python http.server，只用来证明命令能跑、输出形态对）。**别打别的地址**。
+**摘要不要抄进本文件**（抄了就会过期——本节原先钉的 `a197af1d36f6` 早就不是当前镜像了）：上面这条从
+`harness.dev.patch.yml` 现取，它同时是 `test/skill-pack.test.ts` 比对 skill 冒烟背书的来源。
+
+**冒烟要跑技能里的原文配方**，不要跑"等价命令"：先按正文描述把 `/tmp/*.json` 台账铺好，再把占位符换成靶标真实值。
+2026-10-06 那次逐块验证就是这么抓到 9 处配方缺陷的（jq 表达式跑不通、步骤 1 产出的文件喂不动步骤 3、
+脱敏只匹配值不匹配键、`dig | head` 吞掉退出码……），而"等价命令"全部跑得过。
 
 ## 5. 交付
 

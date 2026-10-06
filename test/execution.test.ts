@@ -227,6 +227,8 @@ function binding(overrides: Partial<SessionBinding> = {}): SessionBinding {
     status: 'active',
     // 默认 running：绝大多数用例测的是别的闸门，不该被 engagement 状态拦住
     engagementStatus: 'running',
+    // 同上：默认工作态（主状态是闸门的另一半）。
+    mainStatus: 'worker_running',
     scopeVersion: 1,
     policyEpoch: 1,
     lease: lease(),
@@ -487,15 +489,19 @@ async function admitApproved(
 
 // ───────────────────────────── 模板注册表 ─────────────────────────────
 
-test('出厂注册表**只有一张**直连命令模板（2026-10-05 清理掉五个示例模板）', () => {
+test('出厂注册表：一张直连命令 + 两族结构化模板（侦察 / 核验）', () => {
   const registry = createRegistry(DEFAULT_TEMPLATES);
-  assert.ok(registry.get('direct_command'), '唯一通路：直连命令');
+  assert.ok(registry.get('direct_command'), '直连命令：逐条人批的那条通路');
   // 旧示例模板已删：镜像里有真工具（curl/nmap/nc/dig…），Agent 直接写命令，不必先猜模板名。
   for (const gone of ['http_read', 'tcp_connect', 'udp_probe', 'icmp_ping', 'dns_lookup', 'free_command']) {
     assert.equal(registry.get(gone), undefined, `${gone} 应已随清理删除`);
   }
   assert.equal(registry.get('sh_c'), undefined);
-  assert.equal(registry.list().length, 1);
+  // 2026-10-06 新增两族结构化模板：12 张 `recon_*`（情报收集）+ 4 张 `vuln_*`（漏洞分析），
+  // 类别都是 passive_read/active_discovery（不触发逐次放行）+ 那张直连命令 = 17。
+  // 数量断言在这里是**刻意的**：模板集变化必须同时改这一行与 test/action-templates.test.ts 的目录断言，
+  // 逼人解释新增了什么、以及它落在哪个类别上（类别决定要不要人批）。
+  assert.equal(registry.list().length, 17);
 });
 
 test('注册表拒绝重复模板 id', () => {
@@ -1714,7 +1720,7 @@ test('在途动作结束后不再计入终止范围', async () => {
 // ─────────────────── 直连命令模板（direct_command，唯一一张） ───────────────────
 
 /**
- * 这是「放开命令权限」的**唯一**入口，也是出厂注册表里唯一的一张模板（打开 `allowFreeForm`）。
+ * 这是「放开命令权限」的**唯一**入口（出厂注册表里唯一打开 `allowFreeForm` 的模板）。
  * 它用三条约束换自由：类别是 `exploit_validation`（本部署强制逐次人工放行）、仍然只跑在
  * 加固过的沙箱里、文本/超时/输出都有上限。下面四条断言就是这三条的机器表示。
  */

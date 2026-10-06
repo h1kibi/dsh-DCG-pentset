@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@a197af1d36f6：curl 头/标题；ffuf 1.1.0（无 -rate，用 -t/-p）命中 robots.txt；soft-404 基线 404/469"
+  smoked: "沙箱实测@f239cd79a21d：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）"
 ---
 
 # Web 面清点（recon-web-surface）
@@ -17,13 +17,26 @@ metadata:
 
 ## 前提与边界
 - 沙箱直连目标；本部署**可出网**（2026-10-05 起）——需要联网的做法（CDN 归属查询、在线指纹库、下载字典）现在都能用，但**外部结果不是目标证据**：标来源，结论以目标实测为准（取不到时的退化路径见第 8 步）。
-- 镜像里有 `curl`、`ffuf`、`python3`；**没有 `whatweb`/`httpx`**（实测），所以「指纹」全部用 `curl` 读头 + 标题 + 特征路径手工完成。
+- 镜像里有 `curl`、`ffuf`、`python3`，**也有 `whatweb`（0.5.5）与 `httpx`（ProjectDiscovery）**（2026-10-06 实测）。本技能的指纹步骤仍以 `curl` 读头 + 标题 + 特征路径为主：输出小、可逐条落到证据里；`whatweb`/`httpx` 作为**补强**（一次覆盖多特征、出 TechDetect 列表），用了就把原始输出另存进 `/tmp` 并记进证据，别只贴一行结论。
 - 目标地址用**选择器给的那份已裁决地址**，不要自己解析域名。
-- 容器 `/bin/sh` 是 **dash**：没有 `$RANDOM`、没有 bash 数组。写循环时用固定字符串或 `date +%s`，需要 bash 语法就显式调 `bash -c '...'`。
+- 自由命令的 shell **是 bash**（2026-10-06 起；此前是 Debian 的 dash，`$RANDOM`、`<(...)` 一类都会炸）。`$RANDOM`、进程替换、数组都能用。
 - 速率由宿主按行为预设（stealth 1/s、standard 5/s、deep 10/s）。命令里**不要**加 `--min-rate` 类参数去顶；被排队是预期行为。
 - 本技能只发 **GET / HEAD / OPTIONS** 这类只读请求。任何写方法（PUT/POST 写、DELETE）与目录递归爆破都越界。
 
 ## 步骤
+
+> **优先用 `pentest_recon`，不要手写 curl/ffuf。** 它把命令形态固定在服务端、参数只有枚举与整数、
+> 只打**已裁决地址**，类别 `active_discovery`——**不需要逐条人工放行**；手写命令走 `pentest_exec`
+> 是 `exploit_validation`，**每条都要人类批准**。本 skill 只在需要未覆盖选项时才落到 ```bash 形态。
+
+| 本 skill 的步骤 | 用这个 technique | 关键参数 |
+|---|---|---|
+| 1 可达性与状态码 | `http_probe` | `port=…`、`scheme=auto`、`collect=headers` |
+| 2 响应头与指纹 | `http_probe` | `collect=tech`（技术栈推断 + 关键响应头） |
+| 2b 安全响应头 | `http_probe` | `collect=security_headers`（六个头的有无） |
+| 4 robots / sitemap | `http_probe` | `collect=robots` 或 `collect=sitemap` |
+| 6 目录/文件枚举 | `content_discover` | `wordlist=common_dirs`、`extensions=none`、`rate=5` |
+| 7 命中复核与富化 | `http_probe` / `web_crawl` | `collect=tech`；`depth=2 max_pages=100` |
 
 ### 1. 站点可达性与状态码
 ```bash
@@ -99,16 +112,17 @@ done
 ### 6. 目录/文件枚举（保守并发）
 ```bash
 ffuf -u http://<目标>:<端口>/FUZZ \
-  -w /usr/share/wordlists/raft-small-directories.txt \
+  -w /usr/share/wordlists/common.txt \
   -t 5 -p 0.2 \
   -fs <第 5 步的软 404 字节数> \
   -of json -o /tmp/web-ffuf.json -s
 ```
-期望：命中行形如 `/robots.txt`、`/index.html`。
+期望：命中行形如 `/.git/HEAD`、`/robots.txt`、`/index.html`（2026-10-06 在静态靶站上就是这么命中的）。
 判据：`-fs` 已滤掉软 404，剩下的每条都用第 7 步复核后才算资产。
 注意事项（都是实测得到的）：
 - **本版本 ffuf v1.1.0 没有 `-rate`**，写 `-rate 5` 会直接报 `flag provided but not defined: -rate`。限速只能用 `-t`（并发）与 `-p`（每请求延迟）。
-- `raft-small-directories.txt` 共 **20115** 行；`-t 5 -p 0.2` 实测约 12 req/s，跑完约 25–30 分钟。时间预算紧就先跑 `/usr/share/wordlists/common.txt`（4751 行）或 `head -n 2000` 截断字典，并在覆盖说明里写明。
+- `common.txt` 共 **4723** 行（含扩展名的文件与目录混合字典），`-t 5 -p 0.2` 实测几分钟内跑完。
+- **想跑大字典再换 `raft-small-directories.txt`（20116 行）——但它是纯目录字典，没有文件项**：2026-10-06 实测它一条文件命中都产生不了（只有空行匹配到 `/`）。要用它必须配 `-e .txt,.html,.php` 之类扩展名，或另接文件字典；跑完约 25–30 分钟，时间紧就 `head -n 2000` 截断并在覆盖说明里写明。
 - 备选：`-ac`（自动校准）也能去掉软 404，但显式 `-fs` 的判据更可解释、更方便复核，优先用它。
 - 需要探文件扩展名时用 `-e .txt,.bak,.zip`；**不要**用 `-recursion` 无限递归——除非人类明确授权并给出深度。
 

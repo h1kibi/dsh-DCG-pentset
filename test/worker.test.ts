@@ -9,7 +9,8 @@
  *   1. `createWorkerTools` 在 `defineTool` 编译期**不抛**（A7 类缺陷的回归闸门）。
  *   2. 拿到的参数 schema 是**编译产物**（根 `type: 'object'` + `required` 数组），
  *      这证明第 1 条真的走过了编译路径，而不是空断言。
- *   3. 工具名集合与 `WORKER_TOOL_NAMES` 一致；`TARGET_TOOL_NAMES` 只含 `pentest_exec`。
+ *   3. 工具名集合与 `WORKER_TOOL_NAMES` 一致；`TARGET_TOOL_NAMES` 只含触及目标的三个
+ *      （`pentest_exec` / `pentest_recon` / `pentest_scan`）。
  *   4. `paramsOf` **不过滤**：object / array / boolean / null 原样到达服务，由服务端
  *      `validateParams` 判定拒绝（§10.2.1 禁止「忽略未知字段」）。
  *   5. 便签在工具边界按 `DEFAULTS.statusNoteMaxChars` 截断。
@@ -265,7 +266,7 @@ test('createWorkerTools 在 defineTool 编译期不抛异常（schema DSL 违规
 test('intake 范围提案工具不属于目标执行工具', () => {
   assert.equal(WORKER_TOOL_NAMES.includes('pentest_request_scope_confirmation'), true);
   assert.equal((TARGET_TOOL_NAMES as readonly string[]).includes('pentest_request_scope_confirmation'), false);
-  assert.deepEqual(TARGET_TOOL_NAMES, ['pentest_exec']);
+  assert.deepEqual([...TARGET_TOOL_NAMES], ['pentest_exec', 'pentest_recon', 'pentest_scan']);
 });
 
 test('参数 schema 是 defineTool 的编译产物——「不抛」这条断言确实走过了编译路径', () => {
@@ -379,8 +380,8 @@ test('全部 Worker 工具的参数 schema 都不含 dsh DSL 不支持的校验�
   }
 });
 
-test('TARGET_TOOL_NAMES 只含 pentest_exec，且是 WORKER_TOOL_NAMES 的真子集', () => {
-  assert.deepEqual([...TARGET_TOOL_NAMES], ['pentest_exec']);
+test('TARGET_TOOL_NAMES 含三条目标通路（人批的 pentest_exec + 结构化侦察/核验），且是 WORKER_TOOL_NAMES 的真子集', () => {
+  assert.deepEqual([...TARGET_TOOL_NAMES], ['pentest_exec', 'pentest_recon', 'pentest_scan']);
   const workerNames: readonly string[] = WORKER_TOOL_NAMES;
   for (const name of TARGET_TOOL_NAMES) {
     assert.ok(workerNames.includes(name), `目标类工具 ${name} 必须在 Worker 工具面内`);

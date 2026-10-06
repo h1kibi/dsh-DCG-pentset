@@ -240,20 +240,21 @@ export type ConsoleResponse = ConsoleOk | ConsoleFailure;
 // ───────────────────────────── 方法表 ─────────────────────────────
 
 /**
- * 期望版本被消费的方式。三种取值的保证**不同**，因此必须区分而不是笼统说"已加锁"：
+ * 期望版本被消费的方式。两种取值的保证**不同**，因此必须区分而不是笼统说"已加锁"：
  *
- * - `actor`：`expectedStateVersion` 合并进输入（该方法输入派生自 `HumanActor`），
- *   由服务在**它自己的转移事务内**做比对——真正的乐观锁，
- *   §15.4「两个界面同时提交切换，只有一个能成功」由它保证。
- * - `envelope`：信封必须携带，但**该方法的输入契约里没有这个字段**，服务读的是
- *   数据库里的当前版本（当前只有 `interject` 属于这一类：它在服务内部自取版本）。
- *   本层只能强制"必须显式给出"，无法替服务比对——声称已加锁会是假的。
- *   这是**服务契约的缺口**：要真正闭合，得让该方法的输入带上锚点。
+ * - `actor`：`expectedStateVersion` 合并进输入（该方法输入派生自 `HumanActor`，
+ *   或像 `interject` 那样显式声明该字段），由服务在**它自己的转移事务内**做比对——
+ *   真正的乐观锁，§15.4「两个界面同时提交切换，只有一个能成功」由它保证。
  * - `none`：不参与版本比对。纯读（`getState`）与审批决策
  *   （`decideApproval` / `revokeApproval` 的输入类型里没有 `expectedStateVersion`；
  *   审批的一次性由 `approvals.decision` 的状态迁移与 `consumeApproval` 保证）。
+ *
+ * 这里曾有第三种 `envelope`：「信封必须携带，但输入里没有这个字段，服务只能自取当前版本」。
+ * 它只被 `interject` 用过，而那正是缺口本身——服务端的比对必然通过，等于没加锁
+ * （层内注释自己写着「要真正闭合，得让该方法的输入带上锚点」）。2026-10-05 复核把它补上：
+ * `Interjection.expectedStateVersion` 进契约、端点改 `actor`，这一档随之删除。
  */
-type ConsoleLockKind = 'actor' | 'envelope' | 'none';
+type ConsoleLockKind = 'actor' | 'none';
 
 /** 命名参数的类型标签。校验是**结构化**的，不引入第二套 schema DSL（§21.0 A9）。 */
 type ConsoleParamKind =
@@ -431,15 +432,15 @@ const CLASSES = 'actionClassArray' as const;
 /**
  * RPC 暴露的方法集 = `HumanWorkflowService` 的人类面。
  *
- * `Record<Exclude<keyof HumanWorkflowService, 'finishWorker'>, …>` 不是装饰：
- * 它让**编译期**保证这张表恰好覆盖人类面且不多不少——服务新增方法而忘了挂端点会报错，
- * 把 `finishWorker` 加进来也会报错。
+ * `Record<keyof HumanWorkflowService, …>` 不是装饰：它让**编译期**保证这张表恰好覆盖
+ * 人类面且不多不少——服务新增方法而忘了挂端点会报错。
  *
- * `finishWorker` 被排除的理由（§4.2、§10.1）：它是 Worker 工具 `pentest_submit_report`
- * 的路径（自报成果，只把会话推进到等待人工，不改阶段）。模型可以调它，
- * 因此它不属于"人类专属"，不能出现在控制台面——否则控制台面就成了第二个模型可达的写入入口。
+ * 这里曾写 `Exclude<keyof HumanWorkflowService, 'finishWorker'>`：那时会话流程里还留着
+ * 一份 `finishWorker`（Worker 自报成果），它属于模型可达的写入面，必须挡在控制台之外。
+ * 2026-10-05 复核删掉了那份重复实现（报告准入只有 `PgWorkerTools.submitReport` 一条路径），
+ * 排除项随之取消——现在服务面的每个方法都该有端点，没有例外。
  */
-const WORKFLOW_METHOD_TABLE: Record<Exclude<keyof HumanWorkflowService, 'finishWorker'>, ConsoleMethodSpec> = {
+const WORKFLOW_METHOD_TABLE: Record<keyof HumanWorkflowService, ConsoleMethodSpec> = {
   // ── engagement 生命周期（授权向导与列表；§6.1、§11.1）──
   //
   // `lock: 'none'` 是有意的：`expectedStateVersion` 的用途是防止覆盖别人的修改
@@ -888,7 +889,10 @@ const WORKFLOW_METHOD_TABLE: Record<Exclude<keyof HumanWorkflowService, 'finishW
   // ── 运行中干预 ──
   interject: {
     kind: 'mutation',
-    lock: 'envelope',
+    // `actor`：`Interjection` 现在带 `expectedStateVersion`（2026-10-05 复核 F6 闭合
+    // 「服务契约的缺口」），服务在**两条路径**上都消费它——运行中投递核对人类读到的那一版
+    // （防双击/重放把同一条指令送进会话两次），唤醒路径用它做乐观锁。
+    lock: 'actor',
     operator: true,
     reason: false,
     reasonOptional: true,
@@ -1536,7 +1540,7 @@ export class ConsoleRpc {
       assertAllowedEnvelopeKeys(body);
       const actor = requireCallContext(context);
       if (!isConsoleMethod(method)) {
-        // Worker 面与状态机内部方法（如 finishWorker）落到这里：不是"未实现"，
+        // Worker 面与状态机内部方法落到这里：不是"未实现"，
         // 而是**不属于控制台面**，永不导出。
         throw new ConsoleRpcFault('console/method-unavailable', `控制台未导出端点：${method}`);
       }
@@ -1889,7 +1893,7 @@ function buildInput(
   if (spec.operator) input['operatorId'] = actor.operatorId;
   if (reason !== null) input['reason'] = reason;
   if (expectedStateVersion !== null && spec.lock === 'actor') {
-    // 只有服务确实消费这个字段时才放进输入：对 `lock: 'envelope'` 的方法，
+    // 只有服务确实消费这个字段时才放进输入：`lock: 'none'` 的方法（读端点、审批决策）
     // 输入契约里没有它，塞进去只会制造"已经加锁了"的错觉。
     input['expectedStateVersion'] = expectedStateVersion;
   }

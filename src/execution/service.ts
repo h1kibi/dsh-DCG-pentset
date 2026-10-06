@@ -34,6 +34,7 @@ import type {
   ExecutionService,
   PolicyService,
   RunMarker,
+  MainStatus,
   SessionLease,
   SessionStatus,
   ToolError,
@@ -75,6 +76,23 @@ const DEFAULT_APPROVAL_TTL_SECONDS = 900;
 
 // ───────────────────────────── 注入依赖 ─────────────────────────────
 
+/**
+ * 存储实现里的**业务拒绝**（不是故障）：调用方据此返回机器码给模型，
+ * 而不是把它当 500 抛出去（模型据码分支，不解析 message 文本）。
+ *
+ * 目前只有一个来源：`SQL_INSERT_APPROVAL` 的主状态复查落空——受理读绑定时用的是
+ * 另一条连接，读不到「结束技术测试」未提交的那一版主状态，因此凭证 INSERT 必须复查
+ * （2026-10-05 质检发现的窄竞态：并发下会给一个已经收工的作业留下一张永远兑现不了的凭证）。
+ */
+export class ExecutionRefusal extends Error {
+  override readonly name = 'ExecutionRefusal';
+  readonly reason: 'engagement_halted';
+  constructor(reason: 'engagement_halted', message: string) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
 /** 会话绑定：范围版本、策略 epoch 与租约是执行准入的上下文。 */
 export interface SessionBinding {
   readonly engagementId: string;
@@ -86,6 +104,14 @@ export interface SessionBinding {
    * `blocked` 对目标动作**毫无约束力**——那正是「人类闸门」失效的一种形态。
    */
   readonly engagementStatus: RunMarker;
+  /**
+   * 所属 engagement 的**主状态**（§5.1 的另一层）。
+   *
+   * 为什么必须带来执行闸门：运行标记只管「暂停/阻塞/终止」，看不见「作业已经收工」。
+   * `结束技术测试`（`report_ready`）与交接、确认、授权、签字导出这些状态都不该再接受
+   * 目标动作——允许的集合是 `EXECUTION_MAIN_STATUSES`（唯一权威）。
+   */
+  readonly mainStatus: MainStatus;
   /** 会话冻结的范围版本（§10.2.2：判断用冻结版本，撤销用最新版本）。 */
   readonly scopeVersion: number;
   readonly policyEpoch: number;
@@ -823,35 +849,52 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
         : beyondPreset
           ? `超出行为预设：${actionClass} 不在本作业预设的启用集合里`
           : `${actionClass} 属于逐次放行类别（当前审批模式：${actionPolicy.approvalMode ?? 'human'}）`;
-      const created = await deps.store.requestApproval({
-        workerSessionId: input.workerSessionId,
-        leaseGeneration: binding.lease === null ? 0 : binding.lease.generation,
-        actionClass,
-        templateId: spec.template.id,
-        params,
-        targetSelector: input.targetSelector,
-        planHash,
-        normalizedTarget,
-        normalizedCommand,
-        displayCommand,
-        scopeVersion: binding.scopeVersion,
-        policyEpoch: binding.policyEpoch,
-        timeoutMs: spec.template.timeoutMs,
-        maxOutputBytes: spec.template.maxOutputBytes,
-        purpose,
-        expiresAt: new Date(now.getTime() + approvalTtlSeconds * 1000),
-        ...(approvalReason === undefined ? {} : { approvalReason }),
-        ...(selfApprove
-          ? {
-              selfApproval: {
-                decidedBy: 'server:auto-approval',
-                reason:
-                  `高权限模式（approval_mode=auto）：${actionClass} 在行为预设的启用集合内且非默认禁用类别，` +
-                  '服务端自行放行；超出预设与 persistence/destructive/exfiltration 仍需人类',
-              },
-            }
-          : {}),
-      });
+      let created: { readonly approvalId: string };
+      try {
+        created = await deps.store.requestApproval({
+          workerSessionId: input.workerSessionId,
+          leaseGeneration: binding.lease === null ? 0 : binding.lease.generation,
+          actionClass,
+          templateId: spec.template.id,
+          params,
+          targetSelector: input.targetSelector,
+          planHash,
+          normalizedTarget,
+          normalizedCommand,
+          displayCommand,
+          scopeVersion: binding.scopeVersion,
+          policyEpoch: binding.policyEpoch,
+          timeoutMs: spec.template.timeoutMs,
+          maxOutputBytes: spec.template.maxOutputBytes,
+          purpose,
+          expiresAt: new Date(now.getTime() + approvalTtlSeconds * 1000),
+          ...(approvalReason === undefined ? {} : { approvalReason }),
+          ...(selfApprove
+            ? {
+                selfApproval: {
+                  decidedBy: 'server:auto-approval',
+                  reason:
+                    `高权限模式（approval_mode=auto）：${actionClass} 在行为预设的启用集合内且非默认禁用类别，` +
+                    '服务端自行放行；超出预设与 persistence/destructive/exfiltration 仍需人类',
+                },
+              }
+            : {}),
+        });
+      } catch (error) {
+        // 存储层复查主状态落空：受理读绑定时用的是另一条连接，看不到「结束技术测试」
+        // 未提交的那一版（2026-10-05 质检发现的窄竞态）。这是业务拒绝，回机器码。
+        if (error instanceof ExecutionRefusal) {
+          return {
+            kind: 'rejected',
+            error: blocked(
+              error.reason,
+              error.message,
+              '不要换个动作重试；等待人类把作业恢复到工作状态（或直接结束本作业）',
+            ),
+          };
+        }
+        throw error;
+      }
       const checkError = await recordPolicyCheck({
         engagementId: binding.engagementId,
         workerSessionId: input.workerSessionId,

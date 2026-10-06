@@ -494,8 +494,9 @@ const DIRECT_COMMAND_SPEC: ActionTemplateSpec = {
   carries: {
     port: '命令主要针对的目标端口（范围闸门据此记账；自由命令实际可打该主机的任意端口）',
     command_b64:
-      '要执行的命令（UTF-8 原文的 base64）；沙箱内以 /bin/sh -c 运行（容器内 root，' +
-      '能力只有 NET_RAW，可写根；能连到的主机由沙箱所在网络与宿主路由决定——本部署可出网）',
+      '要执行的命令（UTF-8 原文的 base64）；沙箱内以 bash -c 运行（Debian 的 /bin/sh 是 dash，' +
+      '技能与 Agent 写的都是 bash 方言），容器内 root、根文件系统可写（--rm 即弃），' +
+      '能力只有 NET_RAW；能连到的主机由沙箱所在网络与宿主路由决定——本部署可出网',
   },
   commandTemplate: 'shell_exec target={target} port={port} command_b64={command_b64}',
   allowFreeForm: true,
@@ -511,7 +512,406 @@ const DIRECT_COMMAND_SPEC: ActionTemplateSpec = {
  * 模板声明的参数即必填——这样同一次动作的规范化命令完全由 (模板, 参数) 决定，
  * 幂等键与放行凭证不会因「省略参数走默认值」而产生歧义。
  */
-const DEFAULT_TEMPLATE_SPECS: readonly ActionTemplateSpec[] = [DIRECT_COMMAND_SPEC];
+
+// ───────────────────────── 结构化侦察模板族（情报收集，2026-10-06） ─────────────────────────
+
+/**
+ * 为什么要这一族：`direct_command` 把每一种动作都记成 `exploit_validation`，
+ * 于是「nmap -sV」这种只读指纹与「打一条 exploit」在闸门上是同一件事——
+ * 人审模式下前者要人逐条批（侦察吞吐崩掉），auto 模式下后者又完全不过目。
+ * 这一族把**只读/低风险动作**按 `active_discovery`（四档预设全部启用，且不在逐次放行下限内）
+ * 与 `passive_read` 记账，于是：
+ *
+ *   - 人审模式下，侦察类动作**不需要逐条放行**，由范围 + 租约 + pacing（stealth 1rps / standard 5rps / deep 10rps）约束；
+ *   - 危险动作仍然只能走 `direct_command`（`exploit_validation`，永远逐条人批）。
+ *
+ * 与它们一一对应的是沙箱分发器里的同名动词（`docker/tools/pentest-tool`）——那些动词
+ * **只打宿主注入的已裁决地址**（`PENTEST_RESOLVED_ADDRESSES`），这是 `shell_exec` 做不到的。
+ */
+const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
+  {
+    template: {
+      id: 'recon_port_scan',
+      actionClass: 'active_discovery',
+      tool: 'port_scan',
+      parameters: [
+        { name: 'scope', kind: 'enum', values: ['top100', 'top1000', 'common_services', 'full_tcp'] },
+        // `none` = 用 scope 档位；否则是显式端口表达式。模板声明的参数即必填，
+        // 因此「不指定端口」必须是一个**显式取值**，而不是省略。
+        { name: 'ports', kind: 'string', pattern: '^(none|\\d{1,5}(-\\d{1,5})?(,\\d{1,5}(-\\d{1,5})?){0,63})$' },
+        { name: 'ping', kind: 'enum', values: ['syn', 'connect', 'skip'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 300_000,
+      maxOutputBytes: 512 * 1024,
+    },
+    protocol: 'tcp',
+    // 多端口扫描没有单一端口维度：如实声明 none（`carries` 里写清实际可达范围）。
+    portSource: { kind: 'none' },
+    carries: {
+      scope: '扫描档位：top100 / top1000 / common_services（约 30 个常见服务端口）/ full_tcp（全 65535，需人类显式选择）',
+      ports: 'none 表示按 scope；也可以给显式表达式（如 80,443,8000-8100，最多 64 段）——此时 scope 被忽略',
+      ping: 'syn=SYN 扫描（-PS，需 NET_RAW）/ connect=全连接（-sT）/ skip=不判存活直接扫（-Pn）',
+    },
+    commandTemplate: 'port_scan target={target} scope={scope} ports={ports} ping={ping}',
+  },
+  {
+    template: {
+      id: 'recon_service_probe',
+      actionClass: 'active_discovery',
+      tool: 'service_probe',
+      parameters: [
+        { name: 'ports', kind: 'string', pattern: '^\\d{1,5}(-\\d{1,5})?(,\\d{1,5}(-\\d{1,5})?){0,63}$' },
+        { name: 'intensity', kind: 'enum', values: ['light', 'normal'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 300_000,
+      maxOutputBytes: 512 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'none' },
+    carries: {
+      ports: '要识别服务的端口表达式（先用 recon_port_scan 拿到开放端口，再对它做指纹）',
+      intensity: 'light=--version-intensity 2（快，噪音小）/ normal=5（更准，探测包更多）',
+    },
+    commandTemplate: 'service_probe target={target} ports={ports} intensity={intensity}',
+  },
+  {
+    template: {
+      id: 'recon_nse_safe',
+      actionClass: 'active_discovery',
+      tool: 'nse_run',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scripts', kind: 'string', pattern: '^[a-z0-9-]+(,[a-z0-9-]+){0,7}$' },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 180_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: '脚本针对的端口',
+      scripts: '只读 NSE 脚本名（逗号分隔，最多 8 个）。白名单由沙箱侧强制：banner/http-title/http-headers/http-methods/http-security-headers/http-server-header/ssl-cert/ssl-enum-ciphers/smb-os-discovery/smb-security-mode/smb2-security-mode/ftp-anon/ssh-auth-methods/rdp-ntlm-info/smtp-commands；*brute*/*dos*/exploit 类一律拒绝',
+    },
+    commandTemplate: 'nse_run target={target} port={port} scripts={scripts}',
+  },
+  {
+    template: {
+      id: 'recon_tls_inspect',
+      actionClass: 'active_discovery',
+      tool: 'tls_probe',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'sni', kind: 'string', pattern: '^(none|[A-Za-z0-9._-]{1,253})$' },
+        { name: 'enumerate_protocols', kind: 'enum', values: ['on', 'off'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 60_000,
+      maxOutputBytes: 128 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: 'TLS 端口（443/8443…）',
+      sni: 'SNI 主机名；none 表示用目标名本身',
+      enumerate_protocols: 'on 时逐个尝试 TLS1.2 / TLS1.3 并报告协商结果与套件',
+    },
+    commandTemplate: 'tls_probe target={target} port={port} sni={sni} enumerate_protocols={enumerate_protocols}',
+  },
+  {
+    template: {
+      id: 'recon_http_probe',
+      actionClass: 'active_discovery',
+      tool: 'http_probe',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scheme', kind: 'enum', values: ['http', 'https', 'auto'] },
+        { name: 'follow_redirects', kind: 'integer', min: 0, max: 3 },
+        { name: 'collect', kind: 'enum', values: ['headers', 'security_headers', 'robots', 'sitemap', 'tech'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 60_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: 'HTTP(S) 端口',
+      scheme: 'auto 先试 https 再试 http',
+      follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
+      collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）',
+    },
+    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect}',
+  },
+  {
+    template: {
+      id: 'recon_content_discover',
+      actionClass: 'active_discovery',
+      tool: 'content_discover',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scheme', kind: 'enum', values: ['http', 'https'] },
+        { name: 'wordlist', kind: 'enum', values: ['common_dirs', 'raft_small'] },
+        { name: 'extensions', kind: 'enum', values: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'] },
+        { name: 'rate', kind: 'integer', min: 1, max: 20 },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 300_000,
+      maxOutputBytes: 512 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: '目标 Web 端口',
+      scheme: 'http / https（https 时容器内跳过证书校验，用 Host 头对齐虚拟主机）',
+      wordlist: '字典档位（镜像内固定三份：common_dirs / raft_small / subdomains_5k 中的目录类两份）',
+      extensions: '追加的扩展名集合；multi = 常见的 7 种',
+      rate: '每秒请求数上限（1-20）；并发被钉在 min(10, rate)',
+    },
+    commandTemplate:
+      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate}',
+  },
+  {
+    template: {
+      id: 'recon_web_crawl',
+      actionClass: 'active_discovery',
+      tool: 'web_crawl',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scheme', kind: 'enum', values: ['http', 'https'] },
+        { name: 'depth', kind: 'integer', min: 1, max: 3 },
+        { name: 'max_pages', kind: 'integer', min: 1, max: 500 },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 180_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: '目标 Web 端口',
+      scheme: 'http / https',
+      depth: '爬取深度（1-3）',
+      max_pages: '页数硬上限（1-500）；只跟同主机链接，单页最多读 512KiB',
+    },
+    commandTemplate: 'web_crawl target={target} port={port} scheme={scheme} depth={depth} max_pages={max_pages}',
+  },
+  {
+    template: {
+      id: 'recon_dns_enum',
+      actionClass: 'passive_read',
+      tool: 'dns_enum',
+      parameters: [
+        { name: 'record_types', kind: 'string', pattern: '^(A|AAAA|CNAME|MX|NS|TXT|SOA|CAA|SRV)(,(A|AAAA|CNAME|MX|NS|TXT|SOA|CAA|SRV)){0,7}$' },
+        { name: 'resolver', kind: 'enum', values: ['system', 'public'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 30_000,
+      maxOutputBytes: 128 * 1024,
+    },
+    protocol: 'udp',
+    portSource: { kind: 'none' },
+    carries: {
+      record_types: '要查询的记录类型（最多 8 个，逗号分隔）',
+      resolver: 'system=容器解析器 / public=1.1.1.1 + 8.8.8.8（公共场所解析以免暴露内网 DNS）',
+    },
+    commandTemplate: 'dns_enum target={target} record_types={record_types} resolver={resolver}',
+  },
+  {
+    template: {
+      id: 'recon_dns_axfr',
+      actionClass: 'active_discovery',
+      tool: 'dns_axfr',
+      parameters: [],
+      targetPlaceholder: 'target',
+      timeoutMs: 60_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'none' },
+    carries: {},
+    commandTemplate: 'dns_axfr target={target}',
+  },
+  {
+    template: {
+      id: 'recon_dns_brute',
+      actionClass: 'active_discovery',
+      tool: 'dns_brute',
+      parameters: [
+        { name: 'wordlist', kind: 'enum', values: ['subdomains_5k'] },
+        { name: 'concurrency', kind: 'integer', min: 1, max: 20 },
+        { name: 'wildcard_check', kind: 'enum', values: ['on', 'off'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 120_000,
+      maxOutputBytes: 128 * 1024,
+    },
+    protocol: 'udp',
+    portSource: { kind: 'none' },
+    carries: {
+      wordlist: '字典档位（镜像内固定：subdomains_5k = 5000 个常见子域标签）',
+      concurrency: '并发查询数（1-20）；默认建议 ≤10，避免被解析器限速',
+      wildcard_check: 'on 时先用 3 个随机标签探测泛解析，命中与通配答案相同的记录会被剔除',
+    },
+    commandTemplate: 'dns_brute target={target} wordlist={wordlist} concurrency={concurrency} wildcard_check={wildcard_check}',
+  },
+  {
+    template: {
+      id: 'recon_whois',
+      actionClass: 'passive_read',
+      tool: 'whois_query',
+      parameters: [{ name: 'kind', kind: 'enum', values: ['domain', 'ip'] }],
+      targetPlaceholder: 'target',
+      timeoutMs: 30_000,
+      maxOutputBytes: 64 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'none' },
+    carries: { kind: 'domain=查注册局 / ip=查分配机构与网段归属' },
+    commandTemplate: 'whois_query target={target} kind={kind}',
+  },
+  {
+    template: {
+      id: 'recon_ct_subdomains',
+      actionClass: 'passive_read',
+      tool: 'ct_lookup',
+      parameters: [{ name: 'include_wildcards', kind: 'enum', values: ['false', 'true'] }],
+      targetPlaceholder: 'target',
+      timeoutMs: 60_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'none' },
+    carries: { include_wildcards: '是否保留 `*.example.com` 形式的通配项（默认 false 会剥掉前缀）' },
+    commandTemplate: 'ct_lookup target={target} include_wildcards={include_wildcards}',
+  },
+];
+
+// ───────────────────────── 结构化核验模板族（漏洞分析，2026-10-06） ─────────────────────────
+
+/**
+ * 与侦察族同一套记账纪律（`active_discovery`，四档预设全启用、不在逐次放行下限），
+ * 差别在**动作语义**：这一族碰的是「疑似问题」，因此每条都必须**可判定且不可逆影响为零**——
+ * 只发读取类请求、不写目标、配置面暴露只报「存在性 + 长度 + 哈希 + 形态判定」，从不回显内容。
+ *
+ * 为什么不把核验做成侦察模板的 `collect` 取值：两个阶段的**判据不同**（侦察记录事实，
+ * 核验要给出"这条候选成不成立"的结论），拆开才能让 skill 与工具面对齐。
+ */
+const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
+  {
+    template: {
+      id: 'vuln_http_check',
+      actionClass: 'active_discovery',
+      tool: 'http_check',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scheme', kind: 'enum', values: ['http', 'https', 'auto'] },
+        {
+          name: 'check',
+          kind: 'enum',
+          values: ['tech_stack', 'security_headers', 'cookies', 'cors_policy', 'http_verbs', 'error_disclosure'],
+        },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 60_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: 'HTTP(S) 端口',
+      scheme: 'auto 先试 https 再试 http',
+      check:
+        'tech_stack=技术栈推断 / security_headers=六个安全响应头有无 / cookies=Set-Cookie 的属性（Secure/HttpOnly/SameSite）' +
+        ' / cors_policy=只发 Origin 头看回显（不带凭证） / http_verbs=OPTIONS 与 TRACE（**不试 PUT/DELETE**）' +
+        ' / error_disclosure=随机不存在路径的响应是否泄露堆栈与路径',
+    },
+    commandTemplate: 'http_check target={target} port={port} scheme={scheme} check={check}',
+  },
+  {
+    template: {
+      id: 'vuln_exposure_check',
+      actionClass: 'active_discovery',
+      tool: 'exposure_check',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scheme', kind: 'enum', values: ['http', 'https'] },
+        {
+          name: 'paths',
+          kind: 'string',
+          pattern:
+            '^(git|env|backup|swagger|openapi|actuator|server_status|phpinfo|web_config|dockerfile)' +
+            '(,(git|env|backup|swagger|openapi|actuator|server_status|phpinfo|web_config|dockerfile)){0,9}$',
+        },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 120_000,
+      maxOutputBytes: 128 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: 'HTTP(S) 端口',
+      scheme: 'http / https',
+      paths:
+        '要探测的配置面暴露项（逗号分隔，最多 10 个）：git=.git/HEAD / env=.env / backup=backup.zip / swagger=swagger.json' +
+        ' / openapi=openapi.json / actuator=actuator/health / server_status=server-status / phpinfo=phpinfo.php' +
+        ' / web_config=web.config / dockerfile=Dockerfile。**只报存在性、长度、哈希与形态，不回显内容**',
+    },
+    commandTemplate: 'exposure_check target={target} port={port} scheme={scheme} paths={paths}',
+  },
+  {
+    template: {
+      id: 'vuln_tls_weakness',
+      actionClass: 'active_discovery',
+      tool: 'tls_probe',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'sni', kind: 'string', pattern: '^(none|[A-Za-z0-9._-]{1,253})$' },
+        { name: 'enumerate_protocols', kind: 'enum', values: ['on', 'off'] },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 60_000,
+      maxOutputBytes: 128 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: 'TLS 端口',
+      sni: 'SNI 主机名；none 表示用目标名',
+      enumerate_protocols: '核验时必须为 on（枚举 TLS1.2/1.3 与套件、证书有效期）',
+    },
+    commandTemplate: 'tls_probe target={target} port={port} sni={sni} enumerate_protocols={enumerate_protocols}',
+  },
+  {
+    template: {
+      id: 'vuln_nse_handshake',
+      actionClass: 'active_discovery',
+      tool: 'nse_run',
+      parameters: [
+        { name: 'port', kind: 'integer', min: 1, max: 65535 },
+        { name: 'scripts', kind: 'string', pattern: '^[a-z0-9-]+(,[a-z0-9-]+){0,7}$' },
+      ],
+      targetPlaceholder: 'target',
+      timeoutMs: 180_000,
+      maxOutputBytes: 256 * 1024,
+    },
+    protocol: 'tcp',
+    portSource: { kind: 'param', param: 'port' },
+    carries: {
+      port: '服务端口',
+      scripts:
+        '协议级只读核验脚本（逗号分隔，≤8 个）：smtp-commands / ftp-anon / ssh-auth-methods / rdp-ntlm-info' +
+        ' / ssl-enum-ciphers / http-methods / smb-os-discovery / smb-security-mode。白名单由沙箱侧强制，' +
+        '*brute*/*dos*/exploit 类一律拒绝（匿名 FTP 只列目录，不取文件）',
+    },
+    commandTemplate: 'nse_run target={target} port={port} scripts={scripts}',
+  },
+];
+
+const DEFAULT_TEMPLATE_SPECS: readonly ActionTemplateSpec[] = [DIRECT_COMMAND_SPEC, ...RECON_TEMPLATES, ...VULN_TEMPLATES];
 
 
 

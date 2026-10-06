@@ -19,6 +19,7 @@ import { Pool } from 'pg';
 import { EXEC_TOOL_NAME } from '../src/contracts.ts';
 import type { DbClient } from '../src/db/port.ts';
 import { PgExecutionStore } from '../src/execution/pg-store.ts';
+import { ExecutionRefusal } from '../src/execution/service.ts';
 import { derivePlanHash } from '../src/execution/idempotency.ts';
 
 const DATABASE_URL = process.env['PENTEST_DATABASE_URL'];
@@ -164,7 +165,7 @@ describe(
         `insert into pentest.engagements (id, tenant_id, name, status, current_status,
              target_snapshot, scope_snapshot, roe_snapshot, policy_snapshot, config_snapshot, created_by,
              policy_epoch)
-         values ($1, 'test', 'execution-store-integration', 'running', 'ready',
+         values ($1, 'test', 'execution-store-integration', 'running', 'worker_running',
              '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'node-test',
              $2::bigint)`,
         [engagementId, PLAN_INPUT.policyEpoch],
@@ -496,6 +497,81 @@ describe(
       assert.equal(approval.consumed_by_tool_run, toolRunId);
     });
 
+    it('commitRun：主状态不在工作态（例如已结束技术测试）时拒绝登记，且不消费凭证', async () => {
+      // 2026-10-05 质检发现的窗口：结束技术测试的事务提交后、租约被吊销前，
+      // 一条在等的 commitRun 会拿到锁并**重新求值**——那时只看运行标记的话它会通过，
+      // 于是动作落在「技术测试已结束」之后。现在原子条件里带了主状态。
+      const approvalId = await createApproval();
+      const toolRunId = randomUUID();
+      const idempotencyKey = `key-${randomUUID()}`;
+      await pool.query(`update pentest.engagements set current_status = 'report_ready' where id = $1::uuid`, [
+        engagementId,
+      ]);
+      try {
+        const commit = await store.commitRun(commitInput(toolRunId, idempotencyKey, approvalId));
+        assert.equal(commit.ok, false);
+        assert.ok(!commit.ok);
+        // 原因码必须是 engagement_halted：报成 approval_* 会让模型以为要重新申请放行，白跑一轮。
+        assert.equal(commit.reason, 'engagement_halted');
+        assert.equal(await readRun(toolRunId), undefined, '拒绝时不得留下半完成的运行行');
+        const approval = await readApproval(approvalId);
+        assert.equal(approval?.consumed_at, null, '拒绝时不得消费凭证');
+      } finally {
+        await pool.query(`update pentest.engagements set current_status = 'worker_running' where id = $1::uuid`, [
+          engagementId,
+        ]);
+      }
+    });
+
+    it('requestApproval：主状态不在工作态时拒绝签发凭证（不落半张凭证）', async () => {
+      // 与 commitRun 同一个竞态的另一半：受理读绑定用的是另一条连接，读不到
+      // 「结束技术测试」未提交的主状态，因此凭证 INSERT 必须自己复查（2026-10-05 质检发现）。
+      await pool.query(`update pentest.engagements set current_status = 'report_ready' where id = $1::uuid`, [
+        engagementId,
+      ]);
+      const beforeCount = await pool.query<{ n: number }>(
+        `select count(*)::int as n from pentest.approvals where engagement_id = $1::uuid`,
+        [engagementId],
+      );
+      try {
+        await assert.rejects(
+          () =>
+            store.requestApproval({
+              workerSessionId,
+              leaseGeneration: PLAN_INPUT.leaseGeneration,
+              actionClass: PLAN_INPUT.actionClass,
+              templateId: PLAN_INPUT.templateId,
+              params: { port: 8443 },
+              targetSelector: 'https://10.20.30.40:8443',
+              planHash: PLAN_HASH,
+              normalizedTarget: PLAN_INPUT.normalizedTarget,
+              normalizedCommand: PLAN_INPUT.normalizedCommand,
+              scopeVersion: PLAN_INPUT.scopeVersion,
+              policyEpoch: PLAN_INPUT.policyEpoch,
+              timeoutMs: PLAN_INPUT.timeoutMs,
+              maxOutputBytes: PLAN_INPUT.maxOutputBytes,
+              purpose: '收工之后还想申请放行',
+              expiresAt: new Date(Date.now() + 900_000),
+            }),
+          (error: unknown) => error instanceof ExecutionRefusal && error.reason === 'engagement_halted',
+          '业务拒绝必须是类型化错误，不能是普通 Error（否则模型拿到 500 而不是机器码）',
+        );
+        const leftovers = await pool.query<{ n: number }>(
+          `select count(*)::int as n from pentest.approvals where engagement_id = $1::uuid`,
+          [engagementId],
+        );
+        assert.equal(
+          leftovers.rows[0]?.n,
+          beforeCount.rows[0]?.n,
+          '拒绝时不得留下任何凭证行（本文件里该作业还有别的用例留下的凭证，只比增量）',
+        );
+      } finally {
+        await pool.query(`update pentest.engagements set current_status = 'worker_running' where id = $1::uuid`, [
+          engagementId,
+        ]);
+      }
+    });
+
     it('commitRun 在凭证已被消费时返回 approval_consumed，且不登记第二个运行', async () => {
       const approvalId = await createApproval();
       const first = await store.commitRun(
@@ -663,7 +739,7 @@ describe(
           `insert into pentest.engagements (id, tenant_id, name, status, current_status,
                target_snapshot, scope_snapshot, roe_snapshot, policy_snapshot, config_snapshot, created_by,
                policy_epoch)
-           values ($1, 'test', $2, 'running', 'ready',
+           values ($1, 'test', $2, 'running', 'worker_running',
                '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'node-test',
                $3::bigint)`,
           [id, name, PLAN_INPUT.policyEpoch],

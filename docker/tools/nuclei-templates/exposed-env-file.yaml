@@ -1,0 +1,26 @@
+id: exposed-env-file
+
+info:
+  name: 暴露的 .env 配置文件
+  author: dsh-pentest
+  severity: high
+  description: |
+    .env 可被直接读取，通常包含数据库口令与第三方密钥。
+    **只读探测**：只判形态（出现 KEY=VALUE 行），不回显内容——证据由 exposure_check 动词
+    以「长度 + 哈希 + 形态」记录，正文不进入模型上下文。
+  tags: exposure,config,secrets
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.env"
+      - "{{BaseURL}}/.env.local"
+      - "{{BaseURL}}/.env.production"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: regex
+        part: body
+        regex:
+          - "(?m)^[A-Z][A-Z0-9_]{2,}=.+$"

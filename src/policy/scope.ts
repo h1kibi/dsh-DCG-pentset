@@ -1186,8 +1186,14 @@ interface EntryMatch {
 function matchEntry(entry: NormalizedScopeEntry, req: RequestShape): EntryMatch {
   const host = hostMatches(entry, req);
   const protocol = entry.protocols.includes(req.protocol);
-  // ICMP 没有端口维度：只看目标与类型（§10.2.2 端口的协议依赖性）
-  const port = req.protocol === 'icmp' ? true : portCovered(effectivePorts(entry), req.candidatePorts);
+  // 没有端口维度的动作只看目标与协议（§10.2.2 端口的协议依赖性）。
+  //
+  // 「没有端口维度」有两个来源，语义相同：ICMP 本身没有端口；以及模板显式声明
+  // `portSource: { kind: 'none' }` 的动作（DNS 查询、WHOIS、证书透明度日志——
+  // 它们要么发往解析器、要么发往第三方，端口不属于**目标**）。这两类在请求里都表现为
+  // `candidatePorts` 为空。若空集合仍走端口判定，它们会被判成「端口不在范围内」而永远不可用
+  // （2026-10-06 新增结构化侦察模板族时实测到）。
+  const port = req.candidatePorts.length === 0 ? true : portCovered(effectivePorts(entry), req.candidatePorts);
   return { host, protocol, port };
 }
 

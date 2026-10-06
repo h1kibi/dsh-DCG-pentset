@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Threat Modeling, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@a197af1d36f6：jq/python 台账管线（入口/出口/缺引用跨界流计数）；curl 只读核验 200"
+  smoked: "沙箱实测@f239cd79a21d：7 块原文照跑通过（台账校验、入口/出口清单、待判定入口、一次只读核验（靶上 404 属未判定）、数据流登记、缺引用跨界流计数、自检计数 flows=3 with_evid=1）；本阶段工具面口径本轮对齐——原写的 http_read/http_get/tcp_connect/udp_probe 都是已删模板名，现改为 recon_http_probe 与 direct_command 两条现行路径"
 ---
 
 # 信任边界与数据流（model-trust-boundaries）
@@ -17,7 +17,7 @@ metadata:
 - 本阶段默认**零目标动作**；只有一处例外（步骤 3 的一次只读核验）。
 
 ## 前提与边界
-- 工具面是记忆检索与只读证据访问（`memory_search` / `memory_read` / `artifact_read`）加一次受限的 `pentest_exec:http_read`（模板 `http_get`，仅 GET/HEAD，类别 `passive_read`）。主动扫描（`tcp_connect`/`udp_probe`）、自由命令（`shell_exec`，类别 `exploit_validation`）都不属于本阶段。
+- 工具面是记忆检索与只读证据访问（`memory_search` / `memory_read` / `artifact_read`），加**至多一次**现场只读核验。现场核验的两条现行路径（2026-10-06 对齐模板名）：`pentest_exec:recon_http_probe`（`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`，只发 GET/HEAD，类别 `active_discovery`）或经人工逐条放行的 `pentest_exec:direct_command`（裸 `curl`，类别 `exploit_validation`，每次都要人批）。主动扫描（`recon_port_scan`/`recon_service_probe`）与枚举爆破**本阶段不做**——注意这是**纪律**，不是闸门强制的：闸门按动作类别与范围判，不会因为你在建模阶段就自动拦下扫描，越界与否取决于你写不写。
 - **证据 vs 推断，二选一**：每条边界、每处认证判定、每条数据流，要么挂 `memory:<uuid>`/`artifact:<uuid>` 引用，要么显式 `assumption=true` 并写出缺失证据。禁止「看起来合理就当真」。
 - 沙箱**可出网**（2026-10-05 起，DNS 用宿主解析器）：公网 CVE 库、威胁情报站查得到，但**它们不是关于本目标的证据源**——外部事实要么标来源+假设，要么改用人类提供的材料或记忆检索。
 - 目标地址一律用选择器给的**已裁决地址**，不自行解析域名。
@@ -50,6 +50,8 @@ jq -r '.[] | select(.kind=="entry") | select((.auth//"unknown")=="unknown") | .r
 **期望**：待判定入口的 `ref` 列表。
 **判据**：为空则跳过本节；非空时**先翻证据里已有的响应**（状态码、跳转、`WWW-Authenticate`、跳登录）。**仍无法判定**才允许一次只读核验：
 ```bash
+# 这条 curl 走 pentest_exec:direct_command（类别 exploit_validation）⇒ 每次都要人类逐条放行；
+# 若不想为一次只读走审批，等价模板是 recon_http_probe（http_probe target=… port=… scheme=… follow_redirects=0 collect=headers）。
 curl -sS -D - -o /dev/null --max-time 10 http://<已裁决地址>:<端口><路径>
 ```
 **期望**：状态行 + 响应头。**判据**：只有 `401`/`403` 或跳登录能支撑「需要认证」；`200` 只说明该路径匿名可达，**不等于**整个入口无认证（可能只是公开页）。**为什么非现场不可**：认证状态随配置/会话漂移，证据包没有权威响应时，唯一可得的观测就是这一次只读请求；**禁止连发枚举**，全阶段至多一次。
@@ -95,7 +97,7 @@ jq -r '[.[] | select(.kind=="flow")] |
 | 数据流出奇地多、全是假设 | 出口通道来源全靠推断 | 收敛到有证据的出口；其余整批标假设并点名缺失证据，不逐条编理由 |
 
 ## 不做的事
-- 不执行攻击、扫描、枚举、爆破；除步骤 3 的一次只读 `http_get` 外不触目标。
+- 不执行攻击、扫描、枚举、爆破；除步骤 3 的一次只读核验（`recon_http_probe`，或经人工放行的裸 `curl`）外不触目标。
 - 不以推断替代观测；不把「未观察到」写成「不存在」。
 - 不引用公网情报当证据（2026-10-05 起公网可达，但外部情报只作线索：引用标来源，未在目标上验证的按假设处理）。
 - 不越范围：任何范围外主机只记录为「待人类裁决」，不建模。

@@ -1,0 +1,25 @@
+id: exposed-git-head
+
+info:
+  name: 暴露的 .git/HEAD
+  author: dsh-pentest
+  severity: medium
+  description: |
+    站点根下可直接读到 .git/HEAD，说明版本库目录被 Web 服务器暴露。
+    这是**只读探测**：只取 HEAD 的第一行做形态判定，不下载仓库对象。
+  tags: exposure,git,config
+  metadata:
+    verified: "沙箱实测@2026-10-06：静态靶站 / .git/HEAD → 200 且命中 'ref: refs/'"
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/HEAD"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        words:
+          - "ref: refs/"

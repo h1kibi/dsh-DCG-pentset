@@ -1,0 +1,32 @@
+id: exposed-backup-archive
+
+info:
+  name: 暴露的备份归档
+  author: dsh-pentest
+  severity: high
+  description: |
+    常见备份文件名可直接下载（.zip/.tar.gz/.sql/.bak）。**只取响应头与首字节做形态判定**，
+    不下载整个归档——下载归档既慢又把敏感数据带进沙箱，后续由人类决定是否取样。
+  tags: exposure,backup
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/backup.zip"
+      - "{{BaseURL}}/backup.tar.gz"
+      - "{{BaseURL}}/www.zip"
+      - "{{BaseURL}}/db.sql"
+      - "{{BaseURL}}/index.php.bak"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: header
+        words:
+          - "application/zip"
+          - "application/x-gzip"
+          - "application/x-tar"
+          - "application/sql"
+          - "application/octet-stream"
+        condition: or

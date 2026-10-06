@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [Schneier 攻击树方法论, PTES 威胁建模, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@a197af1d36f6：jq AND/OR 枚举与缺 op 检测、裁剪计数、验证计划表生成"
+  smoked: "沙箱实测@f239cd79a21d：6 块原文照跑，4 块通过；步骤 1 的输入契约本轮修掉——原配方只造 root，而步骤 3/4/5 读 .leaves[]，在它自己产出的文件上三块全部 Cannot iterate over null (exit=5)，补 leaves:[] 后三块 exit=0（AND/OR 枚举与缺 op 检测本就有效）"
 ---
 
 # 攻击树与验证计划（model-attack-trees）
@@ -21,17 +21,20 @@ metadata:
 - 叶子必须是**本作业可执行的动作**：在范围内、动作类别在本次策略内可申请。
 - 动作类别取自固定枚举：`passive_read`、`active_discovery`、`authenticated_read`、`exploit_validation`、`lateral_movement`、`persistence`、`destructive`、`exfiltration`。
 - 默认需逐次人工放行的类别是 `exploit_validation`、`lateral_movement`；`persistence`/`destructive`/`exfiltration` 默认关闭，只能记为「本作业不可执行」。
-- 需要现场核验才能确认某叶子可达时，**至多一次只读** `http_get`/`curl`（GET/HEAD），并写清为什么非现场不可；其余核验属于漏洞分析 / 利用阶段。
+- 需要现场核验才能确认某叶子可达时，**至多一次只读**核验（`recon_http_probe`：`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`；或经人工逐条放行的裸 `curl`，只发 GET/HEAD），并写清为什么非现场不可；其余核验属于漏洞分析 / 利用阶段。
 
 ## 步骤
 
 ### 1. 定根（目标状态）
 ```bash
 jq -n --arg g "获得对<资产>的未授权读取" --arg ref "memory:<uuid>" \
-  '{root:{goal:$g, evidence_refs:[$ref]}}' > /tmp/tm/tree.json
+  '{root:{goal:$g, evidence_refs:[$ref]}, leaves:[]}' > /tmp/tm/tree.json
 ```
 **期望**：`tree.json` 的 `root.goal` 是一个可判定的目标状态，且带至少一个 `evidence_ref`。
 **判据**：根无法表述成「看到 X 即算达成」就不算根；根没有业务影响或攻击路径依据的，先回去补，不展开。
+
+> **顶层 `leaves` 必须存在**（哪怕先是空数组）：第 3/4/5 步都读 `.leaves[]`，缺这个键会让它们全部以
+> `Cannot iterate over null` 硬失败——2026-10-06 的逐块验证实测到，且当时正文从没写过这条契约。
 
 ### 2. 展开 AND / OR 节点
 ```bash

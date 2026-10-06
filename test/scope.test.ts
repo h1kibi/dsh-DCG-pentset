@@ -404,6 +404,37 @@ test('E7 ICMP 没有端口维度：只看目标与类型，不接受端口参数
   expectRejected(evaluateScope({ target: '10.0.0.1', protocol: 'tcp', port: 443, scope: s }), 'protocol_not_allowed');
 });
 
+test('E7b 没有端口维度的动作（DNS/WHOIS/CT 一类）只按目标与协议判定', () => {
+  // 起因（2026-10-06）：结构化侦察模板里有一族声明 `portSource: none`——它们要么发往解析器、
+  // 要么发往第三方，端口不属于**目标**。若空端口集合仍走端口判定，这些动作会被判成
+  // 「端口不在范围内」而永久不可用（实测踩到）。端口维度缺失 ⇒ 该维度不参与判定；
+  // 协议维度照旧生效（「授权了 tcp 没授权 udp」仍然要说清）。
+  const tcpOnly = scope([target('domain', 'target.com', ['tcp'], [port(443)])]);
+  expectOk(
+    evaluateScope({
+      target: 'target.com',
+      protocol: 'tcp',
+      scope: tcpOnly,
+      adjudicatedAddresses: { 'target.com': ['93.184.216.34'] },
+    }),
+  );
+  expectRejected(
+    evaluateScope({ target: 'target.com', protocol: 'udp', scope: tcpOnly, adjudicatedAddresses: { 'target.com': ['93.184.216.34'] } }),
+    'protocol_not_allowed',
+  );
+  // 有端口维度的动作不受影响：80 不在条目声明的 443 里，照旧拒绝。
+  expectRejected(
+    evaluateScope({
+      target: 'target.com',
+      protocol: 'tcp',
+      port: 80,
+      scope: tcpOnly,
+      adjudicatedAddresses: { 'target.com': ['93.184.216.34'] },
+    }),
+    'port_not_allowed',
+  );
+});
+
 test('E8 主机名条目未指定端口时按默认端口 80/443 匹配', () => {
   const s = scope([target('domain', 'target.com', ['tcp'])]);
   const evaluate = (portNumber: number) =>

@@ -39,7 +39,7 @@ import type {
 // 终态会话（closed / superseded / failed）不可执行任何动作。**用契约里的那一份**：
 // `workflow/core.ts` 的数据库对账读的是同一个集合，这里若再 filter 一份就会漂移，
 // 而漂移的后果是「某种终态会话仍能提交动作」这类静默越权。
-import { TERMINAL_SESSION_STATUSES } from '../contracts.ts';
+import { TERMINAL_SESSION_STATUSES, EXECUTION_MAIN_STATUSES } from '../contracts.ts';
 import { derivePlanHash } from './idempotency.ts';
 import { executionGateForAudit } from '../workflow/reconcile.ts';
 import {
@@ -108,23 +108,37 @@ function mapScopeRejection(code: ScopeRejectionCode): ErrorCode {
  * 而应停下等人类。因此 `next_action` 与其它拒绝不同。
  */
 export function engagementViolation(binding: SessionBinding, session: string): ToolError | undefined {
-  if (binding.engagementStatus === 'running') return undefined;
-  const reason: Readonly<Record<string, string>> = {
-    // 不会走到（上面已返回），但保持映射完整：缺项会让将来加标记时静默放行
-    running: '',
-    // 别把责任推给人类：`paused` 也可能是**系统自动暂停**（预算耗尽，compose 的
-    // `pauseForSystem`）。人类看到「人类已暂停」会以为自己点错了什么（2026-10-05 实测报障）。
-    paused:
-      '该 engagement 已被暂停（人工暂停，或预算耗尽触发的自动暂停）；在控制台「运行控制 → 恢复」后动作才会执行',
-    blocked: '该 engagement 处于阻塞状态，等待人类处置（可能是恢复对账发现的未知副作用）',
-    aborted: '人类已终止该 engagement',
-    failed: '该 engagement 已失败',
-  };
-  return blocked(
-    'engagement_halted',
-    `engagement ${binding.engagementId} 不在运行状态（${binding.engagementStatus}）：${reason[binding.engagementStatus] ?? ''}。会话 ${session} 的动作不执行`,
-    '不要换个动作重试；等待人类在控制台恢复或结束该 engagement',
-  );
+  if (binding.engagementStatus !== 'running') {
+    const reason: Readonly<Record<string, string>> = {
+      // 不会走到（上面已返回），但保持映射完整：缺项会让将来加标记时静默放行
+      running: '',
+      // 别把责任推给人类：`paused` 也可能是**系统自动暂停**（预算耗尽，compose 的
+      // `pauseForSystem`）。人类看到「人类已暂停」会以为自己点错了什么（2026-10-05 实测报障）。
+      paused:
+        '该 engagement 已被暂停（人工暂停，或预算耗尽触发的自动暂停）；在控制台「运行控制 → 恢复」后动作才会执行',
+      blocked: '该 engagement 处于阻塞状态，等待人类处置（可能是恢复对账发现的未知副作用）',
+      aborted: '人类已终止该 engagement',
+      failed: '该 engagement 已失败',
+    };
+    return blocked(
+      'engagement_halted',
+      `engagement ${binding.engagementId} 不在运行状态（${binding.engagementStatus}）：${reason[binding.engagementStatus] ?? ''}。会话 ${session} 的动作不执行`,
+      '不要换个动作重试；等待人类在控制台恢复或结束该 engagement',
+    );
+  }
+  // 主状态的另一半：运行标记只管「暂停/阻塞/终止」，看不见「作业已经收工」。
+  // 允许的集合是 `EXECUTION_MAIN_STATUSES`（唯一权威）：`worker_running` 与
+  // `waiting_human_review`（人类批准放行后唤醒 Agent 继续干活的那一态）。
+  // 其余状态（授权未确认、交接中、已结束技术测试、已签字导出）都不接受目标动作。
+  if (!(EXECUTION_MAIN_STATUSES as readonly string[]).includes(binding.mainStatus)) {
+    return blocked(
+      'engagement_halted',
+      `engagement ${binding.engagementId} 的主状态是「${binding.mainStatus}」，不接受接触目标的动作` +
+        `（只允许 ${EXECUTION_MAIN_STATUSES.join(' / ')}）。会话 ${session} 的动作不执行`,
+      '若这是误判，请人类在控制台确认作业状态；否则等待作业回到工作状态',
+    );
+  }
+  return undefined;
 }
 
 /**

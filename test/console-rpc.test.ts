@@ -54,7 +54,6 @@ function fakeWorkflow(over: Partial<Record<string, unknown>> = {}): {
     listEngagements: handler('listEngagements', []),
     getState: handler('getState', snapshot),
     startWorker: handler('startWorker', { workerSessionId: 'w1', dshSessionId: 'dsh-w1', leaseId: 'l1', leaseGeneration: 1 }),
-    finishWorker: handler('finishWorker', snapshot),
     beginHandoff: handler('beginHandoff', {}),
   currentHandoffDraft: handler('currentHandoffDraft', {}),
     editHandoff: handler('editHandoff', {}),
@@ -257,12 +256,6 @@ test('未导出的端点 → console/method-unavailable（不是「未实现」�
   if (res.ok) return;
   assert.equal(res.code, 'console/method-unavailable');
   assert.equal(calls.length, 0);
-});
-
-test('**Worker 工具方法不在控制台面**：finishWorker 永不导出', () => {
-  // 它是 Agent 侧动作（pentest_submit_report 调用），不是人类操作
-  assert.equal(CONSOLE_RPC_METHODS.includes('finishWorker' as never), false);
-  assert.equal(isConsoleMethod('finishWorker'), false);
 });
 
 test('零依赖端点清单与方法表逐字一致，且不受原型链影响（REQ-13c 回归锁）', () => {

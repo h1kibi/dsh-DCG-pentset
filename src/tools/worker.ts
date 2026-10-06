@@ -34,6 +34,16 @@ import type {
 } from '../contracts.ts';
 import { DEFAULTS } from '../contracts.ts';
 import { PHASE_ORDER } from '../workflow/phases.ts';
+// 结构化动作的技巧表搬到了 execution/techniques.ts（提示词与测试共用同一份），
+// 这里再导出一次，既有调用点不必改。
+export {
+  STRUCTURED_TECHNIQUES,
+  RECON_TECHNIQUES,
+  VULN_TECHNIQUES,
+  buildStructuredIntent,
+} from '../execution/techniques.ts';
+export type { ReconTechniqueSpec, StructuredFamily, ReconIntentInput, ReconIntentOutcome } from '../execution/techniques.ts';
+import { buildStructuredIntent } from '../execution/techniques.ts';
 
 /** 工具实现依赖的服务面（全部由宿主注入，便于测试）。 */
 export interface WorkerToolDeps {
@@ -670,7 +680,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     name: 'pentest_exec',
     description:
       '**在沙箱里跑一条命令**（唯一的目标接触通道）。' +
-      'command 是你在沙箱内执行的整条命令原文（shell 语法，`/bin/sh -c` 执行）；' +
+      'command 是你在沙箱内执行的整条命令原文（bash 语法，`bash -c` 执行——不是 dash）；' +
       '镜像里有 nmap / curl / wget / nc / dig / openssl / jq / whois / ping / ffuf / sqlmap ' +
       '与 python3（含 requests/dnspython/beautifulsoup4）、字典在 /usr/share/wordlists 下。' +
       '沙箱直连目标（不经代理）、有 NET_RAW、容器内为 root；**可出网**（可达范围与宿主一致，' +
@@ -711,6 +721,210 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
       // 拒绝路径把契约错误直接交给模型（与 memory_read 的拒绝形状一致），
       // 不包在 {plan,result} 里——那会让「被拒绝」看起来像「执行完了」。
+      return toJson(outcome.kind === 'blocked' ? outcome.error : { plan: outcome.plan, result: outcome.result });
+    },
+  });
+
+  const pentestRecon = defineTool({
+    name: 'pentest_recon',
+    description:
+      '**结构化侦察动作**（唯一入口是它，而不是让你手写 nmap/ffuf 命令）。' +
+      '每个 technique 由服务端固定一条命令形态，参数只有声明过的枚举/整数——' +
+      '目标从选择器注入、地址由宿主的裁决结果固定（容器不做 DNS），' +
+      '因此同一动作的审计与幂等键是可复现的，也不需要人类为每条扫描命令逐次放行：' +
+      '侦察类动作按 `active_discovery`/`passive_read` 记账，由范围、租约、节奏（stealth 1rps / standard 5rps / deep 10rps）约束；' +
+      '需要人批的是 `exploit_validation` 类动作（用 pentest_exec）。' +
+      '**DNS 类 technique（dns_enum/dns_brute）走 UDP**：范围条目要声明 udp，否则会被范围闸门拒绝。' +
+      '先扫面（port_scan）再指纹（service_probe/tls_inspect/http_probe），最后才目录与爬取——顺序写进了 recon-network-surface/recon-web-surface 两份 skill。',
+    parameters: {
+      technique: {
+        type: 'string',
+        enum: [
+          'port_scan',
+          'service_probe',
+          'nse_safe',
+          'tls_inspect',
+          'http_probe',
+          'content_discover',
+          'web_crawl',
+          'dns_enum',
+          'dns_axfr',
+          'dns_brute',
+          'whois',
+          'ct_subdomains',
+        ],
+        required: true,
+        description: '要执行的侦察动作（见 recon-* skill 里的判据与顺序）',
+      },
+      target_selector: {
+        type: 'string',
+        required: true,
+        description: '已授权范围内的目标选择器；命令里的目标由服务端从这里注入',
+      },
+      purpose: { type: 'string', required: true, description: '目的：为什么做它、预期看到什么' },
+      port: { type: 'integer', description: '单个端口（tls_inspect/http_probe/content_discover/web_crawl/nse_safe）' },
+      ports: {
+        type: 'string',
+        description: '端口表达式（service_probe 必填；port_scan 可选，none 表示按 scope 档位）',
+      },
+      scope: { type: 'string', enum: ['top100', 'top1000', 'common_services', 'full_tcp'], description: 'port_scan 的扫描档位' },
+      ping: { type: 'string', enum: ['syn', 'connect', 'skip'], description: 'port_scan 的存活判定方式' },
+      intensity: { type: 'string', enum: ['light', 'normal'], description: 'service_probe 的指纹强度' },
+      scripts: { type: 'string', description: 'nse_safe 的只读脚本名（逗号分隔，白名单由沙箱强制）' },
+      sni: { type: 'string', description: 'tls_inspect 的 SNI；none 表示用目标名' },
+      enumerate_protocols: { type: 'string', enum: ['on', 'off'], description: 'tls_inspect 是否枚举协议版本与套件' },
+      scheme: { type: 'string', enum: ['http', 'https', 'auto'], description: 'http_probe 的协议（content_discover/web_crawl 只接受 http/https）' },
+      follow_redirects: { type: 'integer', description: 'http_probe 的跳转上限（0-3；跨主机跳转一律拒绝）' },
+      collect: {
+        type: 'string',
+        enum: ['headers', 'security_headers', 'robots', 'sitemap', 'tech'],
+        description: 'http_probe 的采集面',
+      },
+      wordlist: { type: 'string', enum: ['common_dirs', 'raft_small', 'subdomains_5k'], description: '字典档位' },
+      extensions: {
+        type: 'string',
+        enum: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'],
+        description: 'content_discover 追加的扩展名',
+      },
+      rate: { type: 'integer', description: 'content_discover 的每秒请求数上限（1-20）' },
+      depth: { type: 'integer', description: 'web_crawl 深度（1-3）' },
+      max_pages: { type: 'integer', description: 'web_crawl 页数上限（1-500）' },
+      record_types: { type: 'string', description: 'dns_enum 的记录类型（逗号分隔，最多 8 个）' },
+      resolver: { type: 'string', enum: ['system', 'public'], description: 'dns_enum 用哪组解析器' },
+      concurrency: { type: 'integer', description: 'dns_brute 并发查询数（1-20）' },
+      wildcard_check: { type: 'string', enum: ['on', 'off'], description: 'dns_brute 是否先探测泛解析' },
+      kind: { type: 'string', enum: ['domain', 'ip'], description: 'whois 的查询类型' },
+      include_wildcards: { type: 'string', enum: ['false', 'true'], description: 'ct_subdomains 是否保留通配项' },
+      approval_id: { type: 'string', description: '若服务端判定需要放行，把人类放行后返回的 approval_id 带上重试' },
+    },
+    output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
+    timeoutMs: 15 * 60 * 1000,
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const workerSessionId = await workerSessionIdOf(deps, exec);
+      const planned = buildStructuredIntent('recon', {
+        technique: args.technique,
+        targetSelector: args.target_selector,
+        purpose: args.purpose,
+        ...(args.port === undefined ? {} : { port: args.port }),
+        ...(args.ports === undefined ? {} : { ports: args.ports }),
+        ...(args.scope === undefined ? {} : { scope: args.scope }),
+        ...(args.ping === undefined ? {} : { ping: args.ping }),
+        ...(args.intensity === undefined ? {} : { intensity: args.intensity }),
+        ...(args.scripts === undefined ? {} : { scripts: args.scripts }),
+        ...(args.sni === undefined ? {} : { sni: args.sni }),
+        ...(args.enumerate_protocols === undefined ? {} : { enumerate_protocols: args.enumerate_protocols }),
+        ...(args.scheme === undefined ? {} : { scheme: args.scheme }),
+        ...(args.follow_redirects === undefined ? {} : { followRedirects: args.follow_redirects }),
+        ...(args.collect === undefined ? {} : { collect: args.collect }),
+        ...(args.wordlist === undefined ? {} : { wordlist: args.wordlist }),
+        ...(args.extensions === undefined ? {} : { extensions: args.extensions }),
+        ...(args.rate === undefined ? {} : { rate: args.rate }),
+        ...(args.depth === undefined ? {} : { depth: args.depth }),
+        ...(args.max_pages === undefined ? {} : { maxPages: args.max_pages }),
+        ...(args.record_types === undefined ? {} : { recordTypes: args.record_types }),
+        ...(args.resolver === undefined ? {} : { resolver: args.resolver }),
+        ...(args.concurrency === undefined ? {} : { concurrency: args.concurrency }),
+        ...(args.wildcard_check === undefined ? {} : { wildcardCheck: args.wildcard_check }),
+        ...(args.kind === undefined ? {} : { kind: args.kind }),
+        ...(args.include_wildcards === undefined ? {} : { includeWildcards: args.include_wildcards }),
+      });
+      if (!planned.ok) {
+        return toJson(
+          asError({
+            status: 'blocked',
+            code: planned.code,
+            message: planned.message,
+            next_action: planned.nextAction,
+          }),
+        );
+      }
+      const intent: ActionIntent = {
+        workerSessionId,
+        templateId: planned.templateId,
+        targetSelector: args.target_selector,
+        purpose: args.purpose,
+        params: planned.params,
+        ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
+      };
+      const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
+      return toJson(outcome.kind === 'blocked' ? outcome.error : { plan: outcome.plan, result: outcome.result });
+    },
+  });
+
+  const pentestScan = defineTool({
+    name: 'pentest_scan',
+    description:
+      '**结构化核验动作**（漏洞分析阶段的只读面）：把一条候选变成「成立 / 不成立 / 需要更多证据」。' +
+      '每个 technique 由服务端固定命令形态、只打已裁决地址，类别是 `active_discovery`——' +
+      '**不需要逐条人工放行**；它只发读取类请求、不写目标、不下载内容' +
+      '（配置面暴露只报存在性、长度、哈希与形态判定）。' +
+      '判据写进对应的 skill：一条候选没有可判定的判据就不要核验，先补情报。' +
+      '需要发载荷（SQLi/XSS/SSRF/上传…）的验证**不属于本工具**：那是利用验证阶段的 `poc_run`/`pentest_exec`，逐条人批。',
+    parameters: {
+      technique: {
+        type: 'string',
+        enum: ['http_check', 'exposure_check', 'tls_weakness', 'nse_handshake'],
+        required: true,
+        description: '核验动作：http_check / exposure_check / tls_weakness / nse_handshake',
+      },
+      target_selector: { type: 'string', required: true, description: '已授权范围内的目标选择器' },
+      purpose: { type: 'string', required: true, description: '目的：要验证哪条候选、预期看到什么' },
+      port: { type: 'integer', description: '端口（多数 technique 需要；缺省按 technique 的安全默认值）' },
+      scheme: { type: 'string', enum: ['http', 'https', 'auto'], description: 'http_check 用 auto；exposure_check 只接受 http/https' },
+      check: {
+        type: 'string',
+        enum: ['tech_stack', 'security_headers', 'cookies', 'cors_policy', 'http_verbs', 'error_disclosure'],
+        description: 'http_check 的核验项',
+      },
+      paths: {
+        type: 'string',
+        description: 'exposure_check 要探测的暴露项（逗号分隔，≤10）：git,env,backup,swagger,openapi,actuator,server_status,phpinfo,web_config,dockerfile',
+      },
+      sni: { type: 'string', description: 'tls_weakness 的 SNI；none 表示用目标名' },
+      enumerate_protocols: { type: 'string', enum: ['on', 'off'], description: 'tls_weakness 必须为 on' },
+      scripts: {
+        type: 'string',
+        description: 'nse_handshake 的只读脚本（smtp-commands,ftp-anon,ssh-auth-methods,rdp-ntlm-info,ssl-enum-ciphers,http-methods,smb-os-discovery,smb-security-mode）',
+      },
+      approval_id: { type: 'string', description: '若服务端判定需要放行，把放行后返回的 approval_id 带上重试' },
+    },
+    output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
+    timeoutMs: 15 * 60 * 1000,
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const workerSessionId = await workerSessionIdOf(deps, exec);
+      const planned = buildStructuredIntent('vuln', {
+        technique: args.technique,
+        targetSelector: args.target_selector,
+        purpose: args.purpose,
+        ...(args.port === undefined ? {} : { port: args.port }),
+        ...(args.scheme === undefined ? {} : { scheme: args.scheme }),
+        ...(args.check === undefined ? {} : { check: args.check }),
+        ...(args.paths === undefined ? {} : { paths: args.paths }),
+        ...(args.sni === undefined ? {} : { sni: args.sni }),
+        ...(args.enumerate_protocols === undefined ? {} : { enumerateProtocols: args.enumerate_protocols }),
+        ...(args.scripts === undefined ? {} : { scripts: args.scripts }),
+      });
+      if (!planned.ok) {
+        return toJson(
+          asError({
+            status: 'blocked',
+            code: planned.code,
+            message: planned.message,
+            next_action: planned.nextAction,
+          }),
+        );
+      }
+      const intent: ActionIntent = {
+        workerSessionId,
+        templateId: planned.templateId,
+        targetSelector: args.target_selector,
+        purpose: args.purpose,
+        params: planned.params,
+        ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
+      };
+      const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
       return toJson(outcome.kind === 'blocked' ? outcome.error : { plan: outcome.plan, result: outcome.result });
     },
   });
@@ -769,6 +983,8 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     prepareHandoff,
     skillLoad,
     pentestExec,
+    pentestRecon,
+    pentestScan,
   };
 }
 
@@ -791,10 +1007,12 @@ export const WORKER_TOOL_NAMES = [
   'pentest_prepare_handoff',
   'skill_load',
   'pentest_exec',
+  'pentest_recon',
+  'pentest_scan',
 ] as const;
 
-/** 只有它触及目标，其余都是 non-target（守卫据此判定，§10.2）。 */
-export const TARGET_TOOL_NAMES = ['pentest_exec'] as const;
+/** 触及目标的工具（守卫与登记据此区分「本插件的目标工具」与宿主工具）。 */
+export const TARGET_TOOL_NAMES = ['pentest_exec', 'pentest_recon', 'pentest_scan'] as const;
 
 /**
  * 从执行上下文取本会话的 **dsh 会话标识**。

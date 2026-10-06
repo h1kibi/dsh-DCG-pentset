@@ -15,7 +15,7 @@
  *      运行时套接字、资源限额。**容器内以 root 运行**（Dockerfile 不再切非特权用户）：
  *      NET_RAW 只对 root 的 effective capability set 生效，非 root 进程拿不到 `--cap-add` 的
  *      能力（Docker 不放进 ambient set），而真 SYN 扫描需要它。边界不靠容器内的用户——
- *      靠「只有一个 cap + 无特权 + 无宿主资源 + 只接 internal 网络 + 限额」。
+ *      靠「只有一个 cap + 无特权 + 无宿主资源 + 只接部署指定的那一张网络（本部署非 internal）+ 限额」。
  *   3. **执行服务的范围与动作类别校验**——本次调用之前的 admit 阶段。
  *
  * 本文件负责第 1、2 层与「把执行令牌传给容器内的包装器」。
@@ -91,14 +91,21 @@ export interface DockerSandboxConfig {
   readonly workdir?: string;
 }
 
-const DEFAULT_LIMITS: SandboxLimits = {
-  // 真工具(nmap/ffuf/sqlmap)会 fork 子进程、吃内存，比纯探测脚本重；
+/**
+ * 容器资源限额的**默认值**（导出给提示词用：会话提示词里的限额必须与真正生效的这份一致，
+ * 否则模型会按错误的前提规划——比如以为可以跑 30 分钟的长扫描）。
+ */
+export const DEFAULT_SANDBOX_LIMITS: SandboxLimits = {
+  // 真工具(nmap/ffuf/sqlmap/nuclei)会 fork 子进程、吃内存，比纯探测脚本重；
   // 限额仍在（硬约束 c），只是按新工具集调高。
   cpus: '2.0',
   memory: '2g',
   pidsLimit: 512,
   maxWallClockMs: 15 * 60 * 1000,
 };
+
+/** 容器内 `/tmp` 的大小（同一份值既进 docker run 的 argv 也进提示词）。 */
+export const SANDBOX_TMPFS_SIZE = '512m';
 
 export class SandboxConfigError extends Error {
   override readonly name = 'SandboxConfigError';
@@ -128,7 +135,7 @@ export function assertSandboxConfig(config: DockerSandboxConfig): void {
   if (config.proxyPort <= 0 || config.proxyPort > 65535) {
     throw new SandboxConfigError(`proxyPort 越界：${config.proxyPort}`);
   }
-  const limits = { ...DEFAULT_LIMITS, ...config.limits };
+  const limits = { ...DEFAULT_SANDBOX_LIMITS, ...config.limits };
   if (limits.pidsLimit <= 0 || limits.maxWallClockMs <= 0) {
     throw new SandboxConfigError('资源限额必须为正数：pidsLimit / maxWallClockMs');
   }
@@ -147,7 +154,7 @@ export function buildDockerArgs(input: {
   readonly containerName: string;
 }): readonly string[] {
   const { image, plan, config, containerName } = input;
-  const limits = { ...DEFAULT_LIMITS, ...config.limits };
+  const limits = { ...DEFAULT_SANDBOX_LIMITS, ...config.limits };
   const timeoutMs = Math.min(plan.timeoutMs, limits.maxWallClockMs);
 
   // 首元素是**可执行文件本身**，不是子命令：返回值是一条完整命令行，
@@ -162,7 +169,7 @@ export function buildDockerArgs(input: {
     'run',
     '--rm',
     '--name', containerName,
-    // ── 网络：只接入 internal 网络；不发布端口（入站不可达）──
+    // ── 网络：只接入部署指定的那一张网络（本部署非 internal ⇒ 可出网）；不发布端口（入站不可达）──
     '--network', config.internalNetwork,
     // ── 加固：与三者相关的限制全部显式声明 ──
     // NET_RAW 是放开后的**唯一**新增能力：真 SYN 扫描/原始套接字需要它。
@@ -173,7 +180,7 @@ export function buildDockerArgs(input: {
     '--security-opt', 'no-new-privileges',
     // /tmp 可执行：工具要能在 /tmp 落地并运行脚本/自解压的临时文件。
     // 根文件系统保持 Docker 默认（可写层、`--rm` 即弃）——不再用只读根给工具制造无谓失败。
-    '--tmpfs', '/tmp:rw,exec,nosuid,size=512m',
+    '--tmpfs', `/tmp:rw,exec,nosuid,size=${SANDBOX_TMPFS_SIZE}`,
     '--pids-limit', String(limits.pidsLimit),
     '--cpus', limits.cpus,
     '--memory', limits.memory,
@@ -413,7 +420,7 @@ export class DockerSandbox implements SandboxExecutor {
       };
     }
 
-    const timeoutMs = Math.min(plan.timeoutMs, { ...DEFAULT_LIMITS, ...this.config.limits }.maxWallClockMs);
+    const timeoutMs = Math.min(plan.timeoutMs, { ...DEFAULT_SANDBOX_LIMITS, ...this.config.limits }.maxWallClockMs);
     const containerName = this.containerName(plan);
     const argv = buildDockerArgs({
       image,

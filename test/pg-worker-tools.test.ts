@@ -863,6 +863,16 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
       [engagementId],
     );
     assert.equal(Number(engagement.rows[0]?.state_version), 2, '两次生产 Worker 报告各推进一次 engagement state_version');
+    // Agent 侧报告**不写转移行**：`worker_running → waiting_human_review` 在 §5.2 的图上
+    // 是 `recorded: false` 的边（§5.4 只规范人类操作），只有版本推进与领域事件。
+    // 这条断言此前锁在 `pg-workflow.test.ts` 的 `SessionFlow.finishWorker` 上，
+    // 而那是生产不可达的重复实现（2026-10-05 复核 F3 已删除）——现在由生产路径自己证明。
+    const ghost = await client.query<{ n: number }>(
+      `select count(*)::int as n from pentest.state_transitions
+        where engagement_id = $1::uuid and from_status = 'worker_running' and to_status = 'waiting_human_review'`,
+      [engagementId],
+    );
+    assert.equal(ghost.rows[0]?.n, 0, 'Agent 提交报告不得写图上 recorded:false 的边');
     const events = await client.query<{ event_type: string }>(
       `select event_type from pentest.context_events
         where engagement_id = $1::uuid and worker_session_id = $2::uuid

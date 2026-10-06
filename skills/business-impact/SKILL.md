@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Risk Rating, MITRE ATT&CK T0040]
-  smoked: "沙箱实测@a197af1d36f6：python 四维评分：[3,2,2,1] ok；缺依据条目 → 0 分并标「缺依据」"
+  smoked: "沙箱实测@f239cd79a21d：5 块原文照跑（业务标签 @tsv、四维 python 打分 [3,2,2,1]、影响×可行性排序、影响陈述、priority.json）；步骤 5 本轮修掉——跨边界边缺 feasibility/impact_total 时 sort_by(-(.impact_total*.feasibility)) 报 number (3) and null (null) cannot be multiplied 且 priority.json 不生成，改成 //0 兜底后缺字段输入 exit=0、输出 3 条"
 ---
 
 # 业务影响与优先级（business-impact）
@@ -67,7 +67,7 @@ jq -r '.edges[] | select(.crosses_boundary==true) | "\(.to): 若失守 → \(.im
 
 ### 5. 产出排序与理由
 ```bash
-jq -n --slurpfile g /tmp/graph.json '{order: ($g[0].edges | map(select(.crosses_boundary==true)) | sort_by(-(.impact_total*.feasibility)) | map({to, impact_total, feasibility, basis: .impact_basis}))}' > /tmp/priority.json
+jq -n --slurpfile g /tmp/graph.json '{order: ($g[0].edges | map(select(.crosses_boundary==true)) | sort_by(-((.impact_total//0)*(.feasibility//0))) | map({to, impact_total, feasibility, basis: .impact_basis}))}' > /tmp/priority.json
 jq '.order[:5]' /tmp/priority.json
 ```
 **期望**：前 5 个优先目标的 `to / 影响 / 可行性 / 依据`。

@@ -306,11 +306,6 @@ test('ConsoleClient.methods 暴露全部人类端点（供 UI 生成菜单）', 
   assert.ok(methods.includes('listEngagements' as ConsoleMethodName), '控制台首页需要列表端点');
   assert.ok(methods.includes('startWorker' as ConsoleMethodName));
   assert.ok(methods.includes('confirmTransition' as ConsoleMethodName));
-  assert.equal(
-    methods.includes('finishWorker' as ConsoleMethodName),
-    false,
-    'finishWorker 是 Agent 侧动作，不在控制台面',
-  );
 });
 
 // ───────────────────────────── 超时（防「永久转圈」） ─────────────────────────────

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, MITRE ATT&CK T1046/T1018]
-  smoked: "沙箱实测@a197af1d36f6：nmap -sn -PE -PS8000 → 存活 172.29.0.3；-sT -p 8000 -oG → 8000/open/tcp//http-alt///"
+  smoked: "沙箱实测@f239cd79a21d：nmap -sn -PE -PS8080 网段 → 8 台存活；-sT -p 8080 -oG → 172.29.0.2 8080/open；步骤 5 配方本轮修掉（原 `<(...)` 既是 bash-ism，`--slurpfile` 又吃不了非 JSON；改成 awk 落地 + `--rawfile`+split，产出 {\"discovered\":[\"172.29.0.2\"]}）"
 ---
 
 # 内网资产发现（internal-discovery）
@@ -56,10 +56,15 @@ nmap -sT -Pn -n --script=banner -p <已 open 的端口> <单个存活主机> | h
 
 ### 5. 落资产并入索引
 ```bash
-jq -n --slurpfile alive <(awk '{print $1}' /tmp/ports.gnmap) '{discovered:$alive, method:"icmp+declared-ports"}' > /tmp/discovery.json
+awk '/Ports:.*open/{print $2}' /tmp/ports.gnmap | sort -u > /tmp/alive-hosts.txt
+jq -n --rawfile hosts /tmp/alive-hosts.txt \
+  '{discovered: ($hosts | split("\n") | map(select(length > 0))), method: "icmp+declared-ports"}' \
+  > /tmp/discovery.json
 ```
 **期望**：一份可交给记忆服务的发现清单（地址 + 端口 + 状态 + 证据引用）。
 **判据**：每条资产都要能追回一条命令输出；提交前核对一遍数量与 `/tmp/ports.gnmap` 的 `open` 计数一致。
+
+> 这份清单只有地址是自动来的；**端口、状态、证据引用要按前面几步的实测补齐**——`discovered` 不是「猜出来的资产表」，而是「已确认地址」这一列，其余字段由你填。
 
 ## 判读与去噪
 - **ICMP 不通不代表主机不在**：很多主机禁 ping。这也是第 2 步同时用 `-PS` 探声明端口的原因。

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-CRYP-01, RFC 5280, RFC 9309, MITRE ATT&CK T1590.002/T1596.003]
-  smoked: "沙箱实测@a197af1d36f6：dig @127.0.0.11 反解出容器名；未知名 SERVFAIL 形态；openssl s_client 非 TLS 失败形态"
+  smoked: "沙箱实测@f239cd79a21d：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为"
 ---
 
 # DNS 与证书面清点（recon-dns-cert）
@@ -23,6 +23,21 @@ metadata:
 - 证书判读依赖本地信任库：内部 CA / 自签会报校验失败，这**不等于**目标有问题。
 
 ## 步骤
+
+> **优先用 `pentest_recon`**：`dns_enum` / `tls_inspect` / `ct_subdomains` 把记录类型、SNI、
+> 通配处理都做成枚举参数，类别是 `passive_read`/`active_discovery`——**不需要逐条人工放行**；
+> 手写 `dig`/`openssl` 走 `pentest_exec` 属 `exploit_validation`，**每条都要人类批准**。
+> 注意：DNS 类 technique 在服务端按 `udp` 记账，**范围条目要声明 udp**，否则会被范围闸门拒绝。
+
+| 本 skill 的步骤 | 用这个 technique | 关键参数 |
+|---|---|---|
+| 1 选定解析器 | `dns_enum` | `resolver=public`（不想暴露内网 DNS 时） |
+| 2 正向解析 A/AAAA | `dns_enum` | `record_types=A,AAAA` |
+| 3 其它记录类型 | `dns_enum` | `record_types=MX,NS,TXT,CAA,SOA,SRV`（最多 8 个） |
+| 4 反向解析 PTR | ——（不覆盖） | 手写 `dig -x <地址>` |
+| 5 TLS 证书字段 | `tls_inspect` | `port=443`、`sni=none`（用目标名）或指定主机名 |
+| 6 协议/弱套件 | `tls_inspect` | `enumerate_protocols=on` |
+| 附加：子域枚举 | `ct_subdomains` / `dns_brute` | `include_wildcards=false`；`concurrency=10`、`wildcard_check=on` |
 
 ### 1. 选定解析器（先决条件）
 ```bash
@@ -104,17 +119,17 @@ echo | openssl s_client -connect <目标>:<端口> -servername <SNI名> 2>&1 >/d
 
 先证明「确实没有解析器」，再退化——**一次超时不等于不可达**：
 ```bash
-timeout 5 dig +short <目标> @<人类给的内网解析器 IP> 2>&1 | head -3; echo "exit=$?"
+timeout 5 dig +short <目标> @<人类给的内网解析器 IP> >/tmp/dig-out.txt 2>&1; echo "exit=$?"; head -3 /tmp/dig-out.txt
 ```
 **期望**：要么给出记录，要么给出 `no servers could be reached` / `connection timed out`。
-**判据**：拿到记录 → 走第 2–4 步正常路径；解析器明确不可达 → 才进入下面的退化序列，并把「解析器不可达」写进产出作为依据。
+**判据**：拿到记录 → 走第 2–4 步正常路径；解析器明确不可达 → 才进入下面的退化序列，并把「解析器不可达」写进产出作为依据。`exit` 要**单独捕获**：`dig … | head -3; echo $?` 取的是 `head` 的退出码，恒为 0，看它永远判不出解析器死活（2026-10-06 逐块验证实测）。`124`=timeout 掐断，`9`=`no servers could be reached`，`2`=参数/用法错。
 
 **期望**：每条拿不到的证据都有明确来源标注，或明确写「未取得」。
 **判据**：结论必须能追到来源——人类提供 / 内网解析器 / `[INFERENCE]`（仅线索）。**未标注来源的记录不得写入资产**；宁可写「未取得（无解析器）」，也不要留空冒充「无记录」。
 
 ## 判读与去噪
 - 一个名字多个 A 记录 = 负载均衡 / 多后端，不是冲突。
-- **`SERVFAIL` ≠ `NXDOMAIN`**：内网解析器对未知名可能返回 `SERVFAIL`（实测 Docker 内嵌 DNS 对未知容器名返回 `status: SERVFAIL`）。`NXDOMAIN` 是权威说「没有」，`SERVFAIL` 是解析器答不上——两者不要混为一谈。
+- **`SERVFAIL` ≠ `NXDOMAIN`**：内网解析器对未知名可能返回 `SERVFAIL`（曾实测 Docker 内嵌 DNS 对未知容器名返回 `status: SERVFAIL`），**也可能直接超时/无应答**——2026-10-06 在同一网络实测到的是 `communications error to 127.0.0.11#53: timed out` 与 `no servers could be reached`。两种都表示「解析器答不上」，与 `NXDOMAIN`（权威说「没有」）不是一回事，不要混为一谈；也不要因为「没看到 SERVFAIL」就以为解析器是好的。
 - 解析到私网/保留地址时，那是**分裂视图（split-horizon）**，不要拿公网库去核对。
 - 证书 SAN 多名字 ≠ 全在范围内；只登记范围内/相邻名字。
 - TXT 记录可能很长（DKIM base64），截断为「前 60 字符 + …」。

@@ -369,6 +369,8 @@ export class IntakeFlow {
         iteration: 1,
       });
       const updated = await this.#core.deps.txDb.query<{ state_version: number | string }>(
+        // version-bump-registered:intake-staging —— 理由见 transition-table.ts 的登记表：
+        // 作业停在 `auth_pending`，图上还没有可记账的边；版本推进让其它控制台手上的旧版本失效。
         `update pentest.engagements
             set current_status = 'auth_pending', current_phase = null,
                 active_agent_session_id = $2::uuid, state_version = state_version + 1, updated_at = now()
@@ -906,6 +908,8 @@ export class IntakeFlow {
         handoffId: null,
       });
       await this.#core.deps.txDb.query(
+        // version-bump-sanctioned:transition —— 这条推进与同事务的 `start` 转移行成对
+        // （`transitionId` 已预生成并写进 worker_sessions），属§5.4 的转移内推进。
         `update pentest.engagements
             set target_snapshot = $2::jsonb, scope_snapshot = $3::jsonb,
                 roe_snapshot = $4::jsonb, policy_snapshot = $5::jsonb,

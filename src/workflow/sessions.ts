@@ -5,8 +5,8 @@
  * 方法体与拆分前逐字一致；共享原语经构造注入的 {@link WorkflowCore} 使用。
  */
 
-import type { BudgetExtension, HumanAbort, HumanPause, HumanResume, Interjection, InterjectionResult, RetryRequest, StartWorkerInput, StartedWorker, SystemPauseRequest, TransitionResult, WorkerReportInput, WorkflowSnapshot } from '../contracts.ts';
-import { isPhase } from '../contracts.ts';
+import type { BudgetExtension, HumanAbort, HumanPause, HumanResume, Interjection, InterjectionResult, RetryRequest, StartWorkerInput, StartedWorker, SystemPauseRequest, TransitionResult, WorkflowSnapshot } from '../contracts.ts';
+import { isPhase, runActionAvailability } from '../contracts.ts';
 import { planTransition } from './transition-table.ts';
 import { issueLease, reissueLease, revokeLease } from './lease.ts';
 import { DEFAULTS } from '../contracts.ts';
@@ -154,62 +154,17 @@ export class SessionFlow {
     };
   }
 
-  // ───────────────────────── Worker 自报成果（工具调用，非人类） ─────────────────────────
+  // ───────────────────────── Worker 自报成果 ─────────────────────────
 
   /**
-   * Worker 提交报告：只把会话推进到等待人工，**不改阶段、不创建会话**（§1.1 P1、§7.1）。
+   * 「Worker 提交报告」只有**一份实现**：`PgWorkerTools.submitReport`
+   * （`src/memory/pg-worker-tools.ts`，由 `pentest_submit_report` 工具调用）。
    *
-   * 这个方法由 `pentest_submit_report` 工具调用，不是人类 RPC。
+   * 这里曾有一份 `finishWorker`：语义相同但校验更少（不校验租约世代、允许 intake 提交），
+   * 生产零调用、只有测试在跑——于是 `pg-workflow.test.ts` 里那批断言证明的是一条
+   * 线上不会执行的路径，而两份实现的语义还在继续分叉（2026-10-05 复核 F3）。
+   * 现已删除：报告准入的断言一律以生产实现为准（`pg-worker-tools.test.ts`）。
    */
-  async finishWorker(input: { workerSessionId: string; report: WorkerReportInput }): Promise<WorkflowSnapshot> {
-    const session = await this.#core.loadSession(input.workerSessionId);
-    if (session === null) {
-      throw new WorkflowRejection('lease_required', `会话不存在：${input.workerSessionId}`);
-    }
-
-    // 事务内加锁：这是 Agent 侧动作，**没有**人类提供的期望版本，因此用行锁
-    // 串行化「是否还能提交」的判定与写入本身（§10.6 的提交准入）。
-    // 不在事务外加锁——那样语句结束即释放，锁形同虚设。
-    await this.#core.tx(async () => {
-      const engagement = await this.#core.lockEngagementCurrent(session.engagement_id);
-      if (engagement.active_agent_session_id !== session.id) {
-        throw new WorkflowRejection(
-          'lease_required',
-          '只有当前活动会话可以提交报告；本会话已被取代或关闭',
-        );
-      }
-
-      // 注意：`worker_running → waiting_human_review` 是 **Agent 侧**动作，
-      // §5.2 的状态图把它标记为 `recorded: false`——它不写 state_transitions
-      // （§5.4 只规范人类操作），只写领域事件 worker.report / worker.waiting_human。
-      await this.#core.deps.txDb.query(
-        `update pentest.worker_sessions set status = 'waiting_human' where id = $1::uuid`,
-        [session.id],
-      );
-      // **intake 会话是例外**：确认之前主状态必须停在 `auth_pending`。
-      //
-      // §13.1 的 AUTH_PENDING → READY 才是「人类确认授权与范围」那条边，
-      // 而 intake 阶段的「等人类」**就是** AUTH_PENDING 本身。此前这里不分会话种类，
-      // intake Agent 一提报告就把主状态推到 `waiting_human_review`，于是确认侧的
-      // 前置条件永远不成立——人类在会话里点确认只会拿到
-      // 「当前任务没有可确认的 intake 范围」（会话状态也从 `active` 变成 `waiting_human`，
-      // 第二道闸门同样拒绝），**建作业流程走不完**。
-      if (session.session_kind !== 'intake') {
-        await this.#core.updateEngagement({
-          engagementId: session.engagement_id,
-          expectedVersion: toInt(engagement.state_version, 'state_version'),
-          currentStatus: 'waiting_human_review',
-        });
-      }
-      await this.#core.audit(session.engagement_id, session.id, 'worker.report', {
-        status: input.report.status,
-        summary: input.report.summary,
-      });
-      await this.#core.audit(session.engagement_id, session.id, 'worker.waiting_human', {});
-    });
-
-    return this.#core.getState(session.engagement_id);
-  }
 
   // ───────────────────────── 重做 ─────────────────────────
 
@@ -333,7 +288,17 @@ export class SessionFlow {
       const session = await this.#core.loadSession(targetSessionId);
       if (session !== null) {
         // 状态已在事务内置为 active（触发器只允许 waiting_human → active）
-        await this.#core.deliverOrFail(session.dsh_session_id, input.taskPrompt, targetSessionId);
+        try {
+          await this.#core.deliverOrFail(session.dsh_session_id, input.taskPrompt, targetSessionId);
+        } catch (error) {
+          // 转移已提交、消息没送到：不能只抛异常把作业留在「运行中」（§5.4 的失败语义）。
+          await this.#core.markDeliveryFailure({
+            engagementId: input.engagementId,
+            workerSessionId: targetSessionId,
+            detail: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
       }
     } else {
       const targetPhase = isPhase(engagement.current_phase) ? engagement.current_phase : 'intelligence-gathering';
@@ -406,8 +371,21 @@ export class SessionFlow {
 
   async resume(input: HumanResume): Promise<WorkflowSnapshot> {
     const engagement = await this.#core.loadEngagement(input.engagementId);
-    if (engagement.status !== 'paused') {
-      throw new WorkflowRejection('classification_rejected', `只有 PAUSED 可以恢复（当前 ${engagement.status}）`);
+    // 恢复的**单源判定**在契约层（`runActionAvailability`）：`paused` 与 `blocked` 都可以
+    // 恢复，客户端按同一函数启用按钮。`blocked` 由启动对账（§15.2）与会话创建失败写入，
+    // 语义是「等人类处置」——处置完必须有受支持的出口，否则堵塞的作业只能靠改库收场。
+    const availability = runActionAvailability({
+      mainStatus: engagement.current_status,
+      runMarker: engagement.status,
+      activeWorkerSessionId: engagement.active_agent_session_id,
+    });
+    if (!availability.canResume) {
+      throw new WorkflowRejection(
+        'classification_rejected',
+        engagement.current_status === 'complete'
+          ? '作业已签字导出（complete），运行期动作不再有意义'
+          : `只有已暂停（paused）或已阻塞（blocked）可以恢复（当前运行标记 ${engagement.status}）`,
+      );
     }
     // 恢复：只把运行标记置回 running，**主状态从未改变**（§5.1 两层状态表）。
     // 租约保留不吊销——暂停若吊销，会连带作废该会话全部放行凭证（§10.6）。
@@ -443,6 +421,7 @@ export class SessionFlow {
         reason: input.reason,
       });
       await this.#core.deps.txDb.query(
+        // version-bump-sanctioned:transition —— 与同一事务里的 `resume` 转移行成对。
         `update pentest.engagements set status = 'running', state_version = $2, updated_at = now()
           where id = $1::uuid`,
         [input.engagementId, input.expectedStateVersion + 1],
@@ -468,6 +447,24 @@ export class SessionFlow {
     if (session === null) throw new WorkflowRejection('lease_required', '会话不存在');
 
     if (session.status === 'active') {
+      // 运行中投递不产生状态转移，但**仍要核对人类读到的那一版**：插话是投进模型上下文的
+      // 消息，双击或重放会把同一条指令送进会话两次（对模型可见的副作用）。
+      // 前置判定与唤醒路径共用契约层的 `runActionAvailability`。
+      await this.#core.tx(async () => {
+        const engagement = await this.#core.lockEngagement(session.engagement_id, input.expectedStateVersion);
+        if (
+          !runActionAvailability({
+            mainStatus: engagement.current_status,
+            runMarker: engagement.status,
+            activeWorkerSessionId: engagement.active_agent_session_id,
+          }).canInterject
+        ) {
+          throw new WorkflowRejection(
+            'classification_rejected',
+            `插话只在运行中送达（当前运行标记 ${engagement.status}）：暂停或阻塞期间投递无人消费`,
+          );
+        }
+      });
       await this.#core.deliverOrFail(session.dsh_session_id, input.message, session.id);
       await this.#core.audit(
         session.engagement_id,
@@ -492,7 +489,19 @@ export class SessionFlow {
     // 唤醒：等待人工 → 运行中，写 interject_wake 转移（不递增迭代、无交接记录）
     let stateVersion = 0;
     await this.#core.tx(async () => {
-      const engagement = await this.#core.lockEngagement(session.engagement_id, await this.#core.stateVersion(session.engagement_id));
+      // 乐观锁用**人类读到的那一版**。此前是 `await stateVersion(...)`——拿数据库当前版本
+      // 当期望值，比对必然通过，等于没有加锁（控制台那层的方法表注释自己写着
+      // 「这是服务契约的缺口」）。现在 `expectedStateVersion` 进了 `Interjection` 契约，
+      // 端点也改成 `lock: 'actor'`，这条比对才是真的。
+      const engagement = await this.#core.lockEngagement(session.engagement_id, input.expectedStateVersion);
+      // 唤醒同时要求运行标记为 running：暂停或阻塞时把主状态扳回 worker_running，
+      // 会造出「标记暂停、会话却在跑」的两个事实（§5.1 两层状态必须并存不矛盾）。
+      if (engagement.status !== 'running') {
+        throw new WorkflowRejection(
+          'classification_rejected',
+          `插话唤醒要求运行标记为 running（当前 ${engagement.status}）：请先恢复作业`,
+        );
+      }
       // REQ-8b（2026-10-05 复核）：唤醒必须读**真实主状态**并在其上判定。
       // 此前硬编码 `fromStatus: 'waiting_human_review'`——于是 `beginHandoff` 把作业置为
       // `transition_confirmation`（会话仍是 waiting_human）时，插话会把作业扳回
@@ -552,7 +561,18 @@ export class SessionFlow {
       stateVersion = toInt(engagement.state_version, 'state_version') + 1;
     });
 
-    await this.#core.deliverOrFail(session.dsh_session_id, input.message, session.id);
+    try {
+      await this.#core.deliverOrFail(session.dsh_session_id, input.message, session.id);
+    } catch (error) {
+      // 与重做复用同一条处置：转移已提交、消息没送到 → 会话置 failed（吊销租约）、
+      // 作业置 blocked，人类用 resume 或 abort 决定下一步。
+      await this.#core.markDeliveryFailure({
+        engagementId: session.engagement_id,
+        workerSessionId: session.id,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     await this.#core.audit(
       session.engagement_id,
       session.id,
@@ -569,6 +589,11 @@ export class SessionFlow {
    * 追加预算并恢复会话（§10.5）。
    *
    * **不吊销租约**——暂停保留租约，否则一次预算追加会静默作废该会话全部放行凭证。
+   *
+   * **不改主状态**：追加预算是「给得起更多」，不是「回到运行中」。此前这里写死
+   * `currentStatus: 'worker_running'`——于是在「等待人工判断」时追加预算会把主状态从
+   * `waiting_human_review` 扳回 `worker_running`，等于替人类点了「重做」；在 `complete`
+   * 之后追加甚至能把已签字导出的作业拉回运行中（2026-10-05 复核 F1 的连带项）。
    */
   async extendBudget(input: BudgetExtension): Promise<WorkflowSnapshot> {
     const session = await this.#core.loadSession(input.workerSessionId);
@@ -577,6 +602,23 @@ export class SessionFlow {
     await this.#core.tx(async () => {
       // 用人类提供的期望版本做乐观锁（BudgetExtension 是 HumanActor）
       const engagement = await this.#core.lockEngagement(session.engagement_id, input.expectedStateVersion);
+      // 适用范围由契约层单源判定给出：运行中或已暂停，且作业未签字导出。
+      // （早先这里是现拼的 `!canPause && status !== 'paused'`，漏掉了 `complete`——
+      // 在 report_ready 暂停、再签字导出的作业会停在「complete + paused」而被放行，
+      // 于是一次追加预算把已经结束的作业复活成 running。2026-10-05 质检发现。）
+      const availability = runActionAvailability({
+        mainStatus: engagement.current_status,
+        runMarker: engagement.status,
+        activeWorkerSessionId: engagement.active_agent_session_id,
+      });
+      if (!availability.canExtendBudget) {
+        throw new WorkflowRejection(
+          'classification_rejected',
+          engagement.current_status === 'complete'
+            ? '作业已签字导出（complete），不再接受预算追加'
+            : `只有运行中或已暂停的作业可以追加预算（当前运行标记 ${engagement.status}）：请先恢复或终止`,
+        );
+      }
       await this.#core.recordDecision({
         engagementId: session.engagement_id,
         operatorId: input.operatorId,
@@ -610,7 +652,7 @@ export class SessionFlow {
       await this.#core.updateEngagement({
         engagementId: session.engagement_id,
         expectedVersion: toInt(engagement.state_version, 'state_version'),
-        currentStatus: 'worker_running',
+        // 只推进版本：主状态由 `resume` / 各转移单独负责（见方法头部的说明）。
       });
       await this.#core.audit(session.engagement_id, session.id, 'budget.extended', {
         additionalTokens: input.additionalTokens ?? 0,

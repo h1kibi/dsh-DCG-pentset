@@ -34,6 +34,7 @@
  */
 
 import type { ActionClass, ApprovalDecision, ApprovalRecord, ToolRunResult } from '../contracts.ts';
+import { EXECUTION_MAIN_STATUSES } from '../contracts.ts';
 import type { DbClient } from '../db/port.ts';
 import type {
   ApprovalRequest,
@@ -42,6 +43,7 @@ import type {
   ExecutionStore,
   ToolRunRecord,
 } from './service.ts';
+import { ExecutionRefusal } from './service.ts';
 
 // ───────────────────────────── 常量 ─────────────────────────────
 
@@ -113,9 +115,15 @@ const SQL_INSERT_APPROVAL = `
 insert into pentest.approvals (
   engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
   plan_hash, risk_summary, decision, lease_generation, expires_at
-) values (
-  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6, $7, 'pending', $8::integer, $9
 )
+select $1::uuid, $2::uuid, $3::text, $4::jsonb, $5::jsonb, $6::text, $7::text, 'pending',
+       $8::integer, $9::timestamptz
+  from pentest.engagements e
+ where e.id = $1::uuid
+   -- 主状态复查（与 SQL_COMMIT_RUN 同源条件）：受理读绑定时用的是另一条连接，
+   -- 读不到「结束技术测试」未提交的那一版主状态——少了这个条件，
+   -- 作业宣布收工之后库里还会多出一条永远执行不了的凭证（2026-10-05 质检发现）。
+   and e.current_status = any($10::text[])
 returning id`;
 
 /**
@@ -186,6 +194,10 @@ with session_row as (
      where s.id = $2::uuid
        and s.status in ('active', 'waiting_human', 'handoff_drafting', 'transition_confirmation', 'paused', 'blocked')
        and e.status = 'running'
+       -- 主状态的另一半（§10.2）：运行标记只管暂停/阻塞/终止，看不见「作业已经收工」。
+       -- 「结束技术测试」的事务提交后、租约被吊销前，一条在等的提交会在这里重新求值
+       -- （FOR UPDATE 的 EvalPlanQual）——少了这个条件，动作会落在「技术测试已结束」之后。
+       and e.current_status = any($15::text[])
        -- 版本条件与登记同语句原子判定：admit 复核通过之后、本语句提交之前
        -- 版本前进时，登记必须失败（否则在途动作会带着旧版本接触目标，事故 2026-10-05）。
        and e.policy_epoch = $13::bigint
@@ -385,6 +397,8 @@ export class PgExecutionStore implements ExecutionStore {
             riskSummary,
             input.leaseGeneration,
             input.expiresAt,
+            // $10：允许执行的主状态（与 SQL_COMMIT_RUN 同一份单源）。
+            [...EXECUTION_MAIN_STATUSES],
           ]
         : [
             engagementId,
@@ -403,7 +417,15 @@ export class PgExecutionStore implements ExecutionStore {
           ],
     );
     const approvalId = created.rows[0]?.id;
-    if (approvalId === undefined) throw new Error('requestApproval：approvals 插入未返回 id');
+    if (approvalId === undefined) {
+      // 0 行只可能来自 SQL 里的主状态复查（会话不存在的分支在函数开头已经响亮抛出）：
+      // 作业已经不在工作态（例如人类刚按下「结束技术测试」）。这是**业务拒绝**，
+      // 走类型化错误让服务层回机器码，不要当故障抛。
+      throw new ExecutionRefusal(
+        'engagement_halted',
+        `requestApproval：engagement 的主状态不接受新的放行申请（会话 ${input.workerSessionId}）`,
+      );
+    }
     return { approvalId };
   }
 
@@ -463,6 +485,8 @@ export class PgExecutionStore implements ExecutionStore {
       input.leaseGeneration,
       input.policyEpoch,
       input.scopeVersion,
+      // 允许执行的主状态（§10.2 的另一半闸门）：契约层单源，与受理闸门同一份。
+      [...EXECUTION_MAIN_STATUSES],
     ]);
     const row = committed.rows[0];
     if (row !== undefined && row.run_id !== null) {
@@ -481,11 +505,17 @@ export class PgExecutionStore implements ExecutionStore {
         `commitRun：worker_sessions 中不存在会话 ${input.workerSessionId}，拒绝登记运行`,
       );
     }
-    const engagement = await this.#db.query<{ status: string }>(
-      `select status from pentest.engagements where id = $1::uuid`,
+    const engagement = await this.#db.query<{ status: string; current_status: string }>(
+      `select status, current_status from pentest.engagements where id = $1::uuid`,
       [engagementId],
     );
     if (engagement.rows[0]?.status !== 'running') {
+      return { ok: false, reason: 'engagement_halted' };
+    }
+    // 主状态不在工作态（典型：人类刚「结束技术测试」→ report_ready）：给同一个原因码，
+    // **不要落到下面的凭证诊断**——那会把「作业已收工」误报成「凭证不可用」，
+    // 模型会据此重新申请放行，白跑一轮（事故 2026-10-05 的同类误报）。
+    if (!(EXECUTION_MAIN_STATUSES as readonly string[]).includes(engagement.rows[0]?.current_status ?? '')) {
       return { ok: false, reason: 'engagement_halted' };
     }
     const sessionState = await this.#db.query<{ status: string }>(

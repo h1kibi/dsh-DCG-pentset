@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [Nmap NSE 官方文档, OpenSSL s_client 文档, OWASP WSTG-CONF]
-  smoked: "沙箱实测@a197af1d36f6：nmap --script=http-headers,http-methods 输出 Server 与 Supported Methods；ssl-* 打在非 TLS 端口无输出"
+  smoked: "沙箱实测@f239cd79a21d：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）"
 ---
 
 # 服务面候选漏洞核验（vuln-service-checks）
@@ -24,6 +24,20 @@ metadata:
 - **可出网**（2026-10-05 起）：OCSP/CRL 联网校验可用；但本地证书链与有效期仍是主证据，在线状态作补充并标来源。
 
 ## 步骤
+
+> **优先用 `pentest_scan`**：`nse_handshake` 走只读 NSE 白名单（`smtp-commands`/`ftp-anon`/`ssh-auth-methods`/
+> `rdp-ntlm-info`/`ssl-enum-ciphers`/`smb-os-discovery`/`smb-security-mode`），`tls_weakness` 枚举协议与套件；
+> 类别 `active_discovery`，**不需要逐条人工放行**。手写 `nmap --script` 走 `pentest_exec` 是
+> `exploit_validation`——**每条都要人类批准**，且沙箱侧同样只放行白名单脚本。
+
+| 本 skill 的核验项 | 用这个 technique | 关键参数 |
+|---|---|---|
+| TLS 协议/套件/证书 | `tls_weakness` | `port=443`、`enumerate_protocols=on` |
+| SMTP 能力 | `nse_handshake` | `port=25`、`scripts=smtp-commands` |
+| 匿名 FTP（只列目录） | `nse_handshake` | `port=21`、`scripts=ftp-anon` |
+| SSH 认证方式 | `nse_handshake` | `port=22`、`scripts=ssh-auth-methods` |
+| RDP NTLM 信息 | `nse_handshake` | `port=3389`、`scripts=rdp-ntlm-info` |
+| SMB 系统/签名 | `nse_handshake` | `port=445`、`scripts=smb-os-discovery,smb-security-mode` |
 
 ### 1. 固定服务版本（后续判据的输入）
 ```bash

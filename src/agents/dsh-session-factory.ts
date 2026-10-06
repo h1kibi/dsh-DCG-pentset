@@ -66,7 +66,8 @@ import { SessionSeq } from '@deepseek-ai/dsh-session';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
-import { SANDBOX_TOOLBELT, describeError } from '../contracts.ts';
+import { describeError } from '../contracts.ts';
+import { renderSandboxBrief } from './sandbox-brief.ts';
 import type {
   CreatedSession,
   FrozenSessionInput,
@@ -668,17 +669,12 @@ function renderCapabilitySection(input: FrozenSessionInput): string {
     `可用工具（工具面之外的工具对本会话根本不可见）：${input.toolAllow.length === 0 ? '（无）' : input.toolAllow.join('、')}`,
     `需要逐次人工放行的动作类别：${approval}`,
     '',
-    input.sessionKind === 'intake'
-      ? 'intake 工具限制：不得执行目标动作，不得申请动作放行。'
-      : `沙箱里可直接使用的真工具：${SANDBOX_TOOLBELT.join('、')}（另有 python3 与常用库、` +
-        '/usr/share/wordlists 下的字典）。用它们不需要为每个动作注册模板。' +
-        '沙箱可出网（可达范围与宿主一致，DNS 用宿主解析器）：公网目标与在线资料都够得着，' +
-        '但**可达不等于授权**——只对已授权目标动作，每条命令仍要人类逐次放行。',
+    renderSandboxBrief(input.sessionKind),
+    '',
     input.sessionKind === 'intake'
       ? ''
-      : '**跑命令的主通道是 `pentest_exec`**：`command` 写命令原文（人类在放行卡上读到的是它），' +
-        '`port` 填这条命令主要针对的端口；目标由选择器给出。服务端会把命令与端口绑到唯一那张' +
-        '直连命令模板上（命令原文转 `*_b64`），你**不需要**、也**不能**自己指定模板。',
+      : '**跑命令的主通道**：第 1 条是结构化动作（`pentest_recon` / `pentest_scan`，不消耗审批），第 2 条是 `pentest_exec`（逐条人批）。' +
+        '服务端会把 `pentest_exec` 的命令原文绑到唯一那张直连命令模板上（命令转 `*_b64`），你**不需要**、也**不能**自己指定模板。',
     input.sessionKind === 'intake' ? '' : '唯一注册的动作模板（决定放行的动作类别与参数形状；无需你在调用里给出）：',
     ...templates,
     '',

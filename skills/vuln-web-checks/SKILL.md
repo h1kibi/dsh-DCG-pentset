@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [OWASP WSTG, OWASP Top 10 2021, PayloadsAllTheThings, HackTricks]
-  smoked: "沙箱实测@a197af1d36f6：soft-404 基线三行一致；ffuf -ac 命中 robots.txt/index.html；OPTIONS → 501 判读"
+  smoked: "沙箱实测@f239cd79a21d：8 块原文照跑，5 块通过、3 块为靶站无该现象（POST 501、无 Set-Cookie、IDOR/反射/安全头全 404 或缺失，静态站预期）；soft-404 基线三行一致 404/469；ffuf -ac + jq 范式 20s 命中 1；OPTIONS → 501 判读"
 ---
 
 # Web 面候选漏洞核验（vuln-web-checks）
@@ -24,6 +24,22 @@ metadata:
 - 每个测试项只给一个结论：要么「命中 + 证据行」，要么「未命中 + 排除依据」，不写「视情况而定」。
 
 ## 步骤
+
+> **优先用 `pentest_scan`（结构化核验入口）**：它只发读取类请求、不写目标、不下载内容，
+> 类别 `active_discovery`——**不需要逐条人工放行**；手写命令走 `pentest_exec` 属 `exploit_validation`，
+> **每条都要人类批准**。核验的产出是「成立 / 不成立 / 需要更多证据」+ 证据行，判断依据写在本 skill 的判据里。
+
+| 本 skill 的 WSTG 项 | 用这个 technique | 关键参数 |
+|---|---|---|
+| 技术栈与响应头 | `http_check` | `check=tech_stack` / `check=security_headers` |
+| 会话与 Cookie 属性 | `http_check` | `check=cookies`（只读 Set-Cookie 的 Secure/HttpOnly/SameSite） |
+| CORS 策略 | `http_check` | `check=cors_policy`（只发 Origin 头，不带凭证） |
+| HTTP 方法暴露 | `http_check` | `check=http_verbs`（只做 OPTIONS/TRACE，**不试 PUT/DELETE**） |
+| 错误页信息泄露 | `http_check` | `check=error_disclosure`（随机不存在路径的响应形态） |
+| 配置面暴露 | `exposure_check` | `paths=env,git,backup,swagger,actuator`（只报存在性/长度/哈希/形态，不回显内容） |
+
+> 需要**发载荷**的核验（注入、XSS、SSRF、上传…）不属于本阶段：那些是「候选漏洞的验证计划」，
+> 交给利用验证阶段逐条人批执行。
 
 ### 0. 建立响应基线（先量 soft-404）
 ```bash

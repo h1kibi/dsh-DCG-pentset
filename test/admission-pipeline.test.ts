@@ -100,6 +100,8 @@ function binding(over: Partial<SessionBinding> = {}): SessionBinding {
     engagementId: 'e1',
     status: 'active',
     engagementStatus: 'running',
+    // 默认工作态：绝大多数用例测的是别的闸门，不该被主状态拦住。
+    mainStatus: 'worker_running',
     scopeVersion: 1,
     policyEpoch: 1,
     lease: lease(),
@@ -358,6 +360,22 @@ describe('闸门可独立测试（每道闸门只依赖状态）', () => {
     });
     const leaseOutcome = await leaseGate.check(revoked);
     assert.equal(leaseOutcome.kind === 'rejected' ? leaseOutcome.error.code : '', 'lease_revoked');
+  });
+
+  test('engagement 闸门的另一半：主状态不在工作态时也拒（运行标记是 running 也没用）', async () => {
+    // 场景：人类按下「结束技术测试」→ 主状态 report_ready，而运行标记仍是 running。
+    // 只看标记的话这个闸门会放行，动作于是落在「技术测试已结束」之后
+    // （2026-10-05 质检发现的窗口；提交语句的原子条件与此处同源）。
+    const finished = state({ binding: binding({ mainStatus: 'report_ready' }) });
+    const outcome = await engagementHaltGate.check(finished);
+    assert.equal(outcome.kind === 'rejected' ? outcome.error.code : '', 'engagement_halted');
+    assert.match(outcome.kind === 'rejected' ? outcome.error.message : '', /report_ready/);
+    assert.match(outcome.kind === 'rejected' ? outcome.error.message : '', /worker_running \/ waiting_human_review/);
+
+    // 等待人工判断是**允许**的：人类批准放行后要唤醒 Agent 继续干活。
+    const waiting = state({ binding: binding({ mainStatus: 'waiting_human_review' }) });
+    const waitingOutcome = await engagementHaltGate.check(waiting);
+    assert.equal(waitingOutcome.kind, 'pass');
   });
 
   test('全部通过：管线给出 passed，且事实都已在状态里可读', async () => {
