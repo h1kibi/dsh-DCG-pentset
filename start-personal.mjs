@@ -477,13 +477,34 @@ if (sandbox && failures.length === 0) {
     failures.push(error instanceof Error ? error.message : String(error));
   }
 }
+/**
+ * 端口探测（2026-10-06 实测教训）：Windows 的**保留端口段**会让 `listen` 直接 EACCES——
+ * 文档默认的 3090 在有些机器上绑不上（`netstat` 显示"空闲"不等于能 bind）。请求的端口绑不上时
+ * 退回 `0`（由宿主自己挑一个空闲端口），并明确打印——否则症状只是"60 秒后没拿到可用页面"，
+ * 看不出根因（2026-10-06 就是这么查了一轮的）。
+ */
+async function resolvePort(requested) {
+  if (requested === '0') return '0';
+  const { createServer } = await import('node:net');
+  const bindable = await new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => server.close(() => resolve(true)));
+    server.listen(Number(requested), '127.0.0.1');
+  });
+  if (bindable) return requested;
+  console.log(`提醒：端口 ${requested} 在本机绑不上（多见于 Windows 保留端口段）——改用系统分配的端口。`);
+  return '0';
+}
+
 if (failures.length > 0) {
   console.error('启动前检查失败：');
   for (const failure of failures) console.error(`  - ${failure}`);
   process.exitCode = 1;
 } else {
-  console.log(`启动 dsh（profile: ${PROFILE}，端口 ${PORT}）…`);
-  const child = spawn(process.execPath, [DSH_BIN, '--profile', PROFILE, '--no-open', '--port', PORT], {
+  const port = await resolvePort(PORT);
+  console.log(`启动 dsh（profile: ${PROFILE}，端口 ${port}）…`);
+  const child = spawn(process.execPath, [DSH_BIN, '--profile', PROFILE, '--no-open', '--port', port], {
     cwd: process.cwd(),
     env: { ...process.env, DSH_HOME, PENTEST_DATABASE_URL: process.env.PENTEST_DATABASE_URL },
     stdio: ['inherit', 'pipe', 'pipe'],

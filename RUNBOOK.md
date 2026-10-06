@@ -939,6 +939,13 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 - **怎么到 Agent 手上**：会话创建时能力快照列出「已装载 skill：名字（一句话描述）」；
   正文用 **`skill_load`** 按需取——**只有该会话装载的名字取得到**（装载在创建时冻结，
   库里的其它 skill 对它不可见，这是 `PgWorkerTools.loadSkill` 的第一道判断）。
+- **改了 skills/** 之后必须播种（否则库里的旧版本继续被装载——2026-10-06 实测：库里还是 21 条、
+  而仓库已有 25 条，新增的 AD/API/跳板技能在会话里根本看不到）。播种后核对一行：
+
+  ```bash
+  docker exec <pg 容器> psql -U postgres -d pentest_personal -t -c 'select count(*) from pentest.skills'
+  # 期望 = `ls -d skills/*/ | wc -l`（当前 25）
+  ```
 - **默认装载**写在 `src/skills/skill-pack.ts` 的 `SKILL_PACKS`；人类在控制台仍可改勾选。
 - 正文是**会被模型当指令执行的内容**：新增/修改走服务层（哈希 + 审计），别直接改库。
   未配 `skillAuditEngagementId` 时启动日志会明确警告「skill 增删改不写审计」——这是已知缺口。
@@ -955,8 +962,9 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 | 本插件在 0.2.0-rc.2 上 | `typecheck` / `lint` / `build` 全绿，**1712 项测试全过**（含客户端产物与 typert 端点面） |
 | 启动预检 | 通过（Docker、网络、代理、镜像摘要、个人库；迁移已是最新 26 项），本插件的启动自检也照常打印 |
 | **阻塞 1：生态插件** | `dsh-budget` / `dsh-permission-rules` / `dsh-defend` / `dsh-mask` / `dsh-observe` 的**最新版本**仍把 peer 钉在 `@deepseek-ai/dsh-llm: >=0.1.2-rc.1 <0.2.0`（**明确排除 0.2**）。实测启动直接失败：`startup failed: 2 required plugins did not activate`，其中 `typert-loader` 报 `dsh-budget#budget/status parameter codec has no create() factory`（0.2 的 typert 校验更严，旧版清单不合规） |
-| 阻塞 2（环境，与版本无关） | 起不来时先查端口：`PENTEST_PORT=3092` → `listen EACCES 127.0.0.1:3092`；**3090 同样不可绑定**（本机落在 Windows 保留段里——`netstat` 显示"空闲"不代表能 bind）。判定手法：`PENTEST_PORT=0 node start-personal.mjs`（让系统挑端口）——**能起来就说明宿主与插件都正常，问题只在端口**。实测：0.1.5 + `--port 0` 完整起来并打印带 token 的 URL ✓ |
-| 副作用（回退时必做） | 0.2 的 `dsh-settings` 会把 `~/.dsh/settings.yaml` **改名为 `settings.yaml.imported`**（日志里体现为 `settings: section … was not imported into entry …` 警告）。回退到 0.1.5 后宿主找不到 settings 会**静默挂住**（不报错、不打 URL）。修法：`cp -n ~/.dsh/settings.yaml.imported ~/.dsh/settings.yaml` |
+| 阻塞 2（环境，与版本无关） | 起不来时先查端口：`PENTEST_PORT=3092` → `listen EACCES 127.0.0.1:3092`；**3090 同样不可绑定**（本机落在 Windows 保留段里——`netstat` 显示"空闲"不代表能 bind）。**已修**：`start-personal.mjs` 现在先探测端口，绑不上就退回 `0`（系统分配）并打印提醒——症状从"60 秒后说没拿到可用页面"变成一行明确的提醒 |
+| 副作用（回退时必做） | 0.2 的 `dsh-settings` 会把 `~/.dsh/settings.yaml` **改名为 `settings.yaml.imported`**（日志里体现为 `settings: section … was not imported into entry …` 警告）。回退到 0.1.5 后宿主找不到 settings 会**静默挂住**（不报错、不打 URL）。修法：`cp -n ~/.dsh/settings.yaml.imported ~/.dsh/settings.yaml`，**并检查 `agent-presets:` 一节还在不在**——它在文件里时默认模式才是「渗透模式」（2026-10-06 实测：恢复出来的旧备份少了这一节，默认模式悄悄回落到 `standard`） |
+| 插件配置层级 | `recovery` 是**顶层键**（与 `runtime` 并列）；写进 `runtime` 里会被静默忽略（启动告警原话：「请把它移出 runtime」）。个人 profile 里那一处已改正（2026-10-06） |
 
 **解锁条件**：那 5 个生态插件发布 `dsh-llm`/`dsh-tools` peer 放开到 0.2 的版本。届时按这个顺序升：
 
