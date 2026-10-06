@@ -16,7 +16,7 @@ export const SKILL_PACKS: Readonly<Record<Phase, readonly string[]>> = Object.fr
   'threat-modeling': ['model-trust-boundaries', 'model-attack-paths', 'model-attack-trees', 'asset-graph', 'business-impact'],
   'vulnerability-analysis': ['vuln-web-checks', 'vuln-api-checks', 'vuln-service-checks', 'vuln-intel', 'vuln-triage', 'vuln-ad-checks'],
   exploitation: ['exploit-minimal-poc', 'exploit-safety', 'exploit-auth-testing', 'exploit-evidence', 'exploit-approval-request'],
-  'post-exploitation': ['post-impact-boundary', 'post-cleanup-verify', 'post-loop-handoff'],
+  'post-exploitation': ['post-impact-boundary', 'post-cleanup-verify', 'post-lateral-pivot', 'post-loop-handoff'],
 });
 
 /** pack 里出现的全部 skill 名（去重，供播种脚本与检查使用）。 */

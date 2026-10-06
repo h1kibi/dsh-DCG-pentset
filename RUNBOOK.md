@@ -199,14 +199,14 @@ sh scripts/dev-sandbox-up.sh up     # 建网 + 推镜像 + 打印要抄的 diges
 
 启动器预检会比对摘要，不一致直接拒绝启动（fail-closed）；代码只认 digest、不认标签。
 
-#### ⑤ 重跑 skill 冒烟证明（24 份）
+#### ⑤ 重跑 skill 冒烟证明（25 份）
 
 `skills/*/SKILL.md` 的 `metadata.smoked` 绑的是镜像摘要前 12 位，摘要一换 `test/skill-pack.test.ts` 就红——
 **这是刻意的**：逼人重跑命令，而不是让旧背书一直挂着。
 
 **注意顺序**：先**真的重跑**（见下），再改摘要——反了就是拿新摘要包装旧结论。
 
-改摘要这一步是机械的，用脚本（别手工改 24 份）：
+改摘要这一步是机械的，用脚本（别手工改 25 份）：
 
 ```bash
 npm run build  # 一次性检查文件没写坏
@@ -240,6 +240,20 @@ node scripts/resync-smoke-stamps.mjs <新摘要前 12 位>   # 输出：改了 N
 
   地址用 `docker inspect fx-api` 现取（或直接用容器名 `fx-api:9000`，同网容器可解析）。
   `vuln-api-checks` 的 `smoked` 就是对着它跑出来的。
+- **跳板拓扑**（`post-lateral-pivot` 的靶场：内网段从沙箱**打不到**，只能经跳板）：
+
+  ```bash
+  docker network create --internal pentest-lab-deep
+  docker run -d --name deep-svc --network pentest-lab-deep \
+    --entrypoint python3 python:3.10-slim-bookworm -m http.server 8080 --bind 0.0.0.0
+  # 跳板：同时接两张网。实验室里用**工具镜像**充当"已控跳板"（真实场景是目标主机 + 经放行投放的客户端）
+  docker run -d --name pivot-host --network pentest-lab-internal --entrypoint /bin/bash \
+    pentest-tools:toolbelt-2026.10.06 -c 'sleep infinity'
+  docker network connect pentest-lab-deep pivot-host
+  ```
+
+  沙箱直连 `deep-svc` 会超时（它的网段只对跳板可见）；隧道的**方向是沙箱主动连出**
+  （沙箱无入站端口）。`post-lateral-pivot` 的 `smoked` 就是在这个拓扑上跑出来的。
 - **AD 域**：`pentest-ad-dc:lab`（Samba AD DC，域 `LAB.LOCAL`，管理员 `Passw0rd!234`）：
 
   ```bash

@@ -80,6 +80,19 @@ docker run -d --name fx-api --network pentest-lab-internal \
 它内置了刻意做错的形态（未授权列表、BOLA、`Allow` 与实现不一致、Content-Type 判定、mass assignment、
 GraphQL introspection、verbose 报错），写 API 技能时就拿它当判据来源。
 
+需要跳板/隧道面时再搭一个"内网段 + dual-homed 跳板"（沙箱直连打不到那个网段）：
+
+```bash
+docker network create --internal pentest-lab-deep
+docker run -d --name deep-svc --network pentest-lab-deep --entrypoint python3 python:3.10-slim-bookworm \
+  -m http.server 8080 --bind 0.0.0.0
+docker run -d --name pivot-host --network pentest-lab-internal --entrypoint /bin/bash \
+  pentest-tools:toolbelt-2026.10.06 -c 'sleep infinity'
+docker network connect pentest-lab-deep pivot-host
+```
+
+写隧道技能时记住本部署的方向约束：**沙箱没有入站端口**，隧道必须由沙箱主动连出（跳板侧监听）。
+
 需要 AD 面时再起一个实验室域控（域 `LAB.LOCAL`，构建与限制见 `docker/ad-dc/` 与 RUNBOOK §2.1⑤）：
 
 ```bash
