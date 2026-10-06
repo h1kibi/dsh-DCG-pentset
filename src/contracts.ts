@@ -1853,6 +1853,8 @@ export const COMPRESSION_TIMEOUT_MS = 30_000;
 /** 参与压缩的「近期过程」条数与单条截断（只取最近若干条，避免把整本账本塞进一次调用）。 */
 export const COMPRESSION_RECENT_EVENTS = 40;
 export const COMPRESSION_RECENT_EVENT_MAX_CHARS = 600;
+/** 参与压缩的「人类原话」（PINNED）最多带几条：多带只挤占预算，最近的最相关。 */
+export const COMPRESSION_PINNED_MAX_ENTRIES = 12;
 
 /**
  * 公共记忆的长度上限（字符）。

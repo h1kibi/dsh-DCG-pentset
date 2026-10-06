@@ -7,6 +7,13 @@
 
 import type { ActionClass, ContextRef, HandoffDraft, HumanCancel, Phase, TransitionConfirmation, TransitionResult, WorkflowSnapshot } from '../contracts.ts';
 import { ACTION_CLASSES, HANDOFF_AUTO_CONTEXT_REFS, HANDOFF_REPORT_SUMMARY_MAX_CHARS, isPhase } from '../contracts.ts';
+import {
+  COMPRESSION_PINNED_MAX_ENTRIES,
+  COMPRESSION_RECENT_EVENTS,
+  COMPRESSION_RECENT_EVENT_MAX_CHARS,
+} from '../contracts.ts';
+import { compressHandoffContext } from './handoff-compression.ts';
+import { PINNED_ENTRY_KINDS } from '../memory/compaction.ts';
 import { planTransition } from './transition-table.ts';
 import { PHASE_DEFINITIONS, planPhaseMove } from './phases.ts';
 import { SKILL_PACKS } from '../skills/skill-pack.ts';
@@ -59,18 +66,27 @@ export class HandoffFlow {
         status_note: string | null;
         approval_required: unknown;
         engagement_id: string;
+        model_route: unknown;
       }>(
         // 键名是 `perActionApprovalClasses`（策略快照的实际形状；写成想当然的
         // `approval_required` 会读到 null，于是编辑器里默认「无需放行」——那会误导人类）。
         `select s.status_note,
                 e.policy_snapshot -> 'action_policy' -> 'perActionApprovalClasses' as approval_required,
-                s.engagement_id
+                s.engagement_id,
+                s.model_route
            from pentest.worker_sessions s
            join pentest.engagements e on e.id = s.engagement_id
           where s.id = $1::uuid`,
         [session.id],
       )
     ).rows[0];
+    // 源会话用的模型（操作者裁定：交接压缩用**会话当前的模型**）。`model_route` 是 jsonb，
+    // 形状不对时给空串 —— 由调用点决定不压缩，而不是硬转出一个假的模型名。
+    const route: unknown = context?.model_route;
+    const sessionModel =
+      typeof route === 'object' && route !== null && 'model' in route && typeof route.model === 'string'
+        ? route.model
+        : '';
     // 上一阶段最后一份**未被取代**的报告：便签上限 600 字符，报告是结构化产出（判据/证据/未决），
     // 两者叠加才是可靠的「上一阶段要点」（2026-10-07；此前只拼便签，压缩比高到丢信息）。
     const reportRow = (
@@ -99,6 +115,63 @@ export class HandoffFlow {
               [context.engagement_id, HANDOFF_AUTO_CONTEXT_REFS],
             )
           ).rows;
+    // ── 交接压缩（2026-10-07）──
+    // 交接的本质是压缩转发：便签（≤600 字符）与报告摘要只是两份人/Agent 写的摘要，
+    // 没有对上一阶段材料做压缩。这里用**源会话的模型**压一次（操作者裁定），
+    // PINNED 的人类原话原样进材料、要求原样转述。任何失败都退回拼接（不抛、不阻塞起草）。
+    const materialRows =
+      context === undefined
+        ? []
+        : (
+            await this.#core.deps.db.query<{ event_type: string; text: string }>(
+              `select e.event_type,
+                      coalesce(nullif(btrim(e.text_projection), ''),
+                               left(e.payload_json::text, ${String(COMPRESSION_RECENT_EVENT_MAX_CHARS)})) as text
+                 from pentest.context_events e
+                where e.engagement_id = $1::uuid
+                order by e.chain_seq desc
+                limit $2`,
+              [context.engagement_id, COMPRESSION_RECENT_EVENTS],
+            )
+          ).rows;
+    const pinnedKinds = new Set<string>(PINNED_ENTRY_KINDS);
+    const pinnedMaterial: string[] = [];
+    const recentMaterial: string[] = [];
+    for (const row of materialRows) {
+      const text = row.text.trim();
+      if (text === '') continue;
+      if (pinnedKinds.has(row.event_type)) {
+        // 人类原话：原样保留（只截断到单条上限），不参与压缩。
+        if (pinnedMaterial.length < COMPRESSION_PINNED_MAX_ENTRIES) {
+          pinnedMaterial.push(text.slice(0, COMPRESSION_RECENT_EVENT_MAX_CHARS));
+        }
+        continue;
+      }
+      recentMaterial.push(text.slice(0, COMPRESSION_RECENT_EVENT_MAX_CHARS));
+    }
+    recentMaterial.reverse(); // 查询是倒序取最近 N 条；材料按时间正序给模型
+    const compression = this.#core.deps.compression;
+    const compressionModel = compression?.model ?? sessionModel ?? '';
+    const compressed =
+      compression === undefined || compressionModel === ''
+        ? null
+        : await compressHandoffContext(
+            {
+              endpoint: compression.endpoint,
+              apiKey: compression.apiKey,
+              model: compressionModel,
+              ...(compression.timeoutMs === undefined ? {} : { timeoutMs: compression.timeoutMs }),
+            },
+            {
+              fromPhaseLabel: PHASE_DEFINITIONS[session.phase].displayName,
+              toPhaseLabel: PHASE_DEFINITIONS[toPhase].displayName,
+              statusNote: context?.status_note ?? '',
+              reportSummary: reportRow?.summary ?? '',
+              reportId: reportRow?.id ?? null,
+              pinned: pinnedMaterial,
+              recent: recentMaterial,
+            },
+          );
     const seeded = seedHandoffContent({
       fromPhase: session.phase,
       toPhase,
@@ -109,6 +182,12 @@ export class HandoffFlow {
         memoryId: `memory:${row.id}`,
         reason: `上一阶段记忆：${row.title}`,
       })),
+      ...(compressed !== null && compressed.ok
+        ? {
+            compressedContext: compressed.text,
+            compressionNote: `由 ${compressed.model} 压缩上一阶段材料；源：状态便签、报告要点、人类原话、近期事件`,
+          }
+        : {}),
       approvalRequired: Array.isArray(context?.approval_required)
         ? (context.approval_required as readonly string[])
             .filter((value) => (ACTION_CLASSES as readonly string[]).includes(value)) as readonly ActionClass[]

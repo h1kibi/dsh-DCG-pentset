@@ -78,6 +78,18 @@ function actionPolicyRiskSummary(
 
 export interface WorkflowServiceDeps {
   /**
+   * 交接压缩的调用配置（2026-10-07）。**省略即不压缩**，起草退回"便签 + 报告"的拼接。
+   *
+   * 模型名优先取**源会话的 `model_route.model`**（操作者裁定：压缩用会话当前的模型），
+   * 因此这里通常只需给端点与密钥；`model` 只在需要覆盖时写。
+   */
+  readonly compression?: {
+    readonly endpoint: string;
+    readonly apiKey: string;
+    readonly model?: string;
+    readonly timeoutMs?: number;
+  };
+  /**
    * 本部署可用的记忆检索通道（装配方按是否配置嵌入端点决定）。
    * 缺省按"无向量"处理——这是当前部署的真实状态，宁可少报也不谎报语义可用。
    */

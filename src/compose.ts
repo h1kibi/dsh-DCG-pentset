@@ -300,6 +300,18 @@ export interface ComposeConfig {
    * 关掉它需要重建索引才生效（存量块的 `search_vector` 里已经带了二字组词元）。
    */
   readonly cjkProjection?: boolean;
+  /**
+   * 交接压缩的调用配置（2026-10-07）。**省略即不压缩** —— 起草照旧用"便签 + 报告"的拼接。
+   *
+   * 模型名默认取**源会话的 `model_route.model`**（操作者裁定：压缩用会话当前的模型，不用本地小模型）；
+   * `apiKey` 按仓库既有写法由 profile 注入（`!!js process.env.DEEPSEEK_API_KEY`，与 `ledgerSecret` 同）。
+   */
+  readonly compression?: {
+    readonly endpoint: string;
+    readonly apiKey: string;
+    readonly model?: string;
+    readonly timeoutMs?: number;
+  };
   /** outbox 队列参数（§8.4）。省略即用模块默认。 */
   readonly outbox?: OutboxOptions;
   /**
@@ -1499,6 +1511,7 @@ function installWorkflow(input: {
   const reportFace = new PgReportService(readDb, { txDb });
   const workflow = new PgWorkflowService({
     db: readDb,
+    ...(config.compression === undefined ? {} : { compression: config.compression }),
     // 有嵌入端点才有语义通道；没有就如实声明 lexical+trigram（会话提示词里会写清，见 renderRetrievalChannels）。
     retrievalChannels:
       config.embeddings === undefined ? ['lexical', 'trigram'] : ['semantic', 'lexical', 'trigram'],
