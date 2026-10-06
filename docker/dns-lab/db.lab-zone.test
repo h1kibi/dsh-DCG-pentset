@@ -1,0 +1,17 @@
+$TTL 3600
+@	IN	SOA	ns1.lab-zone.test. hostmaster.lab-zone.test. (
+			2026100601	; serial
+			3600		; refresh
+			600		; retry
+			86400		; expire
+			3600 )		; minimum
+@	IN	NS	ns1.lab-zone.test.
+@	IN	MX	10 mail.lab-zone.test.
+@	IN	TXT	"v=spf1 -all"
+ns1	IN	A	172.29.0.60
+www	IN	A	172.29.0.61
+mail	IN	A	172.29.0.62
+vpn	IN	A	172.29.0.63
+db	IN	A	172.29.0.64
+intranet	IN	CNAME	www.lab-zone.test.
+internal-only	IN	A	10.42.0.9

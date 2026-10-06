@@ -254,6 +254,17 @@ node scripts/resync-smoke-stamps.mjs <新摘要前 12 位>   # 输出：改了 N
 
   沙箱直连 `deep-svc` 会超时（它的网段只对跳板可见）；隧道的**方向是沙箱主动连出**
   （沙箱无入站端口）。`post-lateral-pivot` 的 `smoked` 就是在这个拓扑上跑出来的。
+- **DNS 权威服务器**：`pentest-dns-lab:lab`（bind9，`docker/dns-lab/`）。刻意配错：`lab-zone.test`
+  允许任意主机做区域传送；对照 zone `hardened.test` 拒绝传送——同一台服务器上就能同时验「成功」与「被拒」两个分支：
+
+  ```bash
+  docker build -t pentest-dns-lab:lab docker/dns-lab
+  docker run -d --name dns-lab --network pentest-lab-internal pentest-dns-lab:lab
+  dig +time=5 +tries=1 AXFR lab-zone.test @$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' dns-lab)
+  ```
+
+  注意：**结构化 DNS 通道（`dns_enum`/`dns_brute`/`dns_axfr`）只支持 system/public 解析器**，
+  打不到这个 lab zone（实测 `records=0` / `found=0`）——验它们要用公网域名。
 - **AD 域**：`pentest-ad-dc:lab`（Samba AD DC，域 `LAB.LOCAL`，管理员 `Passw0rd!234`）：
 
   ```bash

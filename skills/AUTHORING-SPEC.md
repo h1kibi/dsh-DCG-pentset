@@ -83,6 +83,17 @@ docker run -d --name fx-api --network pentest-lab-internal \
 它内置了刻意做错的形态（未授权列表、BOLA、`Allow` 与实现不一致、Content-Type 判定、mass assignment、
 GraphQL introspection、verbose 报错），写 API 技能时就拿它当判据来源。
 
+需要 DNS 面时再起一个权威服务器（`docker/dns-lab/`，bind9；`lab-zone.test` 故意允许区域传送，
+`hardened.test` 作拒绝对照）：
+
+```bash
+docker build -t pentest-dns-lab:lab docker/dns-lab
+docker run -d --name dns-lab --network pentest-lab-internal pentest-dns-lab:lab
+```
+
+注意：**结构化 DNS 通道（`dns_enum`/`dns_brute`/`dns_axfr`）只支持 system/public 解析器**，
+打不到内网/lab zone（实测返回 `records=0` / `found=0`）——写 DNS 技能时，内网 zone 一律手写 `dig @<地址>`。
+
 需要跳板/隧道面时再搭一个"内网段 + dual-homed 跳板"（沙箱直连打不到那个网段）：
 
 ```bash

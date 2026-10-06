@@ -1,0 +1,10 @@
+$TTL 3600
+@	IN	SOA	ns1.hardened.test. hostmaster.hardened.test. (
+			2026100601	; serial
+			3600		; refresh
+			600		; retry
+			86400		; expire
+			3600 )		; minimum
+@	IN	NS	ns1.hardened.test.
+ns1	IN	A	172.29.0.70
+www	IN	A	172.29.0.71

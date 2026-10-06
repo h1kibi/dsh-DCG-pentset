@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-CRYP-01, RFC 5280, RFC 9309, MITRE ATT&CK T1590.002/T1596.003]
-  smoked: "沙箱实测@8aba5d58ad5b：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为"
+  smoked: "沙箱实测@8aba5d58ad5b：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为。2026-10-06 又补两步并实测：⑧区域传送——对实验室 bind9（docker/dns-lab，zone lab-zone.test 故意 allow-transfer any）拿到完整传送（11 条记录，含只应内网的 internal-only A 10.42.0.9），对同服务器的 hardened.test 与 AD DC 的内嵌 DNS 都得 `Transfer failed.`（正常配置的否定结论）；⑨whois——whois example.com 取到注册局/创建/到期/NS，结构化 whois_query kind=domain|ip 返回 whois_registrar / whois_inetnum / whois_netname。另实测：结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）只支持 system/public 解析器，对内网 zone 返回 records=0、labels=4989 found=0（跑了约 7 分钟）——已写入判读与去噪"
 ---
 
 # DNS 与证书面清点（recon-dns-cert）
@@ -127,7 +127,36 @@ timeout 5 dig +short <目标> @<人类给的内网解析器 IP> >/tmp/dig-out.tx
 **期望**：每条拿不到的证据都有明确来源标注，或明确写「未取得」。
 **判据**：结论必须能追到来源——人类提供 / 内网解析器 / `[INFERENCE]`（仅线索）。**未标注来源的记录不得写入资产**；宁可写「未取得（无解析器）」，也不要留空冒充「无记录」。
 
+### 8. 区域传送（AXFR）：DNS 里最值钱的一条配置错误
+```bash
+dig +short NS <zone>            # 先拿权威服务器
+dig +time=5 +tries=1 AXFR <zone> @<权威服务器地址>
+```
+**期望**：两种形态**都算结论**——完整传送（SOA 开头、SOA 结尾、中间是全部记录），或 `; Transfer failed.`。
+**判据**：
+- **拿到完整传送 ⇒ 这本身是一条发现**：该权威服务器允许任意主机拉走整个 zone。证据里要写「记录条数 +
+  是否含只应内网的记录」——实测样本里就吐出一条 `internal-only A 10.42.0.9`，那是最能说明风险的一行。
+- `Transfer failed.` ⇒ 未授权传送被拒（**正常配置**），把这条否定结论写下来，**不要反复重试**。
+- **通道选择**：公网 zone 可以用结构化 `dns_axfr target=<zone>`（免审批）；内网/lab zone 只能手写
+  `dig @<地址>`（`exploit_validation`，逐条人批）。
+
+### 9. 归属与网段（whois）：把外部线索定位到主体
+```bash
+whois <域名>        # 注册局/注册商/创建与到期/NS
+whois <IP>         # 网段（inetnum/netname）与所属机构
+```
+**期望**：域名的注册商与名称服务器；IP 的网段与机构名。
+**判据**：把「域名 → 注册商/NS」「IP → 网段/机构」写进资产；**到期时间与最近变更**是时间线素材。
+优先用**结构化通道**（免审批、字段已解析）：`whois_query target=<域名或 IP> kind=domain|ip`
+（实测返回 `whois_registrar` / `whois_name_server` / `whois_inetnum` / `whois_netname` 这类字段）。
+外部查询会**间歇**失败（§6.5.9）：失败时把形态原样记下并走离线分支（记忆/人类提供），
+**不要重试到超预算**。
+
 ## 判读与去噪
+- **结构化 DNS 通道够不到内网 zone**：`pentest_recon` 的 `dns_enum`/`dns_brute`/`dns_axfr` 只支持
+  `system` / `public` 解析器，而容器里的 system 解析器是宿主给的、不认识内网域名——实测对实验室 zone
+  返回 `records=0`、`labels=4989 found=0`（还跑了 7 分钟）。**内网 zone 一律手写 `dig @<已裁决地址>`**；
+  结构化通道留给公网域名（省审批、有结构）。
 - 一个名字多个 A 记录 = 负载均衡 / 多后端，不是冲突。
 - **`SERVFAIL` ≠ `NXDOMAIN`**：内网解析器对未知名可能返回 `SERVFAIL`（曾实测 Docker 内嵌 DNS 对未知容器名返回 `status: SERVFAIL`），**也可能直接超时/无应答**——2026-10-06 在同一网络实测到的是 `communications error to 127.0.0.11#53: timed out` 与 `no servers could be reached`。两种都表示「解析器答不上」，与 `NXDOMAIN`（权威说「没有」）不是一回事，不要混为一谈；也不要因为「没看到 SERVFAIL」就以为解析器是好的。
 - 解析到私网/保留地址时，那是**分裂视图（split-horizon）**，不要拿公网库去核对。
