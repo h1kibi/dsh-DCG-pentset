@@ -25,6 +25,10 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：树文件 `/tmp/tm/tree.json` **只在那一条命令内存在**。
+> 第 1 步造它、第 3/4/5 步读它——**造与读必须写在同一条命令里**（`jq -n … > /tmp/tm/tree.json && jq … /tmp/tm/tree.json`）；
+> 分开写会得到 `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 定根（目标状态）
 ```bash
 jq -n --arg g "获得对<资产>的未授权读取" --arg ref "memory:<uuid>" \

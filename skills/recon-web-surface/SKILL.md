@@ -25,6 +25,10 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：`/tmp/web-ffuf.json` 等中间产物**只在那一条命令内存在**。
+> 本技能里「先爆破落盘、再 `jq` 复核」是同一件事的两端——**必须写在同一条命令里**
+> （`ffuf … -o /tmp/web-ffuf.json && jq … /tmp/web-ffuf.json`），否则复核那一步会拿到空文件（实测）。
+
 > **优先用 `pentest_recon`，不要手写 curl/ffuf。** 它把命令形态固定在服务端、参数只有枚举与整数、
 > 只打**已裁决地址**，类别 `active_discovery`——**不需要逐条人工放行**；手写命令走 `pentest_exec`
 > 是 `exploit_validation`，**每条都要人类批准**。本 skill 只在需要未覆盖选项时才落到 ```bash 形态。

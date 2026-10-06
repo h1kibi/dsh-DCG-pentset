@@ -22,6 +22,11 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`，每条命令一个新容器）：`/tmp` 产物**只在那一条命令内存在**。
+> 本技能的台账 `/tmp/graph.json` 由你按上游产出写入——**写它的命令与读它的每条 jq 命令必须合并**
+> （`cat > /tmp/graph.json <<'JSON' … && jq … /tmp/graph.json`），或让该步自足。分开写会得到
+> `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 归一：把台账读成节点与边
 ```bash
 jq -n --slurpfile a /tmp/assets.json --slurpfile s /tmp/services.json \

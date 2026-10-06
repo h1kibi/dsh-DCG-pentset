@@ -242,3 +242,39 @@ test('skill 里不得出现沙箱实测缺失的工具（否则是在教 Agent �
     '这些工具名出现在 bash 代码块里，但镜像里没有它们。改用存在的工具，或把工具加进镜像并同步 SANDBOX_TOOLBELT/本名单',
   );
 });
+
+test('跨代码块依赖 /tmp 产物的 skill 必须写明「容器是一次性的」', async () => {
+  // 为什么要有这条：沙箱每条命令都是 `docker run --rm` 的新容器，**`/tmp` 不跨命令**（2026-10-06 实测：
+  // 第 1 条命令写的文件，第 2 条命令读不到）。而本仓库此前的技能大量用「上一步落 /tmp、下一步读它」
+  // 的写法——照抄执行的 Agent 会拿到 `No such file or directory`，然后把失败归因成"工具坏了/目标变了"，
+  // 整轮跑偏，而人在控制台上只看到"Agent 很笨"。
+  //
+  // 判定用启发式：某个 `/tmp/...` 路径在**后面的块**被引用、而在**前面的块**出现过（且前面的块看起来在写它）。
+  // 启发式会有边角，但方向是安全的：宁可要求写一句纪律，也不要放过一条注定断掉的跨步写法。
+  const pack = await loadPack();
+  const offenders: string[] = [];
+  for (const [name, { parsed }] of pack) {
+    const blocks = [...parsed.body.matchAll(/```bash\n([\s\S]*?)```/g)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
+    const seen = new Set<string>();
+    let offendingRef: string | undefined;
+    for (const block of blocks) {
+      const refs = [...new Set([...block.matchAll(/\/tmp\/[A-Za-z0-9_./*-]+/g)].map((match) => match[0]))];
+      const hit = refs.find((ref) => seen.has(ref));
+      if (hit !== undefined && !parsed.body.includes('容器是一次性的')) {
+        offendingRef = hit;
+        break;
+      }
+      for (const ref of refs) seen.add(ref);
+    }
+    if (offendingRef !== undefined) {
+      offenders.push(`${name}: 引用 ${offendingRef} 且跨块依赖，但没写合并纪律`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    '这些 skill 有跨块的 /tmp 依赖：必须在「## 步骤」开头写明「容器是一次性的」+ 本技能的跨步路径 + 合并方式（cmd1 && cmd2）',
+  );
+});

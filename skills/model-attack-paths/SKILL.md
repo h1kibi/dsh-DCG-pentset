@@ -25,6 +25,10 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：台账 `/tmp/tm/paths.json` **只在那一条命令内存在**。
+> 读它的命令必须与写它的命令**写成同一条**（`… && jq … /tmp/tm/paths.json`）；分开写会得到
+> `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 建入口 → 资产候选边
 把候选路径写成 `/tmp/tm/paths.json`（数组，元素含 `id`、`entry`、`asset`、`technique`、`preconditions`、`tactics`、`impact`、`feasibility`、`evidence_refs`、`missing_evidence`）。
 ```bash

@@ -62,6 +62,8 @@ export function renderSandboxBrief(sessionKind: SessionKind): string {
     '',
     '**它是什么**：每条命令都在一个**一次性容器**里跑（`--rm`），跑完即销毁。',
     '- 没有跨命令的持久状态：容器里装的东西、写的文件、起的进程，下一条命令都看不见；',
+    '  ⇒ **`/tmp` 产物只在那一条命令内有效**：要「先落盘再筛」就必须把两步写在**同一条命令**里',
+    '  （`curl … -o /tmp/x && jq … /tmp/x`）；分开写会得到 `No such file or directory`（实测）。',
     '- 没有入站端口、没有常驻监听（不能等目标回连，也不能开一个"下次再用"的会话）；',
     '- 容器内是 root、有 `NET_RAW`（`nmap -sS` 可用）、根文件系统可写、`/tmp` 是 tmpfs。',
     '- 命令由 `bash -c` 执行（**是 bash 不是 dash**）：`$RANDOM`、`<(...)`、`[[ ]]`、数组都能用。',

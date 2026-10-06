@@ -24,6 +24,11 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：`/tmp/boundary.json` 与 `/tmp/cleanup.json` **只在那一条命令内存在**，
+> 而且它们**不会由"前两个技能"留在容器里**（前一阶段是别的会话、别的容器）——上游结论是从**记忆/报告**
+> 里读到的，必须由你在**同一条命令里**先落成 json 再消费（`cat > /tmp/boundary.json <<'JSON' … && jq …`）。
+> 分开写会得到 `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 汇总前两技能的结论
 ```bash
 jq -s '.[0].boundary as $b | .[1].cleanup as $c | {boundary: $b, cleanup: $c}' /tmp/boundary.json /tmp/cleanup.json

@@ -22,6 +22,10 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：`/tmp/graph.json`（台账，来自上游）与 `/tmp/priority.json`（本技能产出）
+> **只在那一条命令内存在**。读取它们的命令必须与产出它们的命令**写成同一条**（`… && jq …`），
+> 或让该步自足；分开写会得到 `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 收集业务标签（拿不到就显式留白）
 ```bash
 jq -r '.nodes[] | [.id, (.business // "unknown"), (.owner // "unknown")] | @tsv' /tmp/graph.json | head -20

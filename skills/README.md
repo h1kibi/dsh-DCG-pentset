@@ -17,15 +17,22 @@ skills/
 三条硬纪律：**每条命令都在真沙箱里跑过**（本目录的 skill 在编写时逐条冒烟）、
 **判据必须可判定**、**内容原创**（只引用方法论名字，不照抄来源文本）。
 
+第四条（2026-10-06 补，代价很大的一条）：**容器是一次性的**。沙箱每条命令都是 `docker run --rm`
+的新容器，`/tmp` 里的产物**只在那一条命令内存在**（实测：第 1 条命令写的文件，第 2 条命令读不到）。
+因此：**跨步的中间文件必须与消费它的命令写在同一条命令里**（`cmd1 && cmd2`），或把该步写成自足
+（自己重取一次）。凡是引用 `/tmp/...` 的技能，必须在「步骤」开头写明这条与它自己的路径。
+
 ## 阶段 → 默认装载
+
+**以 `src/skills/skill-pack.ts` 的 `SKILL_PACKS` 为单一事实源**（下表只是它的快照，2026-10-06）：
 
 | 阶段 | 默认 skill |
 |---|---|
-| 情报收集 | `recon-network-surface`、`recon-web-surface`、`recon-dns-cert`、`internal-discovery` |
+| 情报收集 | `recon-network-surface`、`recon-web-surface`、`recon-dns-cert`、`internal-discovery`、`recon-ad-surface` |
 | 威胁建模 | `model-trust-boundaries`、`model-attack-paths`、`model-attack-trees`、`asset-graph`、`business-impact` |
-| 漏洞分析 | `vuln-web-checks`、`vuln-service-checks`、`vuln-intel`、`vuln-triage` |
+| 漏洞分析 | `vuln-web-checks`、`vuln-api-checks`、`vuln-service-checks`、`vuln-intel`、`vuln-triage`、`vuln-ad-checks` |
 | 利用验证 | `exploit-minimal-poc`、`exploit-safety`、`exploit-auth-testing`、`exploit-evidence`、`exploit-approval-request` |
-| 后渗透 | `post-impact-boundary`、`post-cleanup-verify`、`post-loop-handoff` |
+| 后渗透 | `post-impact-boundary`、`post-cleanup-verify`、`post-lateral-pivot`、`post-loop-handoff` |
 
 映射写在 `src/skills/skill-pack.ts` 的 `SKILL_PACKS`（单一事实源，默认装载与播种脚本都用它）。
 
@@ -37,7 +44,7 @@ skills/
 |---|---|
 | `osint-passive`、`cloud-surface`、`cloud-vuln`、`source-surface`、`source-vuln` | 沙箱**可出网**（2026-10-05 起，OSINT 类因此可写）；但仍无云 API 凭据、不挂载源码目录——这两类写出来会变成「让 Agent 反复失败的指导」。等部署形态再变（云只读凭据 / 只读源码挂载）再补 |
 | `web-validation`、`network-validation`、`post-validation` | 与 `exploit-minimal-poc`（最小复现）、`post-impact-boundary`（影响边界）职责重叠；拆成两份只会让 Agent 在两份里挑，不增加能力 |
-| `lateral-movement` | 属于更高风险类别（`lateral_movement` 逐次放行 + 默认禁用类），本作业能力范围明确不做——写技能等于教它越界 |
+| ~~`lateral-movement`~~ | **已改写为 `post-lateral-pivot`（2026-10-06）**：横向/隧道属 `lateral_movement` 类别，而它**不在默认禁用类**里（禁用类是 persistence / destructive / exfiltration），策略是**逐条人工放行**（见 `behavior-profile.ts` 的说明）。原表格把它写成"能力范围明确不做"是**陈旧且与实现相反**的说法，已删 |
 
 ## 装载与读取（怎么到 Agent 手上）
 

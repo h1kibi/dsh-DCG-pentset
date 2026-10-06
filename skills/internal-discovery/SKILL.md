@@ -23,6 +23,11 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：`/tmp/alive.gnmap`、`/tmp/alive.txt`、`/tmp/ports.gnmap` 等中间产物
+> **只在那一条命令内存在**。存活探测 → 落地 → 端口确认 → 落资产这几步有先后依赖，
+> **必须写在同一条命令里**（`nmap … -oG /tmp/alive.gnmap && awk … > /tmp/alive.txt && nmap … -iL /tmp/alive.txt …`），
+> 或让该步自足；分开写会得到 `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 先把「允许扫什么」写清楚（不靠记忆）
 ```bash
 jq -r '.targets[] | [.kind, .value, ((.ports//[])|map("\(.from)-\(.to)")|join(","))] | @tsv' /tmp/scope.json

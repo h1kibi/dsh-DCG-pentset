@@ -25,6 +25,10 @@ metadata:
 
 ## 步骤
 
+> **容器是一次性的**（`--rm`）：台账 `/tmp/tm/evidence.json` **只在那一条命令内存在**。
+> 读它的命令必须与写它的命令**写成同一条**（`… && jq … /tmp/tm/evidence.json`）；分开写会得到
+> `No such file or directory`（2026-10-06 实测）。
+
 ### 1. 归一化并校验证据台账
 把上游证据导出成 `/tmp/tm/evidence.json`（JSON 数组，元素含 `kind`、`ref`、`target`、`evidence_refs`）。
 ```bash
