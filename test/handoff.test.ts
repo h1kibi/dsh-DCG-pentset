@@ -12,7 +12,7 @@ import test from 'node:test';
 import { seedHandoffContent } from '../src/workflow/handoff-flow.ts';
 
 import type { HandoffPackage, Phase, RequiredHandoffKey } from '../src/contracts.ts';
-import { HANDOFF_TRANSITION_TYPES, REQUIRED_HANDOFF_KEYS } from '../src/contracts.ts';
+import { HANDOFF_AUTO_CONTEXT_REFS, HANDOFF_TRANSITION_TYPES, REQUIRED_HANDOFF_KEYS } from '../src/contracts.ts';
 import type {
   BoundScopeVersion,
   HandoffResolutionContext,
@@ -569,13 +569,78 @@ test('服务端起稿：提示词里必须有阶段目标、应产出物、上�
   assert.ok(seeded.allowed.includes('pentest_exec'), '工具建议来自默认白名单（与创建会话同源）');
   assert.ok(seeded.limitations.length > 0, '必须说明这是服务端起稿、未经 Agent');
 
-  // 没有状态便签时不该留一个空的「上一阶段要点」小标题。
+  // 既没有便签也没有报告时不该留一个空的「上一阶段要点」小标题。
   const bare = seedHandoffContent({
     fromPhase: 'threat-modeling',
     toPhase: 'vulnerability-analysis',
     statusNote: null,
     approvalRequired: [],
   });
-  assert.ok(!bare.prompt.includes('# 上一阶段要点'), '没有便签就不该出现空标题');
+  assert.ok(!bare.prompt.includes('# 上一阶段要点'), '两样都没有就不该出现空标题');
   assert.match(bare.objective, /^进入漏洞分析：/, '目标写着目标阶段的名字（人类一眼能看出要去哪）');
+});
+
+test('上一阶段要点由**便签与报告**两个来源拼成（2026-10-07：此前只有便签）', () => {
+  // 便签上限只有 600 字符，报告是结构化产出（判据/证据/未决），信息更全。
+  // 只拼便签时压缩比高到丢信息——这是"交接到底复用了什么"的核心一环。
+  const seeded = seedHandoffContent({
+    fromPhase: 'vulnerability-analysis',
+    toPhase: 'exploitation',
+    statusNote: '确认了两条候选：/api/submissions 未认证可读、旧版编辑器 XSS。',
+    previousReport: { reportId: 'report-77', summary: '候选漏洞 2 条，去重后 2 条；证据 4 份；建议先验证越权读取。' },
+    approvalRequired: ['exploit_validation'],
+  });
+  assert.match(seeded.prompt, /# 上一阶段要点/);
+  assert.match(seeded.prompt, /（状态便签）/, '便签要标明来源');
+  assert.match(seeded.prompt, /（报告要点 report-77）/, '报告要点要标明来源与报告 id（可回溯）');
+  assert.match(seeded.prompt, /建议先验证越权读取/, '报告的处置建议必须带过去');
+
+  // 只有报告、没有便签：这一节仍然要出现（不能因为便签为空就整节丢掉）
+  const reportOnly = seedHandoffContent({
+    fromPhase: 'vulnerability-analysis',
+    toPhase: 'exploitation',
+    statusNote: '   ',
+    previousReport: { reportId: 'report-78', summary: '只有报告没有便签。' },
+    approvalRequired: [],
+  });
+  assert.match(reportOnly.prompt, /# 上一阶段要点/);
+  assert.match(reportOnly.prompt, /只有报告没有便签/);
+  assert.ok(!reportOnly.prompt.includes('（状态便签）'), '空便签不占位');
+});
+
+test('引用由起草者自动带入：上限收口、写进草稿 JSON（信封不再永远是空的）', () => {
+  // 真实数据（18 次交接）里 `context_refs` 全是空数组：不是代理不用记忆（它自己搜了 77 次），
+  // 而是从来没人往里放。引用编辑器撤下后，这条通路只能靠起草者自动填。
+  const many = Array.from({ length: HANDOFF_AUTO_CONTEXT_REFS + 3 }, (_, i) => ({
+    memoryId: `memory:r${String(i)}`,
+    reason: `上一阶段记忆：条目 ${String(i)}`,
+  }));
+  const seeded = seedHandoffContent({
+    fromPhase: 'threat-modeling',
+    toPhase: 'vulnerability-analysis',
+    statusNote: '便签',
+    candidateRefs: many,
+    approvalRequired: [],
+  });
+  assert.equal(seeded.contextRefs.length, HANDOFF_AUTO_CONTEXT_REFS, '条数按常量收口');
+  assert.deepEqual(
+    seeded.draftJson.contextRefs,
+    seeded.contextRefs,
+    '落库的草稿 JSON 必须带上同一份（信封从它派生）',
+  );
+  assert.ok(
+    seeded.limitations.some((line) => line.includes('自动带入')),
+    '人类不再逐条编辑引用，因此必须如实说明"是我自动带的"',
+  );
+
+  // 没有候选时不写空话、也不留空标题
+  const none = seedHandoffContent({
+    fromPhase: 'threat-modeling',
+    toPhase: 'vulnerability-analysis',
+    statusNote: '便签',
+    candidateRefs: [],
+    approvalRequired: [],
+  });
+  assert.deepEqual(none.contextRefs, []);
+  assert.ok(!none.limitations.some((line) => line.includes('自动带入')));
 });

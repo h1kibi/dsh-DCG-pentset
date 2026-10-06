@@ -1829,6 +1829,19 @@ export interface ContextRef {
 export const HANDOFF_MAX_CONTEXT_REFS = 50;
 
 /**
+ * 起草交接时**自动带入**的引用条数上限（2026-10-07）。
+ *
+ * 背景：18 次真实交接里 `contextRefs` 全是空数组——不是代理不用（它自己 `memory_search`
+ * 搜了 77 次），而是**从来没人往里放**。引用编辑器撤下后，人类那条补充路径也没了，
+ * 因此由起草者自动带上一小组（新→旧的上一阶段记忆条目）。保守取值的理由：引用是给
+ * 下一阶段"按需取回"的线索，条数多了只是噪声；而且人类不再能逐条剔除。
+ */
+export const HANDOFF_AUTO_CONTEXT_REFS = 5;
+
+/** 「上一阶段要点」里报告摘要的截断上限（便签另有 `DEFAULTS.statusNoteMaxChars`）。 */
+export const HANDOFF_REPORT_SUMMARY_MAX_CHARS = 1200;
+
+/**
  * 公共记忆的长度上限（字符）。
  *
  * 放在契约层而不是 `workflow/model.ts`：客户端面板要在**提交之前**就用同一个数拦一次，
@@ -2707,8 +2720,14 @@ export const DEFAULTS = {
   compactionKeepRecentTurns: 6,
   /** 证据落盘阈值。 */
   artifactFileThresholdBytes: 64 * 1024,
-  /** 便签上限。 */
-  statusNoteMaxChars: 200,
+  /**
+   * 便签上限。
+   *
+   * 2026-10-07 由 200 提到 600：便签是**唯一的自动压缩通路**——它被塞进下一阶段的
+   * 「上一阶段要点」（`seedHandoffContent`），而 200 字符装不下"结论 + 未决 + 交接注意"。
+   * 实测（个人库 18 次交接）：均长 113–144、最长正好 200 = 有几次撞顶被静默截断。
+   */
+  statusNoteMaxChars: 600,
   /** 范围违规连续次数上限，达到则自动暂停会话。 */
   scopeViolationPauseThreshold: 3,
 } as const;

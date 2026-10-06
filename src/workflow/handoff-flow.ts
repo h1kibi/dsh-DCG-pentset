@@ -6,7 +6,7 @@
  */
 
 import type { ActionClass, ContextRef, HandoffDraft, HumanCancel, Phase, TransitionConfirmation, TransitionResult, WorkflowSnapshot } from '../contracts.ts';
-import { ACTION_CLASSES, isPhase } from '../contracts.ts';
+import { ACTION_CLASSES, HANDOFF_AUTO_CONTEXT_REFS, HANDOFF_REPORT_SUMMARY_MAX_CHARS, isPhase } from '../contracts.ts';
 import { planTransition } from './transition-table.ts';
 import { PHASE_DEFINITIONS, planPhaseMove } from './phases.ts';
 import { SKILL_PACKS } from '../skills/skill-pack.ts';
@@ -55,21 +55,60 @@ export class HandoffFlow {
       );
     }
     const context = (
-      await this.#core.deps.db.query<{ status_note: string | null; approval_required: unknown }>(
+      await this.#core.deps.db.query<{
+        status_note: string | null;
+        approval_required: unknown;
+        engagement_id: string;
+      }>(
         // 键名是 `perActionApprovalClasses`（策略快照的实际形状；写成想当然的
         // `approval_required` 会读到 null，于是编辑器里默认「无需放行」——那会误导人类）。
         `select s.status_note,
-                e.policy_snapshot -> 'action_policy' -> 'perActionApprovalClasses' as approval_required
+                e.policy_snapshot -> 'action_policy' -> 'perActionApprovalClasses' as approval_required,
+                s.engagement_id
            from pentest.worker_sessions s
            join pentest.engagements e on e.id = s.engagement_id
           where s.id = $1::uuid`,
         [session.id],
       )
     ).rows[0];
+    // 上一阶段最后一份**未被取代**的报告：便签上限 600 字符，报告是结构化产出（判据/证据/未决），
+    // 两者叠加才是可靠的「上一阶段要点」（2026-10-07；此前只拼便签，压缩比高到丢信息）。
+    const reportRow = (
+      await this.#core.deps.db.query<{ id: string; summary: string }>(
+        `select id, summary
+           from pentest.worker_reports
+          where worker_session_id = $1::uuid and superseded_by is null and btrim(summary) <> ''
+          order by created_at desc
+          limit 1`,
+        [session.id],
+      )
+    ).rows[0];
+    // 自动引用候选：本作业最近的记忆条目，新→旧。排除 `compaction_summary`——那是宿主做
+    // 上下文压缩的产物，不是这一阶段的结论。条数由 `HANDOFF_AUTO_CONTEXT_REFS` 收口
+    // （人类不再逐条编辑引用，因此这里取保守值）。
+    const refRows =
+      context === undefined
+        ? []
+        : (
+            await this.#core.deps.db.query<{ id: string; title: string }>(
+              `select id, coalesce(nullif(btrim(title), ''), kind) as title
+                 from pentest.memory_items
+                where engagement_id = $1::uuid and kind <> 'compaction_summary'
+                order by created_at desc
+                limit $2`,
+              [context.engagement_id, HANDOFF_AUTO_CONTEXT_REFS],
+            )
+          ).rows;
     const seeded = seedHandoffContent({
       fromPhase: session.phase,
       toPhase,
       statusNote: context?.status_note ?? null,
+      previousReport:
+        reportRow === undefined ? null : { summary: reportRow.summary, reportId: reportRow.id },
+      candidateRefs: refRows.map((row) => ({
+        memoryId: `memory:${row.id}`,
+        reason: `上一阶段记忆：${row.title}`,
+      })),
       approvalRequired: Array.isArray(context?.approval_required)
         ? (context.approval_required as readonly string[])
             .filter((value) => (ACTION_CLASSES as readonly string[]).includes(value)) as readonly ActionClass[]
@@ -613,6 +652,20 @@ export function seedHandoffContent(input: {
   readonly fromPhase: Phase;
   readonly toPhase: Phase;
   readonly statusNote: string | null;
+  /**
+   * 上一阶段最后一份报告的要点（`worker_reports.summary`，未取代的那份）。
+   *
+   * 2026-10-07 加：便签上限只有 600 字符，而报告是**结构化**产出（判据、证据、未决），
+   * 两者叠加才是可靠的「上一阶段要点」——只靠便签时，压缩比高到丢信息。
+   */
+  readonly previousReport?: { readonly summary: string; readonly reportId: string } | null;
+  /**
+   * 自动带入的引用候选（上一阶段写下的记忆条目，按新→旧）。
+   *
+   * 人类不再逐条编辑引用，因此这里必须保守：上限 `HANDOFF_AUTO_CONTEXT_REFS`，
+   * 取太多只是给下一阶段塞噪声线索。
+   */
+  readonly candidateRefs?: readonly { readonly memoryId: string; readonly reason: string }[];
   readonly approvalRequired: readonly ActionClass[];
 }): {
   readonly objective: string;
@@ -621,16 +674,26 @@ export function seedHandoffContent(input: {
   readonly allowed: readonly string[];
   readonly approvalRequired: readonly ActionClass[];
   readonly limitations: readonly string[];
+  readonly contextRefs: readonly { readonly memoryId: string; readonly reason: string }[];
   readonly draftJson: Record<string, unknown>;
 } {
   const def = PHASE_DEFINITIONS[input.toPhase];
   const objective = `进入${def.displayName}：${def.goal}`;
+  const noteText = (input.statusNote ?? '').trim();
+  const reportText = (input.previousReport?.summary ?? '').trim();
+  const handover = [
+    noteText === '' ? null : `（状态便签）\n${noteText.slice(0, DEFAULTS.statusNoteMaxChars)}`,
+    reportText === '' || input.previousReport == null
+      ? null
+      : `（报告要点 ${input.previousReport.reportId}）\n${reportText.slice(0, HANDOFF_REPORT_SUMMARY_MAX_CHARS)}`,
+  ].filter((part): part is string => part !== null);
+  const contextRefs = (input.candidateRefs ?? []).slice(0, HANDOFF_AUTO_CONTEXT_REFS);
   const sections = [
     `# 阶段目标（${def.displayName}）\n${def.goal}`,
     `# 本阶段应产出\n${def.deliverables.join('、')}`,
-    input.statusNote === null || input.statusNote.trim() === ''
+    handover.length === 0
       ? null
-      : `# 上一阶段要点（来自状态便签，请核对后保留或改写）\n${input.statusNote.trim().slice(0, 2000)}`,
+      : `# 上一阶段要点（来自状态便签与上一份报告，请核对后保留或改写）\n${handover.join('\n\n')}`,
     `# 完成判据（离开本阶段前应当能回答）\n${def.exit.reports.join('、')}；人类判断：${def.exit.humanJudgment.join('、')}`,
     '# 边界\n范围以冻结的范围版本为准；越界动作不要执行。需要人工放行的动作先申请，不要绕过。',
   ].filter((section): section is string => section !== null);
@@ -639,6 +702,9 @@ export function seedHandoffContent(input: {
   const allowed = [...DEFAULT_PHASE_TOOL_ALLOW[input.toPhase]];
   const limitations = [
     '初始内容由服务端按阶段定义与当前状态生成（没有 Agent 起草）：请逐项核对、按需改写后再确认。',
+    ...(contextRefs.length === 0
+      ? []
+      : [`已自动带入 ${String(contextRefs.length)} 条上一阶段的记忆引用（下一阶段按 id 取回详情，不必逐条编辑）。`]),
   ];
   return {
     objective,
@@ -647,13 +713,14 @@ export function seedHandoffContent(input: {
     allowed,
     approvalRequired: input.approvalRequired,
     limitations,
+    contextRefs,
     // 落库形状与会话工厂返回的那一版保持一致（它才是 `draft_json` 的既有形状）。
     draftJson: {
       suggestedToPhase: input.toPhase,
       suggestedSkillIds,
       objective,
       prompt,
-      contextRefs: [],
+      contextRefs,
       excludedRefs: [],
       toolCapabilitySuggestion: { allowed, approvalRequired: input.approvalRequired },
       limitations,
