@@ -40,7 +40,7 @@ metadata:
 **工具集的权威清单在 `src/contracts.ts` 的 `SANDBOX_TOOL_GROUPS`**（分组 + 一句话用法 + 出处），
 `test/sandbox-environment.test.ts` 会逐条回到 `docker/tools/Dockerfile` 核对——**不要在这里抄一份**，
 抄一份的结果是两边逐渐不一致（本节原先写着「镜像里装好了 nmap curl wget nc dig openssl jq whois ping ffuf sqlmap」，
-而镜像早已多出 nuclei / httpx / katana / subfinder / dnsx / hashcat / testssl / smbmap / chisel / iproute2 等几十个工具）。
+而镜像早已多出 nuclei / httpx / katana / subfinder / dnsx / john / hydra / masscan / socat / testssl / smbmap / chisel / iproute2 等几十个工具）。
 要确认某个工具在不在：`npm run verify:tool-image -- <镜像引用>` 全量列一遍。
 
 - **shell 是 bash**（2026-10-06 起；此前是 dash）。`$RANDOM`、`<(...)`、`[[ ]]`、数组都能用。
