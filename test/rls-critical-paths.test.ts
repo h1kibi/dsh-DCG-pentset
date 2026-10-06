@@ -76,7 +76,7 @@ describe('关键路径：真实角色（pentest_app）+ RLS', { skip: DATABASE_U
       `insert into pentest.approvals
          (id, engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
           plan_hash, risk_summary, decision, lease_generation, expires_at)
-       values ($1::uuid, $2::uuid, $3::uuid, 'passive_read', '{}'::jsonb, '{}'::jsonb,
+       values ($1::uuid, $2::uuid, $3::uuid, 'passive_collection', '{}'::jsonb, '{}'::jsonb,
                'h', '', 'pending', 1, now() + interval '10 minutes')`,
       [approvalId, engagementId, sessionId],
     );
@@ -139,7 +139,7 @@ describe('关键路径：真实角色（pentest_app）+ RLS', { skip: DATABASE_U
       await client.query(
         `insert into pentest.tool_runs
            (id, engagement_id, idempotency_key, tool_name, action_class, arguments_json, policy_decision, status)
-         values ($1::uuid, $2::uuid, $3, 'pentest_exec', 'passive_read', '{}'::jsonb, '{}'::jsonb, 'succeeded')`,
+         values ($1::uuid, $2::uuid, $3, 'pentest_exec', 'passive_collection', '{}'::jsonb, '{}'::jsonb, 'succeeded')`,
         [runId, a.engagementId, `rls-critical-${runId}`],
       );
 

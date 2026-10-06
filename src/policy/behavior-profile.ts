@@ -8,6 +8,8 @@ import {
   CUSTOM_GUIDANCE_MAX_CHARS,
   DEFAULT_DISABLED_CLASSES,
   PER_ACTION_APPROVAL_CLASSES,
+  isActionClass,
+  normalizeActionClass,
 } from '../contracts.ts';
 import type { ApprovalMode } from '../contracts.ts';
 import type { ActionClass, BehaviorProfile, ScopeEntryProfile } from '../contracts.ts';
@@ -126,22 +128,22 @@ export const PROFILE_DEFAULTS: Readonly<Record<BehaviorProfile, {
   stealth: {
     detectionObjective: 'minimize_detection',
     pacing: { rate: 1, concurrency: 1, jitter: 0.5, burst: 1, retry: 1 },
-    enabled: ['passive_read', 'active_discovery'],
+    enabled: ['passive_collection', 'active_probing'],
   },
   standard: {
     detectionObjective: 'balanced_coverage',
     pacing: { rate: 5, concurrency: 2, jitter: 0.25, burst: 2, retry: 1 },
-    enabled: ['passive_read', 'active_discovery', 'authenticated_read'],
+    enabled: ['passive_collection', 'active_probing', 'credentialed_access'],
   },
   deep: {
     detectionObjective: 'maximize_bounded_coverage',
     pacing: { rate: 10, concurrency: 4, jitter: 0.1, burst: 2, retry: 2 },
-    enabled: ['passive_read', 'active_discovery', 'authenticated_read', 'exploit_validation'],
+    enabled: ['passive_collection', 'active_probing', 'credentialed_access', 'exploit_validation'],
   },
   custom: {
     detectionObjective: 'minimize_detection',
     pacing: { rate: 1, concurrency: 1, jitter: 0.5, burst: 1, retry: 1 },
-    enabled: ['passive_read', 'active_discovery'],
+    enabled: ['passive_collection', 'active_probing'],
   },
 });
 
@@ -224,14 +226,21 @@ export function canonicalPolicyJson(value: unknown): string {
   return encode(value);
 }
 
-function validActionClass(value: unknown): value is ActionClass {
-  return typeof value === 'string' && (ACTION_CLASSES as readonly string[]).includes(value);
-}
-
+/**
+ * 读侧归一化：**唯一**的解析入口（策略 JSON、profile 覆盖、预设默认值都走这里）。
+ *
+ * 旧标识符必须被接受并映射到新值——策略快照是追加式的，历史行里存的就是旧值
+ * （见 `contracts.ts` 的兼容纪律）；不归一化会让旧快照的类别列表突然"少几项"，
+ * 表现为"某类动作静默变成越界/免批"，最难查的那种。
+ */
 function uniqueActionClasses(value: unknown): ActionClass[] {
   if (!Array.isArray(value)) return [];
   const result: ActionClass[] = [];
-  for (const item of value) if (validActionClass(item) && !result.includes(item)) result.push(item);
+  for (const item of value) {
+    if (!isActionClass(item)) continue;
+    const normalized = normalizeActionClass(item) as ActionClass;
+    if (!result.includes(normalized)) result.push(normalized);
+  }
   return result;
 }
 
@@ -545,7 +554,7 @@ export function expandBehaviorProfile(input: BehaviorProfileInput): ExpandedBeha
   //     开启之后每一次动作仍然要人放行。因此它们被开启时自动进入这个集合。
   const perActionApprovalClasses = [...new Set<ActionClass>([
     ...PER_ACTION_APPROVAL_CLASSES,
-    'authenticated_read',
+    'credentialed_access',
     ...enabledDisabledClasses,
     ...approvalActions(overrides),
   ])].filter((actionClass) => enabled.has(actionClass) || (PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(actionClass));

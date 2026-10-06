@@ -562,9 +562,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         items: {
           type: 'string',
           enum: [
-            'passive_read',
-            'active_discovery',
-            'authenticated_read',
+            'passive_collection',
+            'active_probing',
+            'credentialed_access',
             'exploit_validation',
             'lateral_movement',
             'persistence',
@@ -746,7 +746,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '每个 technique 由服务端固定一条命令形态，参数只有声明过的枚举/整数——' +
       '目标从选择器注入、地址由宿主的裁决结果固定（容器不做 DNS），' +
       '因此同一动作的审计与幂等键是可复现的，也不需要人类为每条扫描命令逐次放行：' +
-      '侦察类动作按 `active_discovery`/`passive_read` 记账，由范围、租约、节奏（stealth 1rps / standard 5rps / deep 10rps）约束；' +
+      '侦察类动作按 `active_probing`/`passive_collection` 记账，由范围、租约、节奏（stealth 1rps / standard 5rps / deep 10rps）约束；' +
       '需要人批的是 `exploit_validation` 类动作（用 pentest_exec）。' +
       '**DNS 类 technique（dns_enum/dns_brute）走 UDP**：范围条目要声明 udp，否则会被范围闸门拒绝。' +
       '先扫面（port_scan）再指纹（service_probe/tls_inspect/http_probe），最后才目录与爬取——顺序写进了 recon-network-surface/recon-web-surface 两份 skill。',
@@ -870,7 +870,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     name: 'pentest_scan',
     description:
       '**结构化核验动作**（漏洞分析阶段的只读面）：把一条候选变成「成立 / 不成立 / 需要更多证据」。' +
-      '每个 technique 由服务端固定命令形态、只打已裁决地址，类别是 `active_discovery`——' +
+      '每个 technique 由服务端固定命令形态、只打已裁决地址，类别是 `active_probing`——' +
       '**不需要逐条人工放行**；它只发读取类请求、不写目标、不下载内容' +
       '（配置面暴露只报存在性、长度、哈希与形态判定）。' +
       '判据写进对应的 skill：一条候选没有可判定的判据就不要核验，先补情报。' +

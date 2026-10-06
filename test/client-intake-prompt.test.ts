@@ -49,7 +49,7 @@ const PROPOSAL: ScopeProposal = {
   objective: '对 3002 端口做授权安全测试',
   targets: [TARGET],
   exclusions: [EXCLUSION],
-  allowedActions: ['passive_read', 'active_discovery'],
+  allowedActions: ['passive_collection', 'active_probing'],
   authorizationNote: '用户在会话中声明该资产属于自己并授权测试',
   status: 'pending',
   createdAt: '2026-10-03T00:00:00.000Z',

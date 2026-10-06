@@ -11,7 +11,7 @@ import type { ActionTemplateSpec } from '../../src/execution/templates.ts';
 export const HTTP_READ_TEMPLATE: ActionTemplateSpec = {
   template: {
     id: 'http_read',
-    actionClass: 'passive_read',
+    actionClass: 'passive_collection',
     tool: 'http_get',
     parameters: [
       { name: 'method', kind: 'enum', values: ['GET', 'HEAD'] },
@@ -31,7 +31,7 @@ export const HTTP_READ_TEMPLATE: ActionTemplateSpec = {
 export const TCP_CONNECT_TEMPLATE: ActionTemplateSpec = {
   template: {
     id: 'tcp_connect',
-    actionClass: 'active_discovery',
+    actionClass: 'active_probing',
     tool: 'tcp_connect',
     parameters: [{ name: 'port', kind: 'integer', min: 1, max: 65535 }],
     targetPlaceholder: 'target',
@@ -47,7 +47,7 @@ export const TCP_CONNECT_TEMPLATE: ActionTemplateSpec = {
 export const UDP_PROBE_TEMPLATE: ActionTemplateSpec = {
   template: {
     id: 'udp_probe',
-    actionClass: 'active_discovery',
+    actionClass: 'active_probing',
     tool: 'udp_probe',
     parameters: [{ name: 'port', kind: 'integer', min: 1, max: 65535 }],
     targetPlaceholder: 'target',
@@ -63,7 +63,7 @@ export const UDP_PROBE_TEMPLATE: ActionTemplateSpec = {
 export const ICMP_PING_TEMPLATE: ActionTemplateSpec = {
   template: {
     id: 'icmp_ping',
-    actionClass: 'active_discovery',
+    actionClass: 'active_probing',
     tool: 'icmp_ping',
     parameters: [
       { name: 'count', kind: 'integer', min: 1, max: 10 },
@@ -82,7 +82,7 @@ export const ICMP_PING_TEMPLATE: ActionTemplateSpec = {
 export const DNS_LOOKUP_TEMPLATE: ActionTemplateSpec = {
   template: {
     id: 'dns_lookup',
-    actionClass: 'passive_read',
+    actionClass: 'passive_collection',
     tool: 'dns_resolve',
     parameters: [{ name: 'record_type', kind: 'enum', values: ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS'] }],
     targetPlaceholder: 'target',

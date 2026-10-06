@@ -106,7 +106,7 @@ const fakeDeps: WorkerToolDeps = {
       plan: {
         workerSessionId: 's',
         templateId: 't',
-        actionClass: 'passive_read' as const,
+        actionClass: 'passive_collection' as const,
         normalizedTarget: 'https://a.target.com/',
         resolvedAddresses: ['93.184.216.34'],
         normalizedCommand: 'http_read',

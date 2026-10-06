@@ -1297,7 +1297,7 @@ describe('apply 启动对账', { skip: DATABASE_URL === undefined ? '未设置 P
         `insert into pentest.tool_runs
            (id, engagement_id, worker_session_id, idempotency_key, tool_name, action_class,
             arguments_json, policy_decision, status, started_at)
-         values ($1::uuid, $2::uuid, $3::uuid, $4, 'pentest_exec', 'passive_read',
+         values ($1::uuid, $2::uuid, $3::uuid, $4, 'pentest_exec', 'passive_collection',
                  '{}'::jsonb, '{}'::jsonb, 'running', now() - interval '20 minutes')`,
         [runId, engagementId, sessionId, `stale-${runId}`],
       );
@@ -1604,7 +1604,7 @@ describe('修改审批计划（真实 PostgreSQL）', { skip: DATABASE_URL === u
       approvalMode: 'human',
       customGuidance: '审批替代夹具：只做授权范围内的只读与验证动作，不做写操作。',
       policyOverrides: {
-        allowedActions: ['passive_read', 'active_discovery', 'exploit_validation'],
+        allowedActions: ['passive_collection', 'active_probing', 'exploit_validation'],
         rate: 1,
         concurrency: 1,
         jitter: 0,

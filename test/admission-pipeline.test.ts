@@ -288,7 +288,7 @@ describe('闸门可独立测试（每道闸门只依赖状态）', () => {
       ports: ports({
         policy: policyPorts({
           async classifyAction() {
-            return { ok: true, actionClass: 'active_discovery' } as const;
+            return { ok: true, actionClass: 'active_probing' } as const;
           },
         }),
       }),

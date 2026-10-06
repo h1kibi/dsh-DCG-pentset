@@ -351,8 +351,8 @@ const DEFAULT_MODEL_ROUTE: ModelRoute = { provider: 'deepseek-official', model: 
  *
  * **为什么按阶段**（2026-10-06）：此前五个阶段共用一份 9 工具的清单，于是
  * 「阶段即 Agent」在能力面上退化成「同一把刀换个名字」——情报收集与利用验证拿到的
- * 工具完全一样。现在把**只读侦察动作**（`pentest_recon`，全部按 `active_discovery`/
- * `passive_read` 记账）发给需要它的阶段，其余阶段维持原面：
+ * 工具完全一样。现在把**只读侦察动作**（`pentest_recon`，全部按 `active_probing`/
+ * `passive_collection` 记账）发给需要它的阶段，其余阶段维持原面：
  * 能力只增不减的例外由人类在控制台勾选，不由模型自己扩。
  */
 export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>> = Object.freeze({
@@ -373,7 +373,7 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
     'skill_load',
     // 情报收集的**主力**：结构化侦察动作（端口/指纹/TLS/Web/DNS/WHOIS/CT）。
-    // 它们不需要逐条人批（类别是 active_discovery / passive_read），
+    // 它们不需要逐条人批（类别是 active_probing / passive_collection），
     // 但只打已裁决地址、参数只有枚举——比让它手写 nmap 命令既安全又可复现。
     'pentest_recon',
     EXEC_TOOL_NAME,
@@ -412,7 +412,7 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     // skill 正文的读取入口：能力快照只给「名字 + 一句话」，正文按需取（§2.2 渐进披露）。
     // 少了它，21 份 skill 的正文在默认装配下**一条都取不到**（2026-10-06 补）。
     'skill_load',
-    // 漏洞分析的核验面：只读、非破坏性（类别 active_discovery，不需要逐条人批）。
+    // 漏洞分析的核验面：只读、非破坏性（类别 active_probing，不需要逐条人批）。
     // 它**不拿** pentest_recon——侦察是情报收集阶段的事，两个阶段的判据不同。
     'pentest_scan',
     EXEC_TOOL_NAME,

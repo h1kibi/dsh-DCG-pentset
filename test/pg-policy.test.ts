@@ -73,7 +73,7 @@ function plan(overrides: Partial<ExecutionPlan>): ExecutionPlan {
     // 与夹具模板 `http_read` 的命令形态一致：`validateExecution` 会用模板复算命令并比对，
     // 名不对或命令对不上都会先按 `classification_rejected` 拒掉，掩盖本用例真正要验的那条规则。
     templateId: 'http_read',
-    actionClass: 'passive_read',
+    actionClass: 'passive_collection',
     normalizedTarget: 'http://target.example:80',
     resolvedAddresses: ['192.0.2.10'],
     normalizedCommand: 'http_get target=http://target.example:80 method=GET path=/ follow_redirects=false',
@@ -136,7 +136,7 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
       assert.equal(verdict.ok, false, `端口 ${port} 不应通过`);
     }
     const ok = await policy.classifyAction({ templateId: 'tcp_connect', params: { port: 443 } });
-    assert.deepEqual(ok, { ok: true, actionClass: 'active_discovery' });
+    assert.deepEqual(ok, { ok: true, actionClass: 'active_probing' });
   });
 
   it('类别只来自模板注册信息：同一模板的任意合法参数都得到同一个类别', async () => {
@@ -148,13 +148,13 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
       templateId: 'http_read',
       params: { method: 'HEAD', path: '/b', follow_redirects: 'true' },
     });
-    assert.deepEqual(first, { ok: true, actionClass: 'passive_read' });
+    assert.deepEqual(first, { ok: true, actionClass: 'passive_collection' });
     assert.deepEqual(second, first);
   });
 
   it('出厂集 = 直连命令 + 两族结构化模板（侦察/核验）；只有直连命令落在逐次放行类别里', async () => {
     // 2026-10-05 清理：五个示例模板删除（镜像里有真工具，Agent 直接写命令）。
-    // 2026-10-06：新增 12 张 `recon_*`（类别 passive_read/active_discovery，不触发逐次放行）——
+    // 2026-10-06：新增 12 张 `recon_*`（类别 passive_collection/active_probing，不触发逐次放行）——
     // 这一族的意义就是「侦察不消耗人类审批预算，危险动作才消耗」。
     const ids = DEFAULT_TEMPLATES.map((s) => s.template.id);
     assert.equal(ids[0], 'direct_command');
@@ -181,7 +181,7 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
       templateId: 'recon_port_scan',
       params: { scope: 'top1000', ports: 'none', ping: 'skip' },
     });
-    assert.deepEqual(reconVerdict, { ok: true, actionClass: 'active_discovery' });
+    assert.deepEqual(reconVerdict, { ok: true, actionClass: 'active_probing' });
   });
 
   it('注入的模板集就是生效的封闭集合：默认模板在注入后不再存在', async () => {
@@ -223,7 +223,7 @@ describe('策略快照 → 动作策略：默认严格（§10.3）', () => {
   });
 
   it('契约基线是下界：快照不能把逐次放行集合缩小', () => {
-    const shrunk = actionPolicyFromSnapshot({ perActionApprovalClasses: ['passive_read'] });
+    const shrunk = actionPolicyFromSnapshot({ perActionApprovalClasses: ['passive_collection'] });
     for (const cls of PER_ACTION_APPROVAL_CLASSES) {
       assert.ok(shrunk.perActionApprovalClasses.includes(cls), `基线类别 ${cls} 不应被快照移除`);
     }
@@ -231,10 +231,10 @@ describe('策略快照 → 动作策略：默认严格（§10.3）', () => {
 
   it('快照可以把逐次放行集合扩大（两种拼写都接受，且不重复）', () => {
     for (const key of ['perActionApprovalClasses', 'per_action_approval_classes', 'approval_required']) {
-      const policy = actionPolicyFromSnapshot({ [key]: ['active_discovery', 'exploit_validation'] });
+      const policy = actionPolicyFromSnapshot({ [key]: ['active_probing', 'exploit_validation'] });
       assert.deepEqual(
         [...policy.perActionApprovalClasses].sort(),
-        ['active_discovery', ...PER_ACTION_APPROVAL_CLASSES].sort(),
+        ['active_probing', ...PER_ACTION_APPROVAL_CLASSES].sort(),
         key,
       );
     }
@@ -242,7 +242,7 @@ describe('策略快照 → 动作策略：默认严格（§10.3）', () => {
 
   it('只有契约里默认禁用的类别才可能被开启，且必须携带双人确认位', () => {
     const enabled = actionPolicyFromSnapshot({
-      enabledDisabledClasses: ['persistence', 'passive_read', 'not_a_class'],
+      enabledDisabledClasses: ['persistence', 'passive_collection', 'not_a_class'],
       dualConfirmed: true,
     });
     assert.deepEqual(enabled.enabledDisabledClasses, ['persistence']);
@@ -262,7 +262,7 @@ describe('策略快照 → 动作策略：默认严格（§10.3）', () => {
   });
 
   it('没有开启任何默认禁用类别时不带 enabledDisabledClasses 键', () => {
-    const policy = actionPolicyFromSnapshot({ enabledDisabledClasses: ['passive_read'] });
+    const policy = actionPolicyFromSnapshot({ enabledDisabledClasses: ['passive_collection'] });
     assert.equal(policy, DEFAULT_ACTION_POLICY);
   });
 });
@@ -508,7 +508,7 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
         engagementId,
         POLICY_EPOCH,
         {
-          per_action_approval_classes: ['active_discovery'],
+          per_action_approval_classes: ['active_probing'],
           enabled_disabled_classes: ['persistence'],
           dual_confirmed: true,
         },
@@ -837,7 +837,7 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
     const snapshot = await actions.forSession(sessionId);
     assert.deepEqual(
       [...snapshot.perActionApprovalClasses].sort(),
-      ['active_discovery', ...PER_ACTION_APPROVAL_CLASSES].sort(),
+      ['active_probing', ...PER_ACTION_APPROVAL_CLASSES].sort(),
     );
     assert.deepEqual(snapshot.enabledDisabledClasses, ['persistence']);
     assert.equal(snapshot.dualConfirmed, true);
@@ -854,7 +854,7 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
     if (!unregistered.ok) assert.equal(unregistered.error.code, 'classification_rejected');
 
     const drifted = await policy.validateExecution(
-      plan({ workerSessionId: sessionId, actionClass: 'active_discovery', policyEpoch: POLICY_EPOCH }),
+      plan({ workerSessionId: sessionId, actionClass: 'active_probing', policyEpoch: POLICY_EPOCH }),
     );
     assert.equal(drifted.ok, false);
     if (!drifted.ok) {

@@ -83,7 +83,7 @@ const CLEANUP_STATEMENTS = [
 
 const PLAN_INPUT = {
   templateId: 'nmap-service-scan',
-  actionClass: 'active_discovery' as const,
+  actionClass: 'active_probing' as const,
   normalizedTarget: 'https://10.20.30.40:8443',
   normalizedCommand: 'nmap -sV -p 8443 10.20.30.40',
   timeoutMs: 600_000,

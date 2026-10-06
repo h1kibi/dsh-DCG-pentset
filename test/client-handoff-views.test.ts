@@ -99,7 +99,7 @@ function draft(over: Partial<HandoffDraft> = {}): HandoffDraft {
     excludedRefs: ['memory:bbb'],
     toolCapabilitySuggestion: {
       allowed: ['memory_search', 'pentest_exec:http_read'],
-      approvalRequired: ['active_discovery'],
+      approvalRequired: ['active_probing'],
     },
     limitations: ['未验证：边界防火墙的默认拒绝规则'],
     revision: 2,
@@ -423,7 +423,7 @@ test('交接编辑器：理由**不是**闸门——不填也能确认（人类�
     createElement(HandoffEditor, {
       controller: inertController(),
       engagementId: 'e1',
-      draft: draft({ suggestedSkillIds: ['asset-graph'], toolCapabilitySuggestion: { allowed: ['memory_search'], approvalRequired: ['active_discovery'] } }),
+      draft: draft({ suggestedSkillIds: ['asset-graph'], toolCapabilitySuggestion: { allowed: ['memory_search'], approvalRequired: ['active_probing'] } }),
     }),
   );
   assert.equal(buttonTag(html, '确认并创建新会话').includes('disabled=""'), false, '不填理由也要能确认');

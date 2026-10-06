@@ -87,7 +87,7 @@ const ARTIFACT: ArtifactRecord = {
 const PLAN: ExecutionPlan = {
   workerSessionId: 'ws-1',
   templateId: 'http_get',
-  actionClass: 'passive_read',
+  actionClass: 'passive_collection',
   normalizedTarget: 'example.com',
   resolvedAddresses: ['93.184.216.34'],
   normalizedCommand: "shell_exec target=10.0.0.5 port=3002 command_b64=aWQ=",
@@ -312,7 +312,7 @@ test('范围提案 schema 要求完整 ScopeTarget，不接受旧的 value/port/
     objective: '确认实验室服务范围',
     targets: [{ kind: 'ip', value: '192.0.2.1', protocols: ['tcp'], ports: [{ from: 3002, to: 3002 }] }],
     exclusions: [],
-    allowed_actions: ['passive_read'],
+    allowed_actions: ['passive_collection'],
   };
   assert.deepEqual(validateJsonSchemaValue(schema, valid), []);
   assert.ok(

@@ -117,7 +117,7 @@ const DESTRUCTIVE_TEMPLATE: ActionTemplateSpec = {
 const RAW_STRING_TEMPLATE: ActionTemplateSpec = {
   template: {
     id: 'raw_query',
-    actionClass: 'passive_read',
+    actionClass: 'passive_collection',
     tool: 'raw_query',
     parameters: [{ name: 'q', kind: 'string', pattern: '.{1,200}' }],
     targetPlaceholder: 'target',
@@ -498,7 +498,7 @@ test('出厂注册表：一张直连命令 + 两族结构化模板（侦察 / �
   }
   assert.equal(registry.get('sh_c'), undefined);
   // 2026-10-06 新增两族结构化模板：12 张 `recon_*`（情报收集）+ 4 张 `vuln_*`（漏洞分析），
-  // 类别都是 passive_read/active_discovery（不触发逐次放行）+ 那张直连命令 = 17。
+  // 类别都是 passive_collection/active_probing（不触发逐次放行）+ 那张直连命令 = 17。
   // 数量断言在这里是**刻意的**：模板集变化必须同时改这一行与 test/action-templates.test.ts 的目录断言，
   // 逼人解释新增了什么、以及它落在哪个类别上（类别决定要不要人批）。
   assert.equal(registry.list().length, 17);
@@ -709,7 +709,7 @@ test('portForScope 解析四种端口来源', () => {
 test('幂等键在参数微调后变化，在排版差异下不变', () => {
   const base = {
     workerSessionId: SESSION,
-    actionClass: 'passive_read' as ActionClass,
+    actionClass: 'passive_collection' as ActionClass,
     normalizedTarget: HTTP_TARGET,
     normalizedCommand: HTTP_COMMAND,
     approvalId: '',
@@ -750,7 +750,7 @@ test('计划摘要覆盖范围版本、策略 epoch 与命令内容', () => {
   const plan: ExecutionPlan = {
     workerSessionId: SESSION,
     templateId: 'http_read',
-    actionClass: 'passive_read',
+    actionClass: 'passive_collection',
     normalizedTarget: HTTP_TARGET,
     resolvedAddresses: ['93.184.216.34'],
     normalizedCommand: HTTP_COMMAND,
@@ -805,7 +805,7 @@ test('准入成功：计划由模板注册信息与服务端派生字段构成',
     plan.idempotencyKey,
     deriveIdempotencyKey({
       workerSessionId: SESSION,
-      actionClass: 'passive_read',
+      actionClass: 'passive_collection',
       normalizedTarget: plan.normalizedTarget,
       normalizedCommand: plan.normalizedCommand,
       approvalId: '',
@@ -857,7 +857,7 @@ test('无法归类即拒绝，码来自策略判定', async () => {
 
 test('类别复算不一致即拒绝（模板注册与策略判定漂移）', async () => {
   const h = makeHarness();
-  h.policy.classify = async () => ({ ok: true, actionClass: 'passive_read' });
+  h.policy.classify = async () => ({ ok: true, actionClass: 'passive_collection' });
   const decision = await h.admit({ templateId: 'tcp_connect', targetSelector: HOST, params: { port: 443 } });
   assert.equal(rejectCode(decision), 'classification_rejected');
   assert.match(decision.kind === 'rejected' ? decision.error.message : '', /一致/);
@@ -965,7 +965,7 @@ test('审计不可写：所有触及目标的动作一律停止（不按风险�
 });
 
 test('审计不可写时连低风险动作也停：判据不看动作类别', async () => {
-  // 挑一个明确不需要逐次放行的类别（`passive_read`），确认它同样被拦。
+  // 挑一个明确不需要逐次放行的类别（`passive_collection`），确认它同样被拦。
   // 「只停高风险」的降级正是 §15.1 点名反对的。
   const h = makeHarness({
     async available() {
@@ -1180,7 +1180,7 @@ test('超出行为预设不再是拒绝理由：不在启用集合里的类别�
   });
   h.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_read', 'active_discovery'],
+    enabledActionClasses: ['passive_collection', 'active_probing'],
   });
 
   // `id` 的 base64：自由命令最直接地落在 exploit_validation 类。
@@ -1217,7 +1217,7 @@ test('超出行为预设时审计写不进去：停止受理且不创建放行�
   });
   h.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_read', 'active_discovery'],
+    enabledActionClasses: ['passive_collection', 'active_probing'],
   });
   const intent = {
     templateId: 'direct_command',
@@ -1238,7 +1238,7 @@ test('超出行为预设时审计写不进去：停止受理且不创建放行�
   const control = makeHarness();
   control.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_read', 'active_discovery'],
+    enabledActionClasses: ['passive_collection', 'active_probing'],
   });
   assert.equal((await control.admit(intent)).kind, 'needs_approval');
 });
@@ -1247,9 +1247,9 @@ test('启用集合内的类别照常受理：超出预设机制不得误拦', as
   const h = makeHarness();
   h.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_read', 'active_discovery'],
+    enabledActionClasses: ['passive_collection', 'active_probing'],
   });
-  const decision = await h.admit(); // 默认 http_read，属 passive_read
+  const decision = await h.admit(); // 默认 http_read，属 passive_collection
   assert.equal(decision.kind, 'admitted');
   assert.equal(h.store.requests.length, 0, '预设内且无需逐次放行的动作不应进入放行队列');
 });
@@ -1258,7 +1258,7 @@ test('默认禁用类别先于「超出预设」判定：即便超出预设也�
   const h = makeHarness();
   h.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_read', 'active_discovery'],
+    enabledActionClasses: ['passive_collection', 'active_probing'],
   });
   const decision = await h.admit({ templateId: 'destructive_probe', params: { mode: 'dry-run' } });
   assert.equal(decision.kind, 'rejected');
@@ -1767,7 +1767,7 @@ test('高权限模式（approval_mode=auto）：预设内的动作由服务端�
   const basePolicy = { perActionApprovalClasses: ['exploit_validation', 'lateral_movement'] as const };
 
   // ① 预设内（启用集合里有 exploit_validation）+ auto ⇒ 服务端自行放行，Agent 不必等。
-  h.setPolicy({ ...basePolicy, approvalMode: 'auto', enabledActionClasses: ['passive_read', 'active_discovery', 'exploit_validation'] });
+  h.setPolicy({ ...basePolicy, approvalMode: 'auto', enabledActionClasses: ['passive_collection', 'active_probing', 'exploit_validation'] });
   const selfApproved = await h.admit(command);
   assert.equal(selfApproved.kind, 'self_approved', '预设内的动作在 auto 档不应停在等待人类');
   if (selfApproved.kind !== 'self_approved') return;
@@ -1777,7 +1777,7 @@ test('高权限模式（approval_mode=auto）：预设内的动作由服务端�
 
   // ② 命令类在 auto 档**即使不在预设启用集合里**也自行放行（本部署唯一的动手模板；
   //    严格要求「预设内」会让 stealth/standard 下每条命令都要人批，高权限等于失效）。
-  h.setPolicy({ ...basePolicy, approvalMode: 'auto', enabledActionClasses: ['passive_read'] });
+  h.setPolicy({ ...basePolicy, approvalMode: 'auto', enabledActionClasses: ['passive_collection'] });
   const commandBeyondPreset = await h.admit(command);
   assert.equal(commandBeyondPreset.kind, 'self_approved', '命令类在 auto 档自行放行');
 

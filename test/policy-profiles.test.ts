@@ -127,15 +127,15 @@ describe('行为预设展开（§6.2.0.5）', () => {
 
   it('开启的默认禁用类别与认证读取都进入逐动作放行集合（§10.3 风险分级表）', () => {
     const enabled = expand({
-      allowedActions: ['passive_read', 'authenticated_read', 'lateral_movement', 'destructive'],
+      allowedActions: ['passive_collection', 'credentialed_access', 'lateral_movement', 'destructive'],
       enable_destructive: true,
     });
     const approvals = enabled.action_policy.perActionApprovalClasses;
-    for (const required of ['exploit_validation', 'lateral_movement', 'authenticated_read', 'destructive']) {
+    for (const required of ['exploit_validation', 'lateral_movement', 'credentialed_access', 'destructive']) {
       assert.ok(approvals.includes(required as never), `${required} 必须逐动作放行`);
     }
     // 契约基线下界不可被移除
-    const narrowed = expand({ allowedActions: ['passive_read'] });
+    const narrowed = expand({ allowedActions: ['passive_collection'] });
     assert.deepEqual(
       narrowed.action_policy.perActionApprovalClasses,
       ['exploit_validation', 'lateral_movement'],
@@ -144,10 +144,10 @@ describe('行为预设展开（§6.2.0.5）', () => {
   });
 
   it('allowedActions 是上界：显式给出时只保留其中类别', () => {
-    const narrowed = expand({ allowedActions: ['passive_read'] });
-    assert.deepEqual(narrowed.action_policy.enabled, ['passive_read']);
-    assert.ok(narrowed.action_policy.disabled.includes('active_discovery'));
-    assert.deepEqual(actionPolicyFromSnapshot(narrowed.snapshot).enabledActionClasses, ['passive_read']);
+    const narrowed = expand({ allowedActions: ['passive_collection'] });
+    assert.deepEqual(narrowed.action_policy.enabled, ['passive_collection']);
+    assert.ok(narrowed.action_policy.disabled.includes('active_probing'));
+    assert.deepEqual(actionPolicyFromSnapshot(narrowed.snapshot).enabledActionClasses, ['passive_collection']);
   });
 
   it('自由命令（free_command 的 exploit_validation）随模式变可用性，逐动作放行的下限不随模式下调', () => {
@@ -227,7 +227,7 @@ describe('计划摘要与策略绑定（§10.2）', () => {
     policyVersion: 1 as number | null,
     pacing: null,
     templateId: 'http_read',
-    actionClass: 'passive_read' as const,
+    actionClass: 'passive_collection' as const,
     normalizedTarget: 'target.example:443',
     normalizedCommand: 'http_get target=target.example:443 method=GET',
     timeoutMs: 15_000,
@@ -419,11 +419,11 @@ describe('行为预设：必选、场景差异与自定义指引（2026-10-05）
 describe('审批模式：高权限的自我放行边界（2026-10-05）', () => {
   const deepAuto = {
     approvalMode: 'auto' as const,
-    enabledActionClasses: ['passive_read', 'active_discovery', 'exploit_validation', 'persistence'] as const,
+    enabledActionClasses: ['passive_collection', 'active_probing', 'exploit_validation', 'persistence'] as const,
   };
 
   it('auto 档放行集合 = 预设启用 ∪ {命令类}，再减去默认禁用类别', () => {
-    assert.equal(shouldSelfApprove(deepAuto, 'passive_read'), true);
+    assert.equal(shouldSelfApprove(deepAuto, 'passive_collection'), true);
     assert.equal(shouldSelfApprove(deepAuto, 'exploit_validation'), true, '预设内的利用验证自行放行');
     // 默认禁用类别**即使人类逐类别确认开启过**也不自放行：后果不可逆，必须有人看过命令。
     assert.equal(shouldSelfApprove(deepAuto, 'persistence'), false);
@@ -433,16 +433,16 @@ describe('审批模式：高权限的自我放行边界（2026-10-05）', () => 
 
     // **命令类特例**（2026-10-05）：本部署只有 `direct_command` 一张动手模板，若严格要求
     // 「只在预设内」，stealth/standard 下每条命令都算越界 ⇒ 高权限退化成「每条都问人」。
-    const stealthAuto = { approvalMode: 'auto' as const, enabledActionClasses: ['passive_read', 'active_discovery'] as const };
+    const stealthAuto = { approvalMode: 'auto' as const, enabledActionClasses: ['passive_collection', 'active_probing'] as const };
     assert.equal(shouldSelfApprove(stealthAuto, 'exploit_validation'), true, '命令类在 auto 档也算预设内');
     assert.equal(shouldSelfApprove({ approvalMode: 'auto' as const }, 'exploit_validation'), true, '旧快照缺启用集合时，命令类仍放行');
-    assert.equal(shouldSelfApprove({ approvalMode: 'auto' as const }, 'active_discovery'), false, '缺启用集合时其它类别保守转人工');
+    assert.equal(shouldSelfApprove({ approvalMode: 'auto' as const }, 'active_probing'), false, '缺启用集合时其它类别保守转人工');
   });
 
   it('人工审批档与「没有冻结动作集合」都不自放行（保守缺省）', () => {
-    assert.equal(shouldSelfApprove({ approvalMode: 'human', enabledActionClasses: ['passive_read'] }, 'passive_read'), false);
-    assert.equal(shouldSelfApprove({ approvalMode: 'auto' }, 'passive_read'), false, '没有启用集合就无从判断「预设内」');
-    assert.equal(shouldSelfApprove({}, 'passive_read'), false, '旧快照缺模式 = human');
+    assert.equal(shouldSelfApprove({ approvalMode: 'human', enabledActionClasses: ['passive_collection'] }, 'passive_collection'), false);
+    assert.equal(shouldSelfApprove({ approvalMode: 'auto' }, 'passive_collection'), false, '没有启用集合就无从判断「预设内」');
+    assert.equal(shouldSelfApprove({}, 'passive_collection'), false, '旧快照缺模式 = human');
   });
 
   it('模式进快照可读回；缺键的旧快照按 human；值不认识即拒绝', () => {

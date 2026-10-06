@@ -1506,7 +1506,7 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
           plan: {
             workerSessionId,
             templateId: 'http_probe',
-            actionClass: 'passive_read',
+            actionClass: 'passive_collection',
             resolvedAddresses: ['192.0.2.10'],
             normalizedTarget: 'in.target.test',
             normalizedCommand: 'http_probe',
@@ -1616,11 +1616,11 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
         },
       ],
       exclusions: [],
-      allowedActions: ['passive_read'],
+      allowedActions: ['passive_collection'],
       authorizationNote: '',
     });
     assert.ok(typeof proposal.id === 'string' && proposal.id.length > 0, '过期的 intake 租约不得锁死提案');
-    assert.deepEqual(proposal.allowedActions, ['passive_read']);
+    assert.deepEqual(proposal.allowedActions, ['passive_collection']);
 
     // **清扫形态**（心跳的 `expireLeases` 会把过期租约写成 revoked_reason='expired'）：
     // 只豁免「未清扫」等于推迟一个心跳 tick 再卡死（评审抓到的半修）。
@@ -1657,12 +1657,12 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
       objective: '清扫后的 intake 仍可改口径',
       targets: [{ kind: 'ip', value: '47.109.76.66', protocols: ['tcp'], ports: [{ from: 3002, to: 3002 }] }],
       exclusions: [],
-      allowedActions: ['passive_read', 'active_discovery'],
+      allowedActions: ['passive_collection', 'active_probing'],
       authorizationNote: '',
     });
     assert.deepEqual(
       sweptProposal.allowedActions,
-      ['passive_read', 'active_discovery'],
+      ['passive_collection', 'active_probing'],
       '被心跳清扫过的到期租约不得锁死提案（否则「人慢于 TTL」这条路径又死）',
     );
 

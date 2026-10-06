@@ -554,7 +554,7 @@ test('服务端起稿：提示词里必须有阶段目标、应产出物、上�
     fromPhase: 'intelligence-gathering',
     toPhase: 'threat-modeling',
     statusNote: '指纹完成：nginx + Next.js；/api/submissions 未认证可读。',
-    approvalRequired: ['active_discovery'],
+    approvalRequired: ['active_probing'],
   });
   assert.equal(seeded.objective, '进入威胁建模：建立攻击面与业务影响模型');
   assert.match(seeded.prompt, /# 阶段目标/);
@@ -565,7 +565,7 @@ test('服务端起稿：提示词里必须有阶段目标、应产出物、上�
   assert.match(seeded.prompt, /指纹完成/, '状态便签必须带过去，人类才不用自己回忆');
   assert.match(seeded.prompt, /# 完成判据/);
   assert.match(seeded.prompt, /# 边界/);
-  assert.deepEqual(seeded.approvalRequired, ['active_discovery'], '放行类别跟随作业当前策略');
+  assert.deepEqual(seeded.approvalRequired, ['active_probing'], '放行类别跟随作业当前策略');
   assert.ok(seeded.allowed.includes('pentest_exec'), '工具建议来自默认白名单（与创建会话同源）');
   assert.ok(seeded.limitations.length > 0, '必须说明这是服务端起稿、未经 Agent');
 

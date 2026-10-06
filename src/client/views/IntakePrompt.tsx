@@ -242,7 +242,7 @@ export function intakePromptFacts(status: IntakeStatus | null): IntakePromptFact
     proposal,
     targetLines: proposal === null ? [] : proposal.targets.map(targetLine),
     exclusionLines: proposal === null ? [] : proposal.exclusions.map(targetLine),
-    // 动作类别按**人类标签**展示（`被动读取` 而不是 `passive_read`）：这行字是给人核对用的。
+    // 动作类别按**人类标签**展示（`被动读取` 而不是 `passive_collection`）：这行字是给人核对用的。
     allowedActions: proposal === null ? [] : proposal.allowedActions.map(actionClassLabel),
     mainStatus: status.mainStatus,
     stateVersion: status.stateVersion,

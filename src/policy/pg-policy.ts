@@ -539,7 +539,7 @@ function readPolicyVersion(value: unknown): number | undefined {
  * 追加（例如把主动发现也纳入逐次放行）。
  *
  * `enabledDisabledClasses` 与 `DEFAULT_DISABLED_CLASSES` 求交：只有契约里真正「默认禁用」
- * 的类别才可能被开启，快照里写 `passive_read` 不会让任何东西被启用。
+ * 的类别才可能被开启，快照里写 `passive_collection` 不会让任何东西被启用。
  */
 export function actionPolicyFromSnapshot(snapshot: unknown): ActionPolicySnapshot {
   const source = asRecord(snapshot);

@@ -90,7 +90,7 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
       `insert into pentest.tool_runs
          (id, engagement_id, worker_session_id, idempotency_key, tool_name, action_class,
           arguments_json, policy_decision, status, started_at)
-       values ($1::uuid, $2::uuid, $3::uuid, $4, 'pentest_exec', 'passive_read',
+       values ($1::uuid, $2::uuid, $3::uuid, $4, 'pentest_exec', 'passive_collection',
                '{}'::jsonb, '{}'::jsonb, 'running', now() - make_interval(secs => $5))`,
       [id, input.engagementId, input.workerSessionId, `run-${id}`, input.ageSeconds ?? 0],
     );

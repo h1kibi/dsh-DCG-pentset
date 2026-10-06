@@ -115,14 +115,14 @@ export interface FrozenSessionInput {
  * 为什么必须有：模板集合是**封闭**的（§10.2「可执行的动作集合本身是封闭的」），
  * 服务端只用它把命令实例化成一次受审的动作。若提示词不说明「只有这一张、形状如此」，
  * 模型会去猜别名——实测它连续猜了 9 个名字（`http_get`/`http.request`/`web.fetch`/`fetch`/
- * `http_head`/`http_passive_read`/`web_http_read`/`passive_http_read`/`http.read`）
+ * `http_head`/`http_passive_collection`/`web_http_read`/`passive_http_read`/`http.read`）
  * 全部被拒，最后以「无法枚举可用模板」收场。一个注定失败的任务不是安全，
  * 只是把成本转嫁给了模型和人类。（2026-10-05 起 `pentest_exec` 只收命令原文与端口，
  * 模板由服务端绑定——这份清单现在的作用是**说清参数形状与类别**，而不是让模型点菜。）
  */
 export interface ActionTemplateBrief {
   readonly id: string;
-  /** 动作类别（`passive_read` / `active_discovery` / …）。 */
+  /** 动作类别（`passive_collection` / `active_probing` / …）。 */
   readonly actionClass: string;
   /**
    * 参数名、取值范围与「可携带什么」；模板声明的参数**即必填**。

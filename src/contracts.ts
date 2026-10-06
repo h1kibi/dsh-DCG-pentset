@@ -236,10 +236,25 @@ export function describeError(error: unknown): string {
 
 // ───────────────────────────── 风险与动作类别 ─────────────────────────────
 
+/**
+ * 动作类别（风险分级）。
+ *
+ * **命名口径**：一个概念一个名字——标识符是显示名（`policy/action-class-labels.ts`）的
+ * snake_case，避免"审批卡上写 A、账本里写 B"。前三个 2026-10-07 由操作者定名，从
+ * `passive_read` / `active_discovery` / `authenticated_read` 改为行业标准词
+ * （旧名与它们真正干的事对不上：前者会向 crt.sh / whois 发包，后者是"用凭据访问"）。
+ *
+ * **改名的兼容纪律**（三条，缺一条就会伤到账本）：
+ *   1. 历史行**不改**：`tool_runs` / `approvals` 上有 `action_class` 不可变触发器
+ *      （迁移 008/011/025），原地重写会被数据库直接拒绝——那正是审计要求的形状；
+ *   2. 读侧兼容：旧值经 {@link normalizeActionClass} 一律映射到新值，因此历史行、
+ *      旧策略快照、旧范围方案照常渲染与评估；
+ *   3. 写侧只写新值，且旧值不得出现在任何下拉框/提示词/新文档里。
+ */
 export const ACTION_CLASSES = [
-  'passive_read',
-  'active_discovery',
-  'authenticated_read',
+  'passive_collection',
+  'active_probing',
+  'credentialed_access',
   'exploit_validation',
   'lateral_movement',
   'persistence',
@@ -247,6 +262,32 @@ export const ACTION_CLASSES = [
   'exfiltration',
 ] as const;
 export type ActionClass = (typeof ACTION_CLASSES)[number];
+
+/**
+ * 旧标识符 → 新标识符（**只增不改**：一份历史映射，只用于读侧归一化）。
+ *
+ * 不放进 `ACTION_CLASSES`：它不该出现在任何新写入或界面上；但必须被**接受**——
+ * 否则读旧账本与旧策略快照会把它们当成未知类别（进而按"无法归类即拒绝"处理，
+ * 把历史数据读成错误状态）。
+ */
+export const LEGACY_ACTION_CLASS_ALIASES = Object.freeze({
+  passive_read: 'passive_collection',
+  active_discovery: 'active_probing',
+  authenticated_read: 'credentialed_access',
+} as const);
+
+/** 旧值归一化：新值原样返回，旧值映射到新值，不认识的原样返回（由调用方决定拒绝或显示）。 */
+export function normalizeActionClass(value: string): string {
+  return (LEGACY_ACTION_CLASS_ALIASES as Readonly<Record<string, string | undefined>>)[value] ?? value;
+}
+
+/** 类型守卫：新值与旧值都算"可识别的类别"（读侧宽容、写侧只用新值）。 */
+export function isActionClass(value: unknown): value is ActionClass {
+  return (
+    typeof value === 'string' &&
+    ((ACTION_CLASSES as readonly string[]).includes(value) || Object.hasOwn(LEGACY_ACTION_CLASS_ALIASES, value))
+  );
+}
 
 /** 默认需要逐次人工放行的类别。 */
 export const PER_ACTION_APPROVAL_CLASSES = [

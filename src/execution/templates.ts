@@ -519,8 +519,8 @@ const DIRECT_COMMAND_SPEC: ActionTemplateSpec = {
  * 为什么要这一族：`direct_command` 把每一种动作都记成 `exploit_validation`，
  * 于是「nmap -sV」这种只读指纹与「打一条 exploit」在闸门上是同一件事——
  * 人审模式下前者要人逐条批（侦察吞吐崩掉），auto 模式下后者又完全不过目。
- * 这一族把**只读/低风险动作**按 `active_discovery`（四档预设全部启用，且不在逐次放行下限内）
- * 与 `passive_read` 记账，于是：
+ * 这一族把**只读/低风险动作**按 `active_probing`（四档预设全部启用，且不在逐次放行下限内）
+ * 与 `passive_collection` 记账，于是：
  *
  *   - 人审模式下，侦察类动作**不需要逐条放行**，由范围 + 租约 + pacing（stealth 1rps / standard 5rps / deep 10rps）约束；
  *   - 危险动作仍然只能走 `direct_command`（`exploit_validation`，永远逐条人批）。
@@ -532,7 +532,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_port_scan',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'port_scan',
       parameters: [
         { name: 'scope', kind: 'enum', values: ['top100', 'top1000', 'common_services', 'full_tcp'] },
@@ -558,7 +558,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_service_probe',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'service_probe',
       parameters: [
         { name: 'ports', kind: 'string', pattern: '^\\d{1,5}(-\\d{1,5})?(,\\d{1,5}(-\\d{1,5})?){0,63}$' },
@@ -579,7 +579,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_nse_safe',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'nse_run',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -600,7 +600,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_tls_inspect',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'tls_probe',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -623,7 +623,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_http_probe',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'http_probe',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -648,7 +648,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_content_discover',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'content_discover',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -676,7 +676,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_web_crawl',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'web_crawl',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -701,7 +701,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_dns_enum',
-      actionClass: 'passive_read',
+      actionClass: 'passive_collection',
       tool: 'dns_enum',
       parameters: [
         { name: 'record_types', kind: 'string', pattern: '^(A|AAAA|CNAME|MX|NS|TXT|SOA|CAA|SRV)(,(A|AAAA|CNAME|MX|NS|TXT|SOA|CAA|SRV)){0,7}$' },
@@ -722,7 +722,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_dns_axfr',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'dns_axfr',
       parameters: [],
       targetPlaceholder: 'target',
@@ -737,7 +737,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_dns_brute',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'dns_brute',
       parameters: [
         { name: 'wordlist', kind: 'enum', values: ['subdomains_5k'] },
@@ -760,7 +760,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_whois',
-      actionClass: 'passive_read',
+      actionClass: 'passive_collection',
       tool: 'whois_query',
       parameters: [{ name: 'kind', kind: 'enum', values: ['domain', 'ip'] }],
       targetPlaceholder: 'target',
@@ -775,7 +775,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'recon_ct_subdomains',
-      actionClass: 'passive_read',
+      actionClass: 'passive_collection',
       tool: 'ct_lookup',
       parameters: [{ name: 'include_wildcards', kind: 'enum', values: ['false', 'true'] }],
       targetPlaceholder: 'target',
@@ -792,7 +792,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
 // ───────────────────────── 结构化核验模板族（漏洞分析，2026-10-06） ─────────────────────────
 
 /**
- * 与侦察族同一套记账纪律（`active_discovery`，四档预设全启用、不在逐次放行下限），
+ * 与侦察族同一套记账纪律（`active_probing`，四档预设全启用、不在逐次放行下限），
  * 差别在**动作语义**：这一族碰的是「疑似问题」，因此每条都必须**可判定且不可逆影响为零**——
  * 只发读取类请求、不写目标、配置面暴露只报「存在性 + 长度 + 哈希 + 形态判定」，从不回显内容。
  *
@@ -803,7 +803,7 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'vuln_http_check',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'http_check',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -833,7 +833,7 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'vuln_exposure_check',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'exposure_check',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -865,7 +865,7 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'vuln_tls_weakness',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'tls_probe',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
@@ -888,7 +888,7 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
   {
     template: {
       id: 'vuln_nse_handshake',
-      actionClass: 'active_discovery',
+      actionClass: 'active_probing',
       tool: 'nse_run',
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },

@@ -174,7 +174,7 @@ const CONFIRM_PARAMS = {
   objective: '确认后的目标',
   targets: [{ kind: 'ip', value: '192.0.2.7', protocols: ['tcp'], ports: [{ from: 80, to: 80 }] }],
   exclusions: [],
-  allowedActions: ['passive_read'],
+  allowedActions: ['passive_collection'],
 };
 
 test('确认范围：授权说明传空串必须通过参数校验（它是留痕，不是前提）', async () => {
@@ -606,7 +606,7 @@ test('previewPolicy 接受确认面板实际发送的字段（漏声明会被"�
         proposalId: 'p-1',
         targets: [{ kind: 'ip', value: '192.0.2.10', protocols: ['tcp'], ports: [{ from: 80, to: 80 }] }],
         exclusions: [],
-        allowedActions: ['passive_read'],
+        allowedActions: ['passive_collection'],
         authorizationRef: 'AUTH-1',
       },
     },

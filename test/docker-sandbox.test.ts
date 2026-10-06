@@ -44,7 +44,7 @@ function plan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
   return {
     workerSessionId: 'sess',
     templateId: 'http_read',
-    actionClass: 'passive_read',
+    actionClass: 'passive_collection',
     normalizedTarget: 'https://a.target.com/',
     resolvedAddresses: ['93.184.216.34'],
     normalizedCommand: 'http_read url=https://a.target.com/ method=GET',

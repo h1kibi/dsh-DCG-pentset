@@ -1720,7 +1720,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'domain', value: 'Target.Example.', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }],
       exclusions: [{ kind: 'ip', value: '10.0.0.9', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }],
-      allowedActions: ['active_discovery'],
+      allowedActions: ['active_probing'],
       authorizationNote: 'AUTH-CONFIRM-1',
       behaviorProfile: 'standard',
       scopeEntryProfile: 'domain',
@@ -1860,7 +1860,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       proposalId,
       targets: [{ kind: 'domain', value: 'Target.Example.', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }],
       exclusions: [],
-      allowedActions: ['active_discovery'],
+      allowedActions: ['active_probing'],
       scopeEntryProfile: 'domain',
       behaviorProfile: 'standard',
     });
@@ -1880,7 +1880,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'domain', value: 'Target.Example.', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }],
       exclusions: [],
-      allowedActions: ['active_discovery'],
+      allowedActions: ['active_probing'],
       authorizationNote: 'AUTH-INTAKE-AFTER-REPORT',
       behaviorProfile: 'standard',
       scopeEntryProfile: 'domain',
@@ -1901,7 +1901,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       proposalId,
       targets: [{ kind: 'domain', value: 'Target.Example.', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }],
       exclusions: [],
-      allowedActions: ['active_discovery'],
+      allowedActions: ['active_probing'],
       scopeEntryProfile: 'domain',
       behaviorProfile: 'standard',
     });
@@ -1921,7 +1921,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'domain', value: 'Target.Example.', protocols: ['tcp'], ports: [{ from: 443, to: 443 }] }],
       exclusions: [],
-      allowedActions: ['active_discovery'],
+      allowedActions: ['active_probing'],
       authorizationNote: 'AUTH-INTAKE-LEGACY',
       behaviorProfile: 'standard',
       scopeEntryProfile: 'domain',
@@ -1939,7 +1939,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       behaviorProfile: 'stealth' as const,
       targets: [{ kind: 'ip' as const, value: '192.0.2.77', protocols: ['tcp' as const], ports: [{ from: 8000, to: 8000 }] }],
       exclusions: [],
-      allowedActions: ['active_discovery' as const],
+      allowedActions: ['active_probing' as const],
       authorizationRef: 'LAB-SELF-1',
       authorizationExpiresAt: '2030-01-01T00:00:00Z',
       timeWindow: { from: '09:00', to: '18:00' },
@@ -1961,10 +1961,10 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     // **人类勾选的「允许类别」不是「逐次放行类别」。**
     //
     // 这条断言此前写反了（它钉的是 `perActionApprovalClasses: [...allowedActions]` 那个实现），
-    // 而那个实现让每一次 `passive_read` / `active_discovery` 都要人工放行——
+    // 而那个实现让每一次 `passive_collection` / `active_probing` 都要人工放行——
     // 实战里每个动作都要人点一次，作业根本跑不动。§10.3 的分级表才是逐次放行的正解。
     assert.ok(
-      !preview.perActionApprovalClasses.includes('active_discovery'),
+      !preview.perActionApprovalClasses.includes('active_probing'),
       '低风险类（主动探测）不该被逐次放行：它只是「允许」而已',
     );
     assert.ok(
@@ -2181,7 +2181,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'ip', value: '192.0.2.88', protocols: ['tcp'], ports: [{ from: 80, to: 80 }] }],
       exclusions: [],
-      allowedActions: ['passive_read'],
+      allowedActions: ['passive_collection'],
       authorizationNote: '',
     });
 
@@ -2191,7 +2191,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
         `insert into pentest.approvals
            (id, engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
             plan_hash, risk_summary, decision, lease_generation, expires_at)
-         values ($1::uuid,$2::uuid,$3::uuid,'passive_read','{}'::jsonb,'{}'::jsonb,'h','',
+         values ($1::uuid,$2::uuid,$3::uuid,'passive_collection','{}'::jsonb,'{}'::jsonb,'h','',
                  'pending', 1, now() + interval '10 minutes')`,
         [approvalId, id, confirmed.workerSessionId],
       );
@@ -2240,7 +2240,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'ip', value: '192.0.2.88', protocols: ['tcp'], ports: [{ from: 80, to: 80 }] }],
       exclusions: [],
-      allowedActions: ['passive_read'],
+      allowedActions: ['passive_collection'],
       authorizationNote: '',
     });
 
@@ -2250,7 +2250,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
         `insert into pentest.approvals
            (id, engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
             plan_hash, risk_summary, decision, lease_generation, expires_at)
-         values ($1::uuid,$2::uuid,$3::uuid,'passive_read','{}'::jsonb,'{}'::jsonb,'h','',
+         values ($1::uuid,$2::uuid,$3::uuid,'passive_collection','{}'::jsonb,'{}'::jsonb,'h','',
                  'pending', 1, now() + interval '10 minutes')`,
         [approvalId, id, confirmed.workerSessionId],
       );
@@ -2283,7 +2283,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     await pool.query(
       `insert into pentest.tool_runs
          (id, engagement_id, idempotency_key, tool_name, action_class, arguments_json, policy_decision, status)
-       values ($1::uuid,$2::uuid,$3,'pentest_exec','passive_read','{}'::jsonb,'{}'::jsonb,'succeeded')`,
+       values ($1::uuid,$2::uuid,$3,'pentest_exec','passive_collection','{}'::jsonb,'{}'::jsonb,'succeeded')`,
       [runId, id, `k-revoke-${runId}`],
     );
     const consumed = await insertApproval();
@@ -2315,7 +2315,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'ip', value: '192.0.2.77', protocols: ['tcp'], ports: [{ from: 80, to: 80 }] }],
       exclusions: [],
-      allowedActions: ['passive_read'],
+      allowedActions: ['passive_collection'],
       authorizationNote: '',
     });
     assert.equal(confirmed.scopeVersion, 1, '空授权说明必须能确认（否则作业被表单挡住）');
@@ -2680,7 +2680,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       objective: '确认后的目标',
       targets: [{ kind: 'ip', value: '192.0.2.88', protocols: ['tcp'], ports: [{ from: 80, to: 80 }] }],
       exclusions: [],
-      allowedActions: ['passive_read'],
+      allowedActions: ['passive_collection'],
       authorizationNote: '',
     });
 
@@ -2689,7 +2689,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     await pool.query(
       `insert into pentest.tool_runs
          (id, engagement_id, idempotency_key, tool_name, action_class, arguments_json, policy_decision, status)
-       values ($1::uuid,$2::uuid,'k-consumed','pentest_exec','passive_read','{}'::jsonb,'{}'::jsonb,'succeeded')`,
+       values ($1::uuid,$2::uuid,'k-consumed','pentest_exec','passive_collection','{}'::jsonb,'{}'::jsonb,'succeeded')`,
       [runId, id],
     );
     const approvalId = randomUUID();
@@ -2697,7 +2697,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       `insert into pentest.approvals
          (id, engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
           plan_hash, risk_summary, decision, lease_generation, expires_at)
-       values ($1::uuid,$2::uuid,$3::uuid,'passive_read','{}'::jsonb,'{}'::jsonb,'h','',
+       values ($1::uuid,$2::uuid,$3::uuid,'passive_collection','{}'::jsonb,'{}'::jsonb,'h','',
                'pending', 1, now() + interval '10 minutes')`,
       [approvalId, id, confirmed.workerSessionId],
     );
@@ -3087,7 +3087,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       `insert into pentest.tool_runs
          (engagement_id, worker_session_id, idempotency_key, tool_name, action_class,
           arguments_json, policy_decision, status)
-       values ($1::uuid, $2::uuid, 'wf-inflight', 'pentest_exec', 'active_discovery',
+       values ($1::uuid, $2::uuid, 'wf-inflight', 'pentest_exec', 'active_probing',
                '{}'::jsonb, '{}'::jsonb, 'running')`,
       [id, started.workerSessionId],
     );
@@ -3112,7 +3112,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
       `insert into pentest.approvals
          (engagement_id, requested_by_worker, action_class, target_snapshot, command_plan,
           plan_hash, risk_summary, decision, expires_at)
-       values ($1::uuid, $2::uuid, 'active_discovery', '{}'::jsonb, '{}'::jsonb,
+       values ($1::uuid, $2::uuid, 'active_probing', '{}'::jsonb, '{}'::jsonb,
                'expired-plan', '低', 'pending', now() - interval '1 minute')`,
       [id, started.workerSessionId],
     );

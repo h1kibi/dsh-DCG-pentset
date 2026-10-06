@@ -71,12 +71,12 @@ describe('结构化动作模板族：注册表与类别', () => {
     assert.equal(new Set(ids).size, ids.length, '模板 id 不得重复');
   });
 
-  it('类别只落在 passive_read / active_discovery：不触发逐次放行，也不是禁用类别', () => {
+  it('类别只落在 passive_collection / active_probing：不触发逐次放行，也不是禁用类别', () => {
     for (const { family } of FAMILIES) {
       for (const spec of templatesOf(family)) {
         const actionClass = spec.template.actionClass;
         assert.ok(
-          actionClass === 'passive_read' || actionClass === 'active_discovery',
+          actionClass === 'passive_collection' || actionClass === 'active_probing',
           `${spec.template.id} 的类别是 ${actionClass}——结构化只读动作不得落在需要人批/禁用的类别上`,
         );
         assert.equal(
@@ -95,7 +95,7 @@ describe('结构化动作模板族：注册表与类别', () => {
 
   it('四档行为预设都启用这些类别（否则会落 beyondPreset → 转人工放行）', () => {
     for (const profile of ['stealth', 'standard', 'deep', 'custom'] as const) {
-      for (const actionClass of ['passive_read', 'active_discovery'] as const) {
+      for (const actionClass of ['passive_collection', 'active_probing'] as const) {
         assert.ok(PROFILE_DEFAULTS[profile].enabled.includes(actionClass), `${profile} 预设未启用 ${actionClass}`);
       }
     }

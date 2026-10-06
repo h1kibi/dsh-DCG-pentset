@@ -127,9 +127,9 @@ const RESOLUTION_LABELS: Readonly<Record<ApprovalResolution, string>> = {
  * 人工授权**——那才是人类在这一屏上要判断的东西。
  */
 const RISK_TIER_LABELS: Readonly<Record<ActionClass, string>> = {
-  passive_read: '低：engagement 授权即可，通常不需逐次放行',
-  active_discovery: '中：阶段级放行，受速率、目标白名单与时间窗约束',
-  authenticated_read: '中：需要凭据引用与人工放行',
+  passive_collection: '低：engagement 授权即可，通常不需逐次放行',
+  active_probing: '中：阶段级放行，受速率、目标白名单与时间窗约束',
+  credentialed_access: '中：需要凭据引用与人工放行',
   exploit_validation: '高：逐目标、逐动作放行，载荷保持最小',
   lateral_movement: '高：逐目标、逐动作放行，且目标必须已纳入当前范围版本',
   persistence: '极高：默认不启用，启用需在 engagement 策略中显式开启并双人确认',
@@ -139,10 +139,10 @@ const RISK_TIER_LABELS: Readonly<Record<ActionClass, string>> = {
 
 function riskTone(actionClass: ActionClass): Tone {
   switch (actionClass) {
-    case 'passive_read':
+    case 'passive_collection':
       return 'neutral';
-    case 'active_discovery':
-    case 'authenticated_read':
+    case 'active_probing':
+    case 'credentialed_access':
       return 'active';
     case 'exploit_validation':
     case 'lateral_movement':

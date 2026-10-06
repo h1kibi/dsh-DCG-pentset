@@ -124,7 +124,7 @@ export const CHAT_CSS = `
 .pentest-intake__targets li{background:var(--pt-bg-well);padding:6px 9px;font:400 11.5px/1.6 var(--pt-font-mono);color:var(--pt-fg-dim);overflow-wrap:anywhere}
 .pentest-intake__actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 0;font-size:12px;line-height:1.65;color:var(--pt-fg-dim);overflow-wrap:anywhere}
 /* 动作类别用胶囊列出来：它是这张卡里**最需要被逐项核对**的东西（§13.1），
- * 一行「允许动作：passive_read」既难读也难核对。 */
+ * 一行「允许动作：passive_collection」既难读也难核对。 */
 .pentest-intake__actions-label{font:500 10px/1.35 var(--pt-font-mono);letter-spacing:.06em;color:var(--pt-fg-faint)}
 .pentest-intake__action{border:1px solid var(--pt-line);background:var(--pt-bg-module);border-radius:999px;padding:1px 9px;font:400 11.5px/1.7 var(--pt-font-sans);color:var(--pt-fg)}
 .pentest-proposal__summary{font:400 11px/1.5 var(--pt-font-mono);color:var(--pt-fg-faint);margin-left:2px}

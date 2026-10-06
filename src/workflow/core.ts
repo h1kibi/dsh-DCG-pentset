@@ -540,7 +540,7 @@ export class WorkflowCore {
         // **不要把「允许的类别」当成「逐次放行的类别」。**
         //
         // 这里曾经写成 `perActionApprovalClasses: [...input.allowedActions]`，后果是：
-        // 人类勾了 `passive_read` + `active_discovery`（都是低风险类），冻结出来的策略
+        // 人类勾了 `passive_collection` + `active_probing`（都是低风险类），冻结出来的策略
         // 就要求**每一次动作都人工放行**——实战里每个 HTTP GET 都要人点一次，作业根本跑不动。
         //
         // §10.3 的分级表才是逐次放行的**下界与正解**：契约基线（利用验证、横向移动）、
@@ -593,7 +593,7 @@ export class WorkflowCore {
    *
    * 为什么必须读策略、而不是沿用调用方传来的列表：那条列表在不同调用点语义不同
    * （intake 传的是「允许的动作类别」，交接传的是「审批时的放行类别」），而**执行器只认这份策略**。
-   * 用别的来源写提示词就会出现实测到的矛盾：快照写着「passive_read 需逐次放行」，
+   * 用别的来源写提示词就会出现实测到的矛盾：快照写着「passive_collection 需逐次放行」，
    * 真去申请却被告知「该动作不需要人工放行」——模型据此以为自己在等审批，实际能直接跑。
    */
   async enforcedApprovalClassesOf(engagementId: string): Promise<readonly ActionClass[]> {

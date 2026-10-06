@@ -242,7 +242,7 @@ const INPUT: FrozenSessionInput = {
   actionTemplates: [
     {
       id: 'http_read',
-      actionClass: 'passive_read',
+      actionClass: 'passive_collection',
       parameters: [
         { name: 'method', carries: 'HTTP 方法，仅 GET/HEAD' },
         { name: 'path', carries: 'URL 路径' },
@@ -435,14 +435,14 @@ describe('DshSessionFactory.create', () => {
   });
 
   it('放行类别以**冻结策略**为准：调用方那份语义不同，不得拿它写提示词', async () => {
-    // 现场矛盾：快照写着「passive_read 需逐次放行」，真去申请却被告知「该动作不需要人工放行」。
+    // 现场矛盾：快照写着「passive_collection 需逐次放行」，真去申请却被告知「该动作不需要人工放行」。
     // 根因是 intake 调用点把「允许的动作类别」填进了放行字段，而执行器只认策略。
     const host = makeHost();
     const factory = new DshSessionFactory(host.ctx);
 
     await factory.create({
       ...INPUT,
-      approvalRequired: ['passive_read', 'exploit_validation'],
+      approvalRequired: ['passive_collection', 'exploit_validation'],
       enforcedApprovalClasses: ['exploit_validation', 'lateral_movement'],
     });
 
@@ -453,7 +453,7 @@ describe('DshSessionFactory.create', () => {
     assert.match(approvalLine, /利用验证（exploit_validation）/, '必须列出策略里真正会拦下的类别');
     assert.match(approvalLine, /横向移动（lateral_movement）/, '两个类别都要列出');
     assert.ok(
-      !approvalLine.includes('passive_read'),
+      !approvalLine.includes('passive_collection'),
       '不得把调用方那份（可能含"允许类别"的那种）当成放行类别写出来',
     );
   });

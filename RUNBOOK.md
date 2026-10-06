@@ -664,7 +664,15 @@ Agent 继续追问。范围确认本身**仍然**只能在控制台点，提问�
    ```
 
 3. **低风险类别不需要逐次放行**：`perActionApprovalClasses` 只含契约基线与高风险类（§10.3）。
-   若你的作业是在**旧版本**上确认的（策略里 `passive_read`/`active_discovery` 也在放行集合里），
+   若你的作业是在**旧版本**上确认的（策略里 `passive_collection` / `active_probing` 以旧名
+   `passive_read` / `active_discovery` 出现在放行集合里），**不需要改作业**：读侧会把旧值归一化到新值
+   （改名映射见下），策略照常评估、账本照常渲染。
+
+> **类别改名（2026-10-07）**：`passive_read` → `passive_collection`、`active_discovery` → `active_probing`、
+> `authenticated_read` → `credentialed_access`（其余五个不变）。**历史行一个字不改**——`tool_runs` /
+> `approvals` 上有 `action_class` 不可变触发器，数据库层面禁止原地重写；改名代价全部落在读侧归一化
+> （`normalizeActionClass()`，映射表在 `src/contracts.ts` 的 `LEGACY_ACTION_CLASS_ALIASES`）。
+> 因此旧账本里的 `action_class` 仍是旧串，**这是预期**，不是脏数据：按显示名读（`Passive Collection`）。
    每个动作都要人点一次——新建作业确认一次即可，或接受逐次放行。
 
 4. **批准后 Agent 会被唤醒送达**（`tool.approval.notified`）：如果你在审计里看到
@@ -905,8 +913,8 @@ CRLF 会让容器报 `/usr/bin/env: 'python3\r': No such file or directory`（�
 
 | 预设 | 场景 | 注入指引的骨架 | 默认节奏 | 默认启用类别 |
 |---|---|---|---|---|
-| `stealth` | 红队 · 隐蔽测试（被看见即失败） | 允许被动/低噪声；不做全端口与爆破；留痕与外传禁止 | 1/s·并发1 | passive_read、active_discovery |
-| `standard` | 已通知的授权渗透测试 | 常规识别+最小化验证；失败也要记录 | 5/s·并发2 | + authenticated_read |
+| `stealth` | 红队 · 隐蔽测试（被看见即失败） | 允许被动/低噪声；不做全端口与爆破；留痕与外传禁止 | 1/s·并发1 | passive_collection、active_probing |
+| `standard` | 已通知的授权渗透测试 | 常规识别+最小化验证；失败也要记录 | 5/s·并发2 | + credentialed_access |
 | `deep` | 高许可 · 穷尽利用尝试 | 全端口/爆破/多路径利用；**穷尽=尝试并记录**，不是必须打进去 | 10/s·并发4 | + exploit_validation |
 | `custom` | 自定义（人类写指引） | 逐字注入人类写的 `customGuidance`（≤2000 字），冲突时优先 | 同 stealth | 同 stealth |
 
