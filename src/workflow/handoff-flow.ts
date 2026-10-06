@@ -666,6 +666,14 @@ export function seedHandoffContent(input: {
    * 取太多只是给下一阶段塞噪声线索。
    */
   readonly candidateRefs?: readonly { readonly memoryId: string; readonly reason: string }[];
+  /**
+   * **已压缩**的交接要点（2026-10-07）。给出时它取代"便签 + 报告摘要"的原始拼接进入提示词：
+   * 交接的本质是压缩转发，而拼接只是把两份摘要放在一起，没有对上一阶段材料做压缩。
+   * 省略/为空即退回拼接（压缩失败、未配置、超时都走这条）。
+   */
+  readonly compressedContext?: string | null;
+  /** 压缩来源说明（模型名等），写进提示词与 `limitations`，让下一阶段知道这段是谁压的。 */
+  readonly compressionNote?: string | null;
   readonly approvalRequired: readonly ActionClass[];
 }): {
   readonly objective: string;
@@ -681,6 +689,7 @@ export function seedHandoffContent(input: {
   const objective = `进入${def.displayName}：${def.goal}`;
   const noteText = (input.statusNote ?? '').trim();
   const reportText = (input.previousReport?.summary ?? '').trim();
+  const compressed = (input.compressedContext ?? '').trim();
   const handover = [
     noteText === '' ? null : `（状态便签）\n${noteText.slice(0, DEFAULTS.statusNoteMaxChars)}`,
     reportText === '' || input.previousReport == null
@@ -691,9 +700,11 @@ export function seedHandoffContent(input: {
   const sections = [
     `# 阶段目标（${def.displayName}）\n${def.goal}`,
     `# 本阶段应产出\n${def.deliverables.join('、')}`,
-    handover.length === 0
-      ? null
-      : `# 上一阶段要点（来自状态便签与上一份报告，请核对后保留或改写）\n${handover.join('\n\n')}`,
+    compressed !== ''
+      ? `# 上一阶段要点（${input.compressionNote ?? '模型压缩'}）\n${compressed}`
+      : handover.length === 0
+        ? null
+        : `# 上一阶段要点（来自状态便签与上一份报告，请核对后保留或改写）\n${handover.join('\n\n')}`,
     `# 完成判据（离开本阶段前应当能回答）\n${def.exit.reports.join('、')}；人类判断：${def.exit.humanJudgment.join('、')}`,
     '# 边界\n范围以冻结的范围版本为准；越界动作不要执行。需要人工放行的动作先申请，不要绕过。',
   ].filter((section): section is string => section !== null);

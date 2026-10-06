@@ -1842,6 +1842,19 @@ export const HANDOFF_AUTO_CONTEXT_REFS = 5;
 export const HANDOFF_REPORT_SUMMARY_MAX_CHARS = 1200;
 
 /**
+ * 交接压缩（用会话当前模型把上一阶段材料压成一段要点）的输出上限。
+ * 上限存在的理由同提示词预算：注入文本是硬约束，模型经常无视长度要求。
+ */
+export const COMPRESSION_MAX_CHARS = 2500;
+
+/** 交接压缩的单次调用超时（毫秒）。起草是人点出来的动作 —— 超时就退回现有拼接，不让人干等。 */
+export const COMPRESSION_TIMEOUT_MS = 30_000;
+
+/** 参与压缩的「近期过程」条数与单条截断（只取最近若干条，避免把整本账本塞进一次调用）。 */
+export const COMPRESSION_RECENT_EVENTS = 40;
+export const COMPRESSION_RECENT_EVENT_MAX_CHARS = 600;
+
+/**
  * 公共记忆的长度上限（字符）。
  *
  * 放在契约层而不是 `workflow/model.ts`：客户端面板要在**提交之前**就用同一个数拦一次，
