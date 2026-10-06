@@ -14,7 +14,6 @@
  */
 
 import type {
-  ActionClass,
   MainStatus,
   Phase,
   RunMarker,
@@ -163,26 +162,11 @@ export function trustTone(trust: TrustLevel): Tone {
   }
 }
 
-/** 动作类别（风险分级）。 */
-const ACTION_CLASS_LABELS: Readonly<Record<ActionClass, string>> = {
-  passive_read: '被动读取',
-  active_discovery: '主动发现',
-  authenticated_read: '认证读取',
-  exploit_validation: '利用验证',
-  lateral_movement: '横向移动',
-  persistence: '持久化',
-  destructive: '破坏性动作',
-  exfiltration: '数据外传',
-};
-
-export function actionClassLabel(actionClass: ActionClass): string {
-  return ACTION_CLASS_LABELS[actionClass];
-}
-
-/** 需要逐次人工放行的类别（与契约的 `PER_ACTION_APPROVAL_CLASSES` 对齐）。 */
-export function needsPerActionApproval(actionClass: ActionClass): boolean {
-  return actionClass === 'exploit_validation' || actionClass === 'lateral_movement';
-}
+/**
+ * 动作类别（风险分级）的显示名：**唯一出处**在 `policy/action-class-labels.ts`，
+ * 这里是转出（控制台与提示词必须同名，见那边的说明）。本地不再抄一份。
+ */
+export { actionClassLabel, needsPerActionApproval } from '../policy/action-class-labels.ts';
 
 /** 记忆来源可信度。 */
 const TRUST_LABELS: Readonly<Record<TrustLevel, string>> = {

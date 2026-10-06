@@ -68,6 +68,7 @@ import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
 import { describeError } from '../contracts.ts';
 import type { SandboxMount } from '../contracts.ts';
+import { describeActionClasses, actionClassLabelSafe } from '../policy/action-class-labels.ts';
 import { renderSandboxBrief } from './sandbox-brief.ts';
 import type {
   CreatedSession,
@@ -653,10 +654,12 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
   // 以**冻结策略**为准：执行器只认它。调用方传来的那份可能语义不同（intake 传的是允许类别），
   // 拿它写提示词会让模型以为自己在等审批、实际能直接跑（实测踩过）。
   const enforced = input.enforcedApprovalClasses ?? input.approvalRequired;
+  // 用**显示名 + 释义**而不是裸标识符：模型按字面理解标识符（把 exploit_validation 当成
+  // "只做漏洞验证"）会漏掉"这一档是任意自由命令"，而人类在审批卡上看的是同一份名字。
   const approval =
     enforced.length === 0
-      ? '（本阶段没有需要逐次放行的动作类别）'
-      : `${enforced.join('、')}（这些动作每执行一次都要先申请放行，不得先做后报）`;
+      ? describeActionClasses(enforced)
+      : `${describeActionClasses(enforced)}——这些动作每执行一次都要先申请放行，不得先做后报`;
   const templates = input.sessionKind === 'intake'
     ? ['（intake 阶段不提供任何目标动作模板；scope proposal 仍需人类确认）']
     : input.actionTemplates.length === 0
@@ -674,7 +677,7 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
               return carries === '' ? p.name : `${p.name}（${carries}）`;
             })
             .join('；');
-          return `  - ${t.id}［${t.actionClass}］${params === '' ? '（无参数）' : `参数：${params}`}`;
+          return `  - ${t.id}［${actionClassLabelSafe(t.actionClass)} / ${t.actionClass}］${params === '' ? '（无参数）' : `参数：${params}`}`;
         });
   return [
     '【本会话的冻结能力快照】（创建时冻结，运行中不会放宽；§2.4、§4.3）',

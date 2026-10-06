@@ -448,9 +448,12 @@ describe('DshSessionFactory.create', () => {
 
     const capability = host.sections.find((s) => s.name === 'pentest:capability-freeze');
     assert.ok(capability !== undefined);
-    assert.match(capability.text, /exploit_validation、lateral_movement/, '必须列出策略里真正会拦下的类别');
+    // 放行行：显示名 + 标识符 + 释义（显示名的唯一出处见 policy/action-class-labels.ts）。
+    const approvalLine = /需要逐次人工放行的动作类别：([^\n]*)/.exec(capability.text)?.[1] ?? '';
+    assert.match(approvalLine, /利用验证（exploit_validation）/, '必须列出策略里真正会拦下的类别');
+    assert.match(approvalLine, /横向移动（lateral_movement）/, '两个类别都要列出');
     assert.ok(
-      !capability.text.includes('passive_read、exploit_validation'),
+      !approvalLine.includes('passive_read'),
       '不得把调用方那份（可能含"允许类别"的那种）当成放行类别写出来',
     );
   });

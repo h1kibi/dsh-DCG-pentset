@@ -88,8 +88,9 @@ test('有方案时给出服务端事实：目标行、允许动作、授权说�
   // 不做二次规范化：客户端没有范围引擎，任何"顺手规范一下"都会与服务端分叉。
   assert.deepEqual(facts.targetLines, ['IP 47.109.76.66 · TCP 3002']);
   assert.deepEqual(facts.exclusionLines, ['网段 10.0.0.0/24 · TCP 默认端口']);
-  // 动作类别按人类标签展示（`被动读取`），不是契约里的枚举名——这行字是给人核对的。
-  assert.deepEqual(facts.allowedActions, ['被动读取', '主动发现']);
+  // 动作类别按人类标签展示（`Passive Collection`），不是契约里的枚举名——这行字是给人核对的。
+  // 标签的唯一出处是 `policy/action-class-labels.ts`（客户端与提示词共用同一份）。
+  assert.deepEqual(facts.allowedActions, ['Passive Collection', 'Active Probing']);
   assert.equal(facts.engagementName, '47.109.76.66 授权测试');
   assert.equal(facts.proposal?.id, 'p-1');
 });
