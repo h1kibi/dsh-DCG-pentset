@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [Nmap NSE 官方文档, OpenSSL s_client 文档, OWASP WSTG-CONF]
-  smoked: "沙箱实测@8aba5d58ad5b：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）"
+  smoked: "沙箱实测@8aba5d58ad5b：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）。2026-10-06 补 3b「TLS 专项」并实测（fx-tls 自签靶）：testssl --protocols 给出 `TLS 1.2 offered (OK)` 与 1.0/1.1 not offered；sslscan 给出 `TLSv1.2 enabled`、1.0/1.1 disabled；sslyze 给出 Mozilla 合规判定 `FAILED - Not compliant` 并逐项列出（证书路径校验失败、弱套件、多余曲线）"
 ---
 
 # 服务面候选漏洞核验（vuln-service-checks）
@@ -72,6 +72,20 @@ nmap -Pn -p <tls 端口> \
 - `ssl-enum-ciphers` 出现 `SSLv2`/`SSLv3`/`TLSv1.0`/`TLSv1.1`/`RC4`/`3DES`/`EXPORT`/`NULL`/`anon` → 弱协议/弱套件命中。
 - `ssl-dh-params` 报 `Logjam`/`export-grade`/DH < 1024 位 → 弱 DH 命中。
 - `ssl-heartbleed`/`ssl-poodle`：以脚本最终判定为准，但须过「判读与去噪」的假阳性关。
+
+### 3b. TLS 专项核验（testssl / sslscan / sslyze —— 比 nmap 的 ssl-* 脚本细）
+```bash
+testssl --quiet --color 0 --protocols <地址>:<端口>
+sslscan --no-colour <地址>:<端口> | head -40
+sslyze <地址>:<端口>
+```
+**期望**：逐个协议的 offered/not offered（testssl）、`TLSv1.x disabled/enabled`（sslscan）、
+Mozilla 合规判定（sslyze：`FAILED - Not compliant` + 具体项）。
+**判据**：**1.0 / 1.1 `offered` = 发现**（1.2/1.3 属正常）；证书问题（自签 / 过期 / 主机名不匹配 /
+链不完整）各算一条；弱套件（CBC、RC4、`TLS_RSA_*` 非前向保密）按 sslscan 的清单列出。
+> **时间预算**：testssl 很慢（自签小靶上也要几十秒；全套 `--fast` 仍可能几分钟）。先用
+> `--protocols` 拿协议面，需要套件细节再跑 sslscan（秒级）；sslyze 用来拿「合规」这类判定性结论。
+> 三者是**同一件事的不同粒度**，按需取一两个，别三个都跑满。
 
 ### 4. openssl s_client 手工交叉核验
 ```bash

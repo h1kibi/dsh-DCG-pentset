@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@8aba5d58ad5b：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open"
+  smoked: "沙箱实测@8aba5d58ad5b：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open。2026-10-06 补第 5/6 步并实测：arp-scan 扫 /24 得 9 台响应（含 MAC）、fping 打印 2 台存活、traceroute 1 跳直达目标、masscan -p8080 --rate 500 命中 172.29.0.2、nbtscan 在纯 Linux 网段无 NetBIOS 名字（负例形态）、tshark 边造流量边抓得 34 包含 `GET / HTTP/1.1`（抓与读写在同一条命令里）"
 ---
 
 # 网络面清点（recon-network-surface）
@@ -60,7 +60,33 @@ nmap -Pn -p <端口> --script=banner,http-title,http-headers <目标>
 ```
 期望：脚本段落有输出。判据：把 banner 原文（截断到 200 字符）作为证据附在资产上。
 
-> 上面每步都把结果写到 `/tmp`，再按需用 `cat` 读回：输出很长时 `nmap` 的原始文件比终端回显更适合引用。
+> 上面每步都把结果写到 `/tmp`：**容器是一次性的**（`--rm`），`/tmp` 产物只在那一条命令内存在——
+> 要"落盘再筛"就把 `nmap … -oN /tmp/x && grep … /tmp/x` **写在同一条命令里**；分开写会得到
+> `No such file or directory`（2026-10-06 实测）。
+
+### 5. 主机发现的其它手段（ICMP 被挡时）与路径
+```bash
+arp-scan -I eth0 <网段>          # 同网段二层发现：绕开 ICMP 过滤，最可信
+fping -a -q <主机1> <主机2>      # 批量 ICMP，脚本友好（-a 只打印存活）
+nbtscan -r <网段>                # NetBIOS 名字（Windows/Samba 资产）
+traceroute -n -m 5 <目标>        # 路径与下一跳（判断隔离层在哪一跳）
+mtr -n -r -c 5 <目标>            # 路径 + 丢包统计（"间歇不通"比 traceroute 更好用）
+```
+**期望**：arp-scan 出主机表（含 MAC）；fping 逐行打印存活地址；traceroute/mtr 出逐跳列表。
+**判据**：**`arp-scan` 只对同网段有效**（跨三层一律没结果，那不是"主机不存在"，是它看不到）；
+nbtscan 出名字才说明是 Windows/Samba；路径里出现网关即说明目标不在本网段。
+> 快扫工具 `masscan` 很快也**很响**：只在人类明确要求并给出速率时用
+> （`masscan <网段> -p<端口清单> --rate <人类给的数>`），且**结果要用 `nmap -sT` 复核**——
+> 它自己的握手判定会漏，别把 masscan 的清单直接当资产表。
+
+### 6. 抓包看线缆上到底发生了什么（可选）
+```bash
+date -u +%FT%TZ && tshark -i eth0 -a duration:5 -w /tmp/cap.pcap && tshark -r /tmp/cap.pcap | head -20
+```
+**期望**：抓包文件生成，读回时出现本步时间段内的包（如 `HTTP … GET / HTTP/1.1`）。
+**判据**：抓到的包要能对上**同时段你发过的动作**（时间窗由 `date -u` 标定）；抓不到任何包 ≠ 目标没响应，
+先确认网卡名（`ip a`）与是否真有流量。
+> 注意：`/tmp/cap.pcap` 只在那一条命令内存在——**抓与读必须写在同一条命令里**（上面就是合并写法）。
 
 ## 判读与去噪
 - `open|filtered` 不等于打开：UDP 与部分被过滤的端口会这样显示，记为「待确认」。

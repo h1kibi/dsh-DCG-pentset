@@ -14,7 +14,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
@@ -82,6 +82,30 @@ describe('沙箱环境声明 ↔ 镜像：每个工具都能在 Dockerfile 里�
     const brief = renderSandboxBrief('phase');
     assert.ok(brief.includes(SANDBOX_TEMPLATE_DIR), '提示词必须给出模板目录');
     assert.match(brief, /不要从网上下载模板库/, '必须明确禁止下载外部模板（含入侵性用例）');
+  });
+
+  it('每个声明的工具都要「有人教」：出现在某份 skill 里，或在本组用途说明里被点名', () => {
+    // 为什么要有这条：镜像里装了工具、提示词里也列了它，但**没有任何技能或用法说不清什么时候用它**时，
+    // 模型的选择只剩两种——忽略它（白装），或者照着名字硬猜怎么用（无判据、无证据纪律）。
+    // 2026-10-06 实测：69 个已装工具里曾有一半处于这种状态（nuclei / testssl / tshark / cewl / hydra…）。
+    const skillsDir = path.join(HERE, '..', 'skills');
+    const skillText = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(path.join(skillsDir, entry.name, 'SKILL.md')))
+      .map((entry) => readFileSync(path.join(skillsDir, entry.name, 'SKILL.md'), 'utf8'))
+      .join('\n');
+    const usage = SANDBOX_TOOL_GROUPS.map((group) => group.usage).join('\n');
+    const untaught: string[] = [];
+    for (const group of SANDBOX_TOOL_GROUPS) {
+      for (const tool of group.tools) {
+        const name = tool.name.replace(/\*$/, '');
+        if (!skillText.includes(name) && !usage.includes(name)) untaught.push(`${group.group} / ${tool.name}`);
+      }
+    }
+    assert.deepEqual(
+      untaught,
+      [],
+      '这些工具进了镜像也进了提示词，但没教怎么用：要么在某份技能里加一步（并在镜像上冒烟），要么在本组 usage 里点名并写清什么时候用',
+    );
   });
 });
 

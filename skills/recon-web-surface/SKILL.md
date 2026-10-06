@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@8aba5d58ad5b：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）"
+  smoked: "沙箱实测@8aba5d58ad5b：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）。2026-10-06 补工具取舍并实测：dirb 命中 `/.env`、`/.git`、`/.git/HEAD`；katana `-d 2` 抓到 `/` 与 `/page2.html`；wfuzz 跑通（过滤 2561 请求；其 `-f` 输出语法本次未验成，故只写进取舍说明、没写进步骤）"
 ---
 
 # Web 面清点（recon-web-surface）
@@ -129,6 +129,11 @@ ffuf -u http://<目标>:<端口>/FUZZ \
 - **想跑大字典再换 `raft-small-directories.txt`（20116 行）——但它是纯目录字典，没有文件项**：2026-10-06 实测它一条文件命中都产生不了（只有空行匹配到 `/`）。要用它必须配 `-e .txt,.html,.php` 之类扩展名，或另接文件字典；跑完约 25–30 分钟，时间紧就 `head -n 2000` 截断并在覆盖说明里写明。
 - 备选：`-ac`（自动校准）也能去掉软 404，但显式 `-fs` 的判据更可解释、更方便复核，优先用它。
 - 需要探文件扩展名时用 `-e .txt,.bak,.zip`；**不要**用 `-recursion` 无限递归——除非人类明确授权并给出深度。
+- **同类工具的取舍（判据相同，选一个用到底）**：`dirb`（最简；实测在本题靶命中 `/.env`、`/.git/HEAD`）、
+  `wfuzz`（过滤语法强，适合复杂判据）、`dirsearch`（字典与统计最全，`-at SIMPLE` 那类参数与它无关）。
+  **不要**为了"更全"把四个都跑一遍——每个都在打目标，每个都算一次动作。
+- **需要 JS 感知的爬取**（现代前端、单页应用）时用 `katana -u <目标> -silent -d 2`（实测抓到 `/`、`/page2.html`）；
+  `gospider` 更快但只看静态链接；结构化通道的 `web_crawl` 是同一条链的免审批版本，先考虑它。
 
 ### 7. 命中复核与富化
 ```bash

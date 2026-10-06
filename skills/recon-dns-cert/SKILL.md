@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-CRYP-01, RFC 5280, RFC 9309, MITRE ATT&CK T1590.002/T1596.003]
-  smoked: "沙箱实测@8aba5d58ad5b：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为。2026-10-06 又补两步并实测：⑧区域传送——对实验室 bind9（docker/dns-lab，zone lab-zone.test 故意 allow-transfer any）拿到完整传送（11 条记录，含只应内网的 internal-only A 10.42.0.9），对同服务器的 hardened.test 与 AD DC 的内嵌 DNS 都得 `Transfer failed.`（正常配置的否定结论）；⑨whois——whois example.com 取到注册局/创建/到期/NS，结构化 whois_query kind=domain|ip 返回 whois_registrar / whois_inetnum / whois_netname。另实测：结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）只支持 system/public 解析器，对内网 zone 返回 records=0、labels=4989 found=0（跑了约 7 分钟）——已写入判读与去噪"
+  smoked: "沙箱实测@8aba5d58ad5b：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为。2026-10-06 又补两步并实测：⑧区域传送——对实验室 bind9（docker/dns-lab，zone lab-zone.test 故意 allow-transfer any）拿到完整传送（11 条记录，含只应内网的 internal-only A 10.42.0.9），对同服务器的 hardened.test 与 AD DC 的内嵌 DNS 都得 `Transfer failed.`（正常配置的否定结论）；⑨whois——whois example.com 取到注册局/创建/到期/NS，结构化 whois_query kind=domain|ip 返回 whois_registrar / whois_inetnum / whois_netname。另实测：结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）只支持 system/public 解析器，对内网 zone 返回 records=0、labels=4989 found=0（跑了约 7 分钟）——已写入判读与去噪。2026-10-06 再补第 10 步（子域枚举）并实测：subfinder -d example.com 得 m.example.com / dev.example.com / products.example.com；dnsx 解析出该域两条 A 记录"
 ---
 
 # DNS 与证书面清点（recon-dns-cert）
@@ -151,6 +151,18 @@ whois <IP>         # 网段（inetnum/netname）与所属机构
 （实测返回 `whois_registrar` / `whois_name_server` / `whois_inetnum` / `whois_netname` 这类字段）。
 外部查询会**间歇**失败（§6.5.9）：失败时把形态原样记下并走离线分支（记忆/人类提供），
 **不要重试到超预算**。
+
+### 10. 子域枚举（外部资产面，结构化通道也行）
+```bash
+subfinder -d <域名> -silent            # 被动源聚合（不直接打目标）
+echo <域名> | dnsx -silent -a -resp    # 批量解析确认（把"名字"变成"地址"）
+```
+**期望**：subfinder 逐行打印子域；dnsx 逐行打印 `名字 [A] [地址]`。
+**判据**：**枚举到的名字不是资产**——只有 dnsx 解析出地址、且在范围内，才算资产；
+解析不出的名字记为「线索（未解析）」。子域常常直接暴露内网命名习惯（`dev-`、`staging-`、`internal-`）。
+> 结构化通道 `pentest_recon` 的 `dns_enum` 走 system/public 解析器，适合**公网域名**（免审批）；
+> 内网 zone 只能手写 `dig @<地址>`（见「判读与去噪」）。
+> 出网间歇（§6.5.9）：被动源拿不到时把失败形态记下，不要反复重试。
 
 ## 判读与去噪
 - **结构化 DNS 通道够不到内网 zone**：`pentest_recon` 的 `dns_enum`/`dns_brute`/`dns_axfr` 只支持

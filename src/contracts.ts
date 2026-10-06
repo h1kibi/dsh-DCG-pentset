@@ -313,7 +313,9 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
     group: '侦察与资产测绘',
     usage:
       '先端口与服务、再指纹与 DNS/子域：结构化通道（pentest_recon）能覆盖的就别手写命令。' +
-      'masscan 只在人类明确要求高速扫描时用（很响）；arp-scan/nbtscan 仅对同网段有意义。',
+      'masscan 只在人类明确要求高速扫描时用（很响）；arp-scan/nbtscan 仅对同网段有意义（跨三层没有结果）。' +
+      '`fping`/`traceroute`/`mtr` 是"打不通"时的归因工具：fping 批量判存活、traceroute 看隔离在哪一跳、' +
+      'mtr 统计丢包（间歇问题比 traceroute 有用）。`dnsenum` 是老牌 DNS 枚举（同一件事优先用结构化 `dns_enum`）。',
     tools: [
       { name: 'nmap', from: 'nmap' },
       { name: 'masscan', from: 'masscan' },
@@ -384,7 +386,9 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
       'python3-impacket，随 smbmap 进来，在 /usr/bin）与 73 个上游原名 `*.py`（如 GetNPUsers.py / secretsdump.py，' +
       '来自 pip 的 impacket，在 /usr/local/bin）。两套都能用，找不到 `impacket-x` 时试 `x.py`。\n' +
       '**不在这里的**（它们是投放到 Windows 目标上运行的工件，不是 Linux 沙箱里的 CLI）：Rubeus / Seatbelt / ' +
-      'PowerUp / WinPEAS —— 需要在目标侧执行时，由人类决定投递方式并逐条放行。',
+      'PowerUp / WinPEAS —— 需要在目标侧执行时，由人类决定投递方式并逐条放行。' +
+      '`nmblookup` / `nbtscan` 用于 NetBIOS 名字（老资产、非 AD 的 Windows 机器也吃这套）；' +
+      '`snmpwalk` 只在目标开 161 且人类给了 community 时用（v2c 是明文，且它属主动探测，别乱扫）。',
     tools: [
       { name: 'smbclient', from: 'smbclient' },
       { name: 'smbmap', from: 'smbmap' },
@@ -428,8 +432,11 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
     group: '隧道与转发',
     usage:
       '建立可达性通道属于 `lateral_movement` 类别——**永远逐条人工放行**，且目标网段必须已在范围快照里。' +
-      'chisel 走 HTTP(S) 单端口最简单；ligolo-proxy 是沙箱侧的服务端（多层跳板更强），**ligolo-agent 是投放到' +
-      '目标上运行的二进制**——投递文件本身也要人类放行。用完必须关闭并在后渗透阶段核查清理。',
+      'chisel 走 HTTP(S) 单端口最简单（**服务端必须带 `--socks5`**，否则客户端的 SOCKS 请求全被 reset）；' +
+      'ligolo-proxy 需要 TUN 与 NET_ADMIN，**本沙箱两者都没有**（实测无 `/dev/net/tun`）⇒ 用 chisel/socat；' +
+      '**ligolo-agent 是投放到目标上运行的二进制**——投递文件本身也要人类放行。' +
+      '`scp`/`sshpass` 用于**从目标取回文件**（带口令的非交互拷贝）：这属采集/外传类，逐条批且要写明取什么、为什么；' +
+      '用完必须关闭隧道并在后渗透阶段核查清理（见 post-lateral-pivot / post-cleanup-verify）。',
     tools: [
       { name: 'chisel', from: 'github.com/jpillora/chisel' },
       { name: 'ligolo-proxy', from: 'github.com/nicocha30/ligolo-ng/cmd/proxy' },
@@ -445,8 +452,11 @@ export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
   {
     group: '脚本与数据处理',
     usage:
-      '长输出**先落 /tmp 再用 jq/grep 处理**：容器输出有上限（超限截断，宿主侧还有一层缓冲上限）。' +
-      'python3 预装了 requests / dnspython / beautifulsoup4 / lxml / paramiko / pyjwt / pycryptodome / scapy / pwntools / impacket。',
+      '长输出**先落 /tmp 再用 jq/grep 处理**——但注意**容器是一次性的**：`/tmp` 产物只在那一条命令内存在，' +
+      '「写」与「读」必须写在同一条命令里（`cmd > /tmp/x && jq … /tmp/x`）。容器输出有上限（超限截断，宿主侧还有一层缓冲上限）。' +
+      'python3 预装了 requests / dnspython / beautifulsoup4 / lxml / paramiko / pyjwt / pycryptodome / scapy / pwntools / impacket。' +
+      '`wget` 是 curl 的备选（递归抓取用 `-r`，注意那是在打目标）；`rsync` 用于**与人类确认过的**本地/记忆导出间同步；' +
+      '`xxd` 看二进制证据的十六进制（配合 `file` 判类型，证据里写哈希而不是贴字节）。',
     tools: [
       { name: 'python3', from: 'python:3.11-slim-bookworm' },
       { name: 'curl', from: 'curl' },
