@@ -50,6 +50,23 @@ export function projectCjkBigrams(text: string): string {
 }
 
 /**
+ * 把检索文本变成 `to_tsquery` 的 **OR** 形式：`'资产' | '产侦' | '侦查'`。
+ *
+ * **为什么必须是 OR**（2026-10-07 实测）：`plainto_tsquery` 把多个词元 AND 起来，于是中文
+ * 投影出多个二字组后要求**全部命中** —— 「资产侦查」→ `资产 产侦 侦查` → 0 命中。检索的常规
+ * 做法是 OR 召回 + 排序（`ts_rank_cd` 已经在排）：召回不足比排序不够致命。
+ *
+ * 词元一律单引号包裹：`to_tsquery` 语法里 `&`、`|`、`:`、`!`、`(` 都是运算符，不包裹会语法错。
+ * 返回空串表示没有可检索词元（调用方应改用 `plainto_tsquery('', …)` 得到空查询而不是报错）。
+ */
+export function toOrTsQuery(text: string, project: (value: string) => string = projectCjkQuery): string {
+  const tokens = project(text)
+    .split(/\s+/)
+    .filter((token) => token !== '');
+  return tokens.map((token) => `'${token.replaceAll("'", "''")}'`).join(' | ');
+}
+
+/**
  * 查询侧投影：与索引侧同一个函数，但**只保留二字组**（原文不参与词法匹配）。
  *
  * 为什么不带原文：查询侧带上整串原文会让 `plainto_tsquery` 生成一个巨大词元，

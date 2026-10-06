@@ -36,6 +36,7 @@ import type {
   WorkerReportInput,
 } from '../contracts.ts';
 import { DEFAULTS, LIVE_SESSION_STATUSES, isPhase, ACTION_CLASSES } from '../contracts.ts';
+import { toOrTsQuery } from './text-projection.ts';
 // 会话准入 + 范围集合 + RLS 查询/事务的唯一入口（C3；与 pg-memory-query 共用机制）。
 import {
   admitWorkerSession,
@@ -717,7 +718,10 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     };
     const qParam = bind(query.query);
     // 词法路用投影后的查询（中文切二字组）；三元组路仍用 `qtext` 原文做模糊匹配。
-    const qLexParam = bind(this.#projectQuery(query.query));
+    // OR 而非 AND 的理由与转义规则见 `toOrTsQuery`。
+    const lexTsQuery = toOrTsQuery(query.query, this.#projectQuery);
+    const qLexParam = bind(lexTsQuery);
+    const lexIsOr = lexTsQuery !== '';
     const thresholdParam = bind(TRIGRAM_WORD_SIMILARITY_THRESHOLD);
     const routeLimitParam = bind(
       Math.min(Math.max(limit * ROUTE_CANDIDATE_FACTOR, ROUTE_CANDIDATE_MIN), ROUTE_CANDIDATE_MAX),
@@ -764,7 +768,9 @@ ${sql.joins.join('\n')}
     LEFT JOIN pentest.memory_items mit ON mit.id = mc.memory_item_id
    WHERE ${sql.where}
 ),
-params AS (SELECT ${qParam}::text AS qtext, plainto_tsquery('simple', ${qLexParam}::text) AS tsq),
+params AS (SELECT ${qParam}::text AS qtext, ${
+      lexIsOr ? `to_tsquery('simple', ${qLexParam}::text)` : `plainto_tsquery('simple', ${qParam}::text)`
+    } AS tsq),
 lexical AS (
   SELECT s.id, row_number() OVER (ORDER BY ts_rank_cd(s.search_vector, p.tsq) DESC, s.id) AS rank
     FROM scoped s, params p

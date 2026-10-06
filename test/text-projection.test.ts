@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { projectCjkBigrams, projectCjkQuery } from '../src/memory/text-projection.ts';
+import { projectCjkBigrams, projectCjkQuery, toOrTsQuery } from '../src/memory/text-projection.ts';
 
 /** 用与 PostgreSQL `simple` 配置相同的方式逼近词元集合：按空白切分。 */
 const lexemes = (projected: string): readonly string[] => projected.split(/\s+/).filter((t) => t !== '');
@@ -71,4 +71,19 @@ test('超长中文段有上限，不会把索引吹爆', () => {
   const projected = projectCjkBigrams(huge);
   assert.ok(projected.length < huge.length * 3, '投影长度必须有界');
   assert.ok(lexemes(projected).length <= 4097, '二字组数量按上限收口');
+});
+
+test('词法查询用 OR 连接（AND 会让多词元中文查询全不命中）', () => {
+  // 实测：`plainto_tsquery('simple','资产 产侦 侦查')` 要求三个词元**全部命中** ⇒ 0 命中。
+  assert.equal(toOrTsQuery('资产侦查'), `'资产' | '产侦' | '侦查'`);
+  // ASCII 多词同样按 OR 召回（排序交给 ts_rank_cd：召回不足比排序不够致命）
+  assert.equal(toOrTsQuery('nmap -sS'), `'nmap' | '-sS'`);
+  // 空查询 ⇒ 空串，调用方回落到 plainto_tsquery('') 得空查询，而不是让 to_tsquery 语法错
+  assert.equal(toOrTsQuery('   '), '');
+});
+
+test('词元一律单引号包裹并转义（to_tsquery 里 & | : ! ( ) 都是运算符）', () => {
+  assert.equal(toOrTsQuery(`a'b`), `'a''b'`);
+  // 自定义投影（`cjkProjection: false` 时注入恒等函数）：两侧必须用同一个，否则词元对不上
+  assert.equal(toOrTsQuery('网段', (value) => value), `'网段'`);
 });

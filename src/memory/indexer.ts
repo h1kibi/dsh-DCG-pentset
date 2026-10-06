@@ -756,6 +756,22 @@ export class MemoryIndexer {
    *     不是重置水位该干的事。
    */
   async resetWatermark(engagementId: string): Promise<void> {
+    // **同时清掉本作业没人引用的旧渲染块**（2026-10-07）。为什么必须一起做：分块 id 由内容哈希
+    // 派生，一旦影响正文的东西变了（投影、切块策略），重建会**插入新块而留下旧块**——实测投影
+    // 上线后 48 块变成 96 块，检索面同时返回新旧两份近似重复。
+    //
+    // **只删没人引用的**：`retrieval_hits.chunk_id` 有外键指向分块——检索命中日志把分块当审计
+    // 证据引用（与"账本只允许追加"同一套纪律），所以被引用过的块不能删（删了会破坏审计链，
+    // 实测被外键拦下）。正式做法是给分块加 superseded 标记、检索侧过滤；在那之前这里退一步：
+    // 删掉"当前渲染已变化、且从未被任何检索命中引用过"的那些。
+    await this.#txDb.query(
+      `delete from pentest.memory_chunks mc
+        using pentest.context_events e
+        where mc.source_event_id = e.event_id
+          and e.engagement_id = $1::uuid
+          and not exists (select 1 from pentest.retrieval_hits h where h.chunk_id = mc.id)`,
+      [engagementId],
+    );
     await this.#txDb.query(
       `update pentest.index_watermarks
           set last_chain_seq = 0,
