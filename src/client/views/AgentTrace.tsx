@@ -88,7 +88,7 @@ export function AgentTrace(props: AgentTraceProps): ReactNode {
   }, [rows]);
 
   return (
-    <Card title={`当前 Agent 轨迹（${phaseLabel(session.phase)}）`}>
+    <Card title={`当前 Agent 轨迹 · ${phaseLabel(session.phase)}`}>
       <div className="pentest-session-chat__bar">
         <Badge text={sessionStatusLabel(session.status)} tone={sessionStatusTone(session.status)} hint={session.status} />
         <Badge text={`工具 ${String(counts.tool)}`} tone="neutral" />
@@ -99,8 +99,8 @@ export function AgentTrace(props: AgentTraceProps): ReactNode {
       </div>
 
       <p className="pentest-session-chat__intro">
-        {`会话 ${sessionId.slice(0, 20)}。这一栏读的是**该 Agent 自己会话**的事件流：工具调用、结果、思考与回复都原样铺开。`}
-        {live ? '（运行中，每 5 秒自动刷新）' : '（已结束，不再频繁刷新）'}
+        {`会话 ${sessionId.slice(0, 20)}。本栏读取该 Agent 自己会话的事件流：工具调用、结果、思考与回复原样铺开。`}
+        {live ? '运行中，每 5 秒自动刷新' : '已结束，不再频繁刷新'}
       </p>
 
       {session.statusNote === null ? null : (

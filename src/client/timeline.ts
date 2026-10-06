@@ -47,7 +47,7 @@ export function orphanInfo(session: WorkerSessionSummary): OrphanInfo | null {
   }
 
   if (session.status === 'superseded') {
-    return { reason: '已被后续会话取代（重做或切换阶段）', needsAttention: false };
+    return { reason: '已被后续会话取代：重做或切换阶段', needsAttention: false };
   }
   if (session.status === 'failed') {
     return { reason: '失败或已中断', needsAttention: false };

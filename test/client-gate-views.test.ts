@@ -265,7 +265,7 @@ test('会话卡片的放行区原样展示完整命令，且与队列共用同�
   assert.ok(markup.includes(COMMAND), '批准的是那条命令本身：必须完整展示，不做摘要');
   // 补充是选填：不填也能直接批——放行卡上只留「要不要批」这一个决定。
   assert.ok(!markup.includes('理由必填'), '缺补充不再禁用按钮');
-  assert.ok(markup.includes('批准这一次执行') && markup.includes('驳回'), '两个动作都要在');
+  assert.ok(markup.includes('批准本次执行') && markup.includes('驳回'), '两个动作都要在');
 });
 
 test('自由命令的放行卡显示**解码后的命令**，不是 base64（放开权限后卡片是唯一内容闸门）', () => {
@@ -281,16 +281,16 @@ test('自由命令的放行卡显示**解码后的命令**，不是 base64（放
 test('没有 display_command 的老记录回落显示 normalized_command（不算「记录缺失」）', () => {
   const markup = renderPending([approval({ displayCommand: null })]);
   assert.ok(markup.includes(COMMAND), '回落显示规范化命令');
-  assert.ok(!markup.includes('（记录缺失：完整命令）'), '有 normalized_command 就不算缺字段');
+  assert.ok(!markup.includes('记录缺失：完整命令'), '有 normalized_command 就不算缺字段');
 });
 
 test('会话卡片的放行区对不完整记录 fail-closed：可驳回、不可放行', () => {
   const markup = renderPending([approval({ normalizedCommand: null })]);
   assert.ok(
-    markup.includes('（记录缺失：完整命令）'),
+    markup.includes('记录缺失：完整命令'),
     '缺字段要显式说「记录缺失」，不能渲染成空块让人以为命令是空的',
   );
-  assertDisabled(markup, '批准这一次执行', '放行记录不完整');
+  assertDisabled(markup, '批准本次执行', '放行记录不完整');
 });
 
 test('范围确认后的状态卡：说清 Agent 在哪个会话、在做什么、去哪看', () => {
@@ -348,7 +348,7 @@ test('运行卡：等待判断时主按钮是「进入下一阶段」，运行�
     }),
   );
   assert.ok(
-    handedBack.includes('进入下一阶段（威胁建模）'),
+    handedBack.includes('进入下一阶段：威胁建模'),
     '推荐路径上的下一阶段必须写在按钮上，人类点之前就知道会进哪一阶段',
   );
   assert.equal(/打开控制台/.test(handedBack), false, '这张卡不再提供控制台入口');
@@ -362,7 +362,7 @@ test('运行卡：等待判断时主按钮是「进入下一阶段」，运行�
     }),
   );
   assert.ok(
-    stillRunning.includes('去看 Agent 的会话（dsh-agent-1）'),
+    stillRunning.includes('去看 Agent 的会话：dsh-agent-1'),
     '还在跑时给的是会话切换（这时没有下一阶段可进）',
   );
   assert.equal(/进入下一阶段/.test(stillRunning), false, '标签不得在无阶段可推进时撒谎');
@@ -426,7 +426,7 @@ test('等待人工判断时标题不得还说「正在运行」（按真实状�
       activeSession: null,
     }),
   );
-  assert.ok(html.includes('等你判断'), '它已经交完报告了，标题必须如实说');
+  assert.ok(html.includes('等待判断'), '它已经交完报告了，标题必须如实说');
 });
 
 test('读不到活动会话时状态卡不得编造「正在运行」，而是指出去处', () => {
@@ -497,7 +497,7 @@ test('过期放行不可放行：按钮禁用并说明（§15.2 过期凭证不�
   assertDisabled(html, '放行', '过期凭证不复活');
   assertDisabled(html, '撤销', '过期凭证不复活');
   assert.ok(html.includes('重新申请'), '要告诉人类正确动作是重新申请');
-  assert.ok(!html.includes('补充（选填）'), '终态条目不再渲染补充输入框');
+  assert.ok(!html.includes('补充说明'), '终态条目不再渲染补充输入框');
 });
 
 test('过期判定是纯函数：到期时间不可解析时按过期处理（fail-closed）', () => {
@@ -544,7 +544,7 @@ test('补充是选填：不填也能直接操作；填了不改变闸门结论�
   );
   assert.ok(!withoutSupplement.includes('理由必填'), '缺补充不再禁用任何按钮');
   // 补充框必须在：它是人类把话带给 Agent 的唯一入口（随决定投递）
-  assert.ok(withoutSupplement.includes('补充（选填）'), '必须仍渲染补充输入框');
+  assert.ok(withoutSupplement.includes('补充说明'), '必须仍渲染补充输入框');
 
   const blank = approvalGateOf(item, '', NOW);
   assert.equal(blank.canApprove, true, '空补充也能批准');
@@ -814,7 +814,7 @@ test('目标文本渲染保留端口与协议语义，留空端口一律标注�
   assert.ok(cidr.includes('默认端口 80/443'), `网段留空端口应标注默认端口，实际：${cidr}`);
   assert.equal(cidr.includes('必须显式声明端口'), false, '那条限制已删除');
   const any = formatScopeTarget({ kind: 'ip', value: '10.0.0.1', protocols: ['tcp'], ports: [{ from: 0, to: 65535 }] });
-  assert.ok(any.includes('任意端口（显式）'), '显式任意端口与留空不是同一件事');
+  assert.ok(any.includes('显式任意端口'), '显式任意端口与留空不是同一件事');
 });
 
 test('审批队列使用服务端完整读取端点', () => {

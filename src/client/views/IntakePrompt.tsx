@@ -278,10 +278,10 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
   const [reasons, setReasons] = useState<Readonly<Record<string, string>>>({});
   if (props.items.length === 0) return null;
   return (
-    <Card title={`${String(props.items.length)} 项动作放行等待你判断`}>
+    <Card title={`动作放行待判断：${String(props.items.length)} 项`}>
       <p className="pentest-proposal__note">
-        批准的是**即将执行的那条命令**本身：逐条看清下面的完整命令再决定。
-        放行只对这一次执行有效——执行完即被消费，同一条命令不会被执行第二次。
+        放行的对象是即将执行的那条完整命令。一次放行只对一次执行有效，执行完即被消费，
+        同一条命令不会被执行第二次。
       </p>
       {props.items.map((item) => {
         const reason = reasons[item.id] ?? '';
@@ -291,17 +291,17 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
           <div key={item.id} className="pentest-approval__row">
             <div className="pentest-approval__head">
               <Badge text={actionClassLabel(item.actionClass)} tone="danger" hint={item.actionClass} />
-              <code className="pentest-approval__target">{item.normalizedTarget ?? '（记录缺失：规范化目标）'}</code>
+              <code className="pentest-approval__target">{item.normalizedTarget ?? '记录缺失：规范化目标'}</code>
             </div>
             {/* §10.3.1：原样展示，不截断成摘要。 */}
             {/* 与队列同一规则：优先显示服务端解码后的 `display_command`——放开权限后这张卡是
                 唯一的内容闸门，把 `command_b64=<base64>` 摆给人类看等于让他盲批。 */}
             <pre className="pentest-approval__command">
-              {item.displayCommand ?? item.normalizedCommand ?? '（记录缺失：完整命令）'}
+              {item.displayCommand ?? item.normalizedCommand ?? '记录缺失：完整命令'}
             </pre>
             <span className="pentest-approval__limits">
               {item.timeoutMs === null || item.maxOutputBytes === null
-                ? '（记录缺失：超时 / 输出上限）'
+                ? '记录缺失：超时 / 输出上限'
                 : `超时 ${formatDuration(item.timeoutMs / 1000)} · 输出上限 ${formatBytes(item.maxOutputBytes)}`}
             </span>
             {item.riskSummary === null ? null : (
@@ -310,11 +310,11 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
             {item.purpose === null ? null : <p className="pentest-proposal__note">申请理由：{item.purpose}</p>}
             <p className="pentest-proposal__note">
               {item.expiresAt === null
-                ? '到期时间：未声明（按已过期处理，不得放行）'
+                ? '到期时间：未声明，按已过期处理'
                 : `到期时间：${formatTimestamp(item.expiresAt, props.now)}`}
             </p>
             {gate.interactive ? (
-              <Field label="补充（选填）" hint="填了会随决定进审计，并投递给 Agent 作为上下文补充">
+              <Field label="补充说明" hint="随决定进审计，并投递给 Agent 作为上下文补充">
                 <TextInput
                   value={reason}
                   placeholder="例如：核对了命令与目标，确认属于本次授权范围内的被动读取"
@@ -333,7 +333,7 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
             ) : null}
             <div className="pentest-proposal__actions">
               <Button
-                label="批准这一次执行"
+                label="批准本次执行"
                 kind="primary"
                 disabled={busy || !gate.canApprove}
                 {...(gate.approveDisabledReason === null ? {} : { reason: gate.approveDisabledReason })}
@@ -355,10 +355,10 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
       })}
       {props.hiddenCount === undefined || props.hiddenCount <= 0 ? null : (
         <p className="pentest-proposal__note">
-          {`另有 ${String(props.hiddenCount)} 条未在此列出——完整队列（含历史与撤销）在放行队列页。`}
+          {`另有 ${String(props.hiddenCount)} 条未在此列出，完整队列与撤销在放行队列页。`}
         </p>
       )}
-      <Button label="去放行队列（历史与撤销）" onClick={props.onOpenConsole} />
+      <Button label="去放行队列" onClick={props.onOpenConsole} />
     </Card>
   );
 }
@@ -403,7 +403,7 @@ export function PhaseStrip(props: {
   const phase = props.currentPhase;
   const ordinal = phase === null ? null : PHASE_DEFINITIONS[phase].ordinal;
   const title = phase === null || ordinal === null
-    ? '当前阶段：读不到（服务端未给出阶段）'
+    ? '当前阶段：读不到'
     : `当前阶段 ${String(ordinal)}/${String(PHASE_ORDER.length)} · ${PHASE_DEFINITIONS[phase].displayName}`;
   return (
     <Card title={title}>
@@ -427,7 +427,7 @@ export function PhaseStrip(props: {
             <li
               key={id}
               className={`pentest-phase-strip__step pentest-phase-strip__step--${tone}`}
-              title={`${String(definition.ordinal)}. ${definition.displayName}（${definition.agentName}）`}
+              title={`${String(definition.ordinal)}. ${definition.displayName} · ${definition.agentName}`}
               aria-current={tone === 'current' ? 'step' : undefined}
             >
               {definition.shortName}
@@ -475,7 +475,7 @@ export function AdvanceAction(props: {
   return (
     <>
       <Button
-        label={nextPhase === null ? '进入下一阶段' : `进入下一阶段（${phaseLabel(nextPhase)}）`}
+        label={nextPhase === null ? '进入下一阶段' : `进入下一阶段：${phaseLabel(nextPhase)}`}
         kind="primary"
         disabled={props.advanceBusy === true}
         onClick={props.onAdvancePhase}
@@ -515,7 +515,7 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
   // 标题按**真实状态**分档：写死「正在运行」会在 Agent 已经交完报告等你判断时撒谎。
   const headline =
     props.mainStatus === 'waiting_human_review'
-      ? '范围已确认：第一阶段 Agent 已交报告，等你判断'
+      ? '范围已确认：第一阶段 Agent 已交报告，等待判断'
       : props.mainStatus === 'worker_running'
         ? '范围已确认：第一阶段 Agent 正在运行'
         : '范围已确认';
@@ -532,8 +532,8 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
       </div>
       <p className="pentest-proposal__note">
         {active === null
-          ? '作业已推进到运行阶段。Agent 的对话在另一个会话里进行——进度、状态便签，以及启动/重试都在控制台的「运行控制 · 时间轴」里。'
-          : `本阶段的 Agent 在另一个会话里工作（${active.dshSessionId}），这个 intake 会话不再承载对话。`}
+          ? '作业已推进到运行阶段。Agent 的对话在另一个会话里，进度、状态便签、启动与重试都在控制台的「运行控制 · 时间轴」。'
+          : `本阶段的 Agent 在另一个会话里工作：${active.dshSessionId}。本会话不再承载对话。`}
       </p>
       {active === null || active.statusNote === null ? null : (
         <p className="pentest-proposal__note">最新状态便签：{active.statusNote}</p>
@@ -547,7 +547,7 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
       {props.mainStatus === 'waiting_human_review' && props.onAdvancePhase !== undefined ? null : (
         active === null || props.onFollowSession === undefined ? null : (
           <Button
-            label={`去看 Agent 的会话（${active.dshSessionId}）`}
+            label={`去看 Agent 的会话：${active.dshSessionId}`}
             kind="primary"
             onClick={() => { props.onFollowSession?.(active.dshSessionId); }}
           />
@@ -734,13 +734,13 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
     const activeSession = running?.active ?? null;
     const fromPhase = running?.currentPhase ?? null;
     if (activeSession === null || fromPhase === null) {
-      setAdvanceError('读不到当前会话或阶段：稍后重试（或让 Agent 先提交报告）');
+      setAdvanceError('读不到当前会话或阶段，稍后重试');
       return;
     }
     const suggestedToPhase = nextAdvancePhase(fromPhase);
     if (suggestedToPhase === null) {
       setAdvanceError(
-        `阶段「${phaseLabel(fromPhase)}」没有推荐的下一阶段：请用控制台的「交接编辑」显式选择目标阶段`,
+        `阶段「${phaseLabel(fromPhase)}」没有推荐的下一阶段：目标阶段由控制台的「交接编辑」显式选择`,
       );
       return;
     }
@@ -897,8 +897,8 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
       );
     }
     return (
-      <Card title={`有 ${String(facts.approvalCount)} 项动作放行等待你处理`}>
-        <p>放行条目暂时读不到（连接或权限问题）。放行队列里有等待你判断的动作。</p>
+      <Card title={`动作放行待处理：${String(facts.approvalCount)} 项`}>
+        <p>放行条目暂时读不到，可能是连接或权限问题。放行队列里有等待判断的动作。</p>
         <Button label="去放行队列" kind="primary" onClick={props.onOpenConsole} />
       </Card>
     );
@@ -915,11 +915,11 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
     let call: Promise<ConsoleCallResult>;
     if (kind === 'confirm') {
       if (behaviorProfile === '') {
-        setError({ code: 'behavior_profile_required', message: '请先选择行为预设（必选项，没有默认值）' });
+        setError({ code: 'behavior_profile_required', message: '未选择行为预设，该选项无默认值' });
         return;
       }
       if (approvalMode === '') {
-        setError({ code: 'approval_mode_required', message: '请先选择审批模式（必选项，没有默认值）' });
+        setError({ code: 'approval_mode_required', message: '未选择审批模式，该选项无默认值' });
         return;
       }
       const guidance = customGuidance.trim();
@@ -938,7 +938,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
         behaviorProfile,
         ...(guidance === '' ? {} : { customGuidance: guidance }),
         approvalMode,
-        reason: '在会话内确认范围方案（§13.1 人类闸门）',
+        reason: '在会话内确认范围方案',
       });
     } else {
       setBusy(kind);
@@ -968,7 +968,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
 
   return (
     <>
-      <Card title="Agent 提交了范围方案，等待你确认">
+      <Card title="Agent 提交了范围方案，等待确认">
       <div className="pentest-proposal__meta">
         <Badge text={facts.engagementName ?? '未命名作业'} tone="neutral" />
         <span className="pentest-proposal__summary">
@@ -986,7 +986,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
       <p className="pentest-intake__actions">
         <span className="pentest-intake__actions-label">允许动作</span>
         {facts.allowedActions.length === 0
-          ? '（空——确认后将没有可执行的动作类别）'
+          ? '未选动作类别：确认后无可执行的动作'
           : facts.allowedActions.map((label) => (
               <span key={label} className="pentest-intake__action">{label}</span>
             ))}
@@ -1000,8 +1000,8 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
 
       {/* 行为预设：**必选项**（这条路径建作业时用的是隐式默认，必须由人在这里定）。 */}
       <Field
-        label="行为预设（必选）"
-        hint="没有默认值。它决定注入 Agent 的行为指引（四档场景差异都在这里）与宿主侧速率/并发；确认后随策略快照冻结、进哈希。"
+        label="行为预设"
+        hint="没有默认值。它决定注入 Agent 的行为指引与宿主侧速率、并发；确认后随策略快照冻结并进哈希。"
       >
         <select
           className="pentest-select"
@@ -1014,7 +1014,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             }
           }}
         >
-          <option value="" disabled>请选择本作业的场景（必选）</option>
+          <option value="" disabled>选择本作业的场景</option>
           {BEHAVIOR_PROFILES.map((profile) => (
             <option key={profile} value={profile}>{BEHAVIOR_PROFILE_LABELS[profile]}</option>
           ))}
@@ -1024,8 +1024,8 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
         <p className="pentest-intake__note">{BEHAVIOR_PROFILE_HINTS[behaviorProfile]}</p>
       )}
       <Field
-        label="审批模式（必选）"
-        hint="没有默认值。人工审批：逐条人批；高权限：预设内且非默认禁用类别的动作由服务端自行放行，只有越界申请才找你。"
+        label="审批模式"
+        hint="没有默认值。人工审批：逐条人批；高权限：预设内且非默认禁用类别的动作由服务端自行放行，越界申请才需要人工判断。"
       >
         <select
           className="pentest-select"
@@ -1038,7 +1038,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             }
           }}
         >
-          <option value="" disabled>请选择审批模式（必选）</option>
+          <option value="" disabled>选择审批模式</option>
           {APPROVAL_MODES.map((mode) => (
             <option key={mode} value={mode}>{APPROVAL_MODE_LABELS[mode]}</option>
           ))}
@@ -1056,7 +1056,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             value={customGuidance}
             onChange={setCustomGuidance}
             rows={5}
-            placeholder={'例如：\n- 只发不改变远端状态的只读请求；任何 POST 前先请我放行。\n- 每个发现都要带证据行与下一步。'}
+            placeholder={'例如：\n- 只发不改变远端状态的只读请求；任何 POST 前先请求放行。\n- 每个发现都要带证据行与下一步。'}
           />
           <p className="pentest-intake__note">{`${String(customGuidance.trim().length)} / ${String(CUSTOM_GUIDANCE_MAX_CHARS)} 字`}</p>
         </>
@@ -1070,20 +1070,20 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
           disabled={busy !== null}
           onChange={() => { setAcknowledged((value) => !value); }}
         />
-        <span>我已核对目标、排除项与允许动作；确认后会产生指向上述地址的主动动作。</span>
+        <span>已核对目标、排除项与允许动作；确认后会产生指向上述地址的主动动作。</span>
       </label>
 
       {error === null ? null : <ErrorBar code={error.code} message={error.message} />}
 
       <div className="pentest-intake__buttons">
-        <Button label="查看服务端将冻结的事实" onClick={props.onOpenConsole} />
+        <Button label="查看冻结事实" onClick={props.onOpenConsole} />
         <Button
           label={busy === 'reject' ? '驳回中…' : '驳回'}
           disabled={busy !== null}
           onClick={() => { act('reject'); }}
         />
         <Button
-          label={busy === 'confirm' ? '确认中…' : '确认范围并启动第一阶段 Agent'}
+          label={busy === 'confirm' ? '确认中…' : '确认范围'}
           kind="primary"
           disabled={confirmDisabled}
           onClick={() => { act('confirm'); }}
@@ -1091,16 +1091,16 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
         </div>
         {/* 主按钮为什么点不动：把原因写在按钮**下面**，而不是留一个灰按钮让人猜。 */}
         {acknowledged || busy !== null ? null : (
-          <p className="pentest-intake__gatehint">勾选上方「我已核对」后即可确认并启动第一阶段 Agent。</p>
+          <p className="pentest-intake__gatehint">勾选上方「已核对」后即可确认并启动第一阶段 Agent。</p>
         )}
         {behaviorProfile === '' ? (
-          <p className="pentest-intake__gatehint">先选择**行为预设**（必选项）：它决定注入 Agent 的行为指引与宿主节奏。</p>
+          <p className="pentest-intake__gatehint">未选行为预设：它决定注入 Agent 的行为指引与宿主节奏。</p>
         ) : null}
         {guidanceMissing ? (
-          <p className="pentest-intake__gatehint">custom 预设需要写一段自定义指引（它就是注入会话的行为指引本体）。</p>
+          <p className="pentest-intake__gatehint">custom 预设需要自定义指引，它就是注入会话的行为指引本体。</p>
         ) : null}
         {modeMissing ? (
-          <p className="pentest-intake__gatehint">先选择**审批模式**（必选项）：人工审批逐条人批，高权限让服务端自行放行预设内的动作。</p>
+          <p className="pentest-intake__gatehint">未选审批模式：人工审批逐条人批，高权限让服务端自行放行预设内的动作。</p>
         ) : null}
       </Card>
       {/* 方案与放行可以同时在等（Agent 一边等确认范围、一边申请了动作放行）：两张都要在场。 */}

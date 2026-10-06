@@ -956,7 +956,7 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
   }
 
   removeSkill(input: Omit<SkillRemoveRequest, 'operatorId' | 'reason'>): Promise<ConsoleCallResult> {
-    return this.mutate('removeSkill', { ...input }, '在控制台停用 skill（软删，可恢复）');
+    return this.mutate('removeSkill', { ...input }, '在控制台停用 skill，软删可恢复');
   }
 
   /**
@@ -1048,7 +1048,7 @@ export function draftRejectionMessage(code: string, message: string): string {
   // 这个结论——替换后服务端原文就看不见了（只留错误码）。因此要求两句稳定记号同时命中。
   if (code === 'classification_rejected' && message.includes('intake') && message.includes('离开')) {
     return (
-      '本会话的作业已经离开 intake 阶段（范围已确认或已结束），不会重复建单。' +
+      '本会话的作业已经离开 intake 阶段：范围已确认或已结束，不会重复建单。' +
       '从上方列表选中它继续；要另开一份作业，用「新建 engagement」授权向导。'
     );
   }

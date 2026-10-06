@@ -32,7 +32,7 @@ interface DiagnosticsCardProps {
 export function DiagnosticsCard(props: DiagnosticsCardProps): ReactNode {
   const snapshot = props.diagnostics;
   return (
-    <Card title="运行诊断（§15.5）">
+    <Card title="运行诊断">
       <div className="pentest-diagnostics__actions">
         <Button
           label="刷新诊断"
@@ -54,7 +54,7 @@ export function DiagnosticsCard(props: DiagnosticsCardProps): ReactNode {
       {snapshot === null ? (
         <Empty
           title="尚未读取诊断"
-          reason="点「刷新诊断」读取连接池、审计探针、索引队列与水位。这里显示不出来不代表系统是健康的（P16）。"
+          reason="点「刷新诊断」读取连接池、审计探针、索引队列与水位。这里显示不出来不代表系统是健康的。"
         />
       ) : (
         <>
@@ -72,19 +72,19 @@ export function DiagnosticsCard(props: DiagnosticsCardProps): ReactNode {
               hint={snapshot.audit === null
                 ? '本实例未提供审计探针：这不是「通过」，是「无从判断」'
                 : snapshot.audit.detail === ''
-                  ? '走真实审计写路径探测通过（§15.1 的闸门依据）'
+                  ? '走真实审计写路径探测通过，作为闸门依据'
                   : snapshot.audit.detail}
             />
           </div>
 
           {snapshot.engagement === null ? (
             <p className="pentest-diagnostics__note">
-              未选中作业：索引队列与水位不可见（它们按 engagement 取值）。选中一个作业后刷新即可。
+              未选中作业：索引队列与水位不可见，它们按 engagement 取值。选中作业后刷新即可。
             </p>
           ) : (
             <div className="pentest-diagnostics__grid">
               <Stat
-                label="索引队列（§15.5）"
+                label="索引队列"
                 value={
                   `待办 ${formatCount(snapshot.engagement.indexQueue.pending)} / ` +
                   `租约 ${formatCount(snapshot.engagement.indexQueue.leased)} / ` +
@@ -105,7 +105,7 @@ export function DiagnosticsCard(props: DiagnosticsCardProps): ReactNode {
                 }
               />
               <Stat
-                label="索引水位（§8.4）"
+                label="索引水位"
                 value={`链序 ${formatCount(snapshot.engagement.watermark.lastChainSeq)}`}
                 tone={snapshot.engagement.watermark.lagEvents === 0 ? 'done' : 'attention'}
                 hint={

@@ -96,28 +96,28 @@ export function startBlockers(input: {
   if (input.mainStatus !== 'ready') {
     gates.push(
       input.mainStatus === 'auth_pending'
-        ? '授权尚未就位：先完成授权与范围向导（§5.2 的起点是 ready）'
-        : `当前主状态是「${input.mainStatus ?? '未知'}」，不能启动新会话（§5.2）`,
+        ? '授权尚未就位：先完成授权与范围向导'
+        : `当前主状态为「${input.mainStatus ?? '未知'}」，不能启动新会话`,
     );
   }
   if (input.taskPrompt.trim().length === 0) {
-    gates.push('必须填写任务提示词：Agent 靠它知道本轮要做什么（§6.4）');
+    gates.push('任务提示词必填：Agent 靠它知道本轮要做什么');
   }
   // 预算是「全给或全不给」：只填一部分无法构成一次会话的完整上限。
   const filled = input.budgetFields
     .map((text, index) => ({ text: text.trim(), index }))
     .filter((entry) => entry.text !== '');
   if (filled.length > 0 && filled.length < input.budgetFields.length) {
-    gates.push(`预算上限要么三项都填、要么都不填（当前填了 ${String(filled.length)} 项）`);
+    gates.push(`预算上限要么三项都填、要么都不填；当前填了 ${String(filled.length)} 项`);
   }
   // 填了的必须**真的能解析**（2026-10-05 复核 REQ-13a）：此前只数非空个数，
   // 写 `abc`/`1e5` 也算「填了」——提交时被静默丢弃，悄悄回落到阶段默认值。
   const invalid = filled.filter((entry) => parseLimit(entry.text) === undefined);
   if (invalid.length > 0) {
     gates.push(
-      `预算上限必须是正整数（${invalid
-        .map((entry) => `${BUDGET_FIELD_LABELS[entry.index] ?? '?'}：“${entry.text}”`)
-        .join('、')}）：不接受小数、科学计数法或千分位分隔符`,
+      `预算上限需为正整数：${invalid
+        .map((entry) => `${BUDGET_FIELD_LABELS[entry.index] ?? '?'}「${entry.text}」`)
+        .join('、')}。不接受小数、科学计数法或千分位分隔符`,
     );
   }
   return gates;
@@ -164,31 +164,31 @@ export function runActionAvailability(
     pauseReason: decided.canPause
       ? null
       : state.mainStatus === 'complete'
-        ? `作业已签字导出（complete），运行期动作不再有意义`
-        : `只有运行中才能暂停（当前运行标记：${runMarkerLabel(marker)}）`,
+        ? '作业已签字导出，运行期动作不再有意义'
+        : `仅运行中可暂停；当前运行标记：${runMarkerLabel(marker)}`,
     resumeReason: decided.canResume
       ? null
       : state.mainStatus === 'complete'
-        ? '作业已签字导出（complete），运行期动作不再有意义'
-        : `只有已暂停（paused）或已阻塞（blocked）可以恢复（当前运行标记：${runMarkerLabel(marker)}）`,
+        ? '作业已签字导出，运行期动作不再有意义'
+        : `仅已暂停或已阻塞可恢复；当前运行标记：${runMarkerLabel(marker)}`,
     // 终止对「已终止」「已失败」无意义——它们已经是终态，再终止只会产生噪音记录。
     // complete 单独说：那时标记可能还是 `running`，按标记措辞会写成「已经是终态（运行中）」，
     // 前半句与事实相反（封禁来自主状态，不是标记）。
     abortReason: decided.canAbort
       ? null
       : state.mainStatus === 'complete'
-        ? '作业已签字导出（complete），终止没有意义'
-        : `已经是终态（${runMarkerLabel(marker)}），终止没有意义`,
+        ? '作业已签字导出，终止没有意义'
+        : `已是终态：${runMarkerLabel(marker)}；终止没有意义`,
     interjectReason: decided.canInterject
       ? null
       : !active
         ? '当前没有活动 Worker 会话'
-        : `插话只在运行中送达（当前运行标记：${runMarkerLabel(marker)}）`,
+        : `插话仅在运行中送达；当前运行标记：${runMarkerLabel(marker)}`,
     finishTestingReason: decided.canFinishTesting
       ? null
       : state.mainStatus === 'complete'
-        ? '作业已签字导出（complete），不能再次结束技术测试'
-        : `只有「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可以结束技术测试（当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}）`,
+        ? '作业已签字导出，不能再次结束技术测试'
+        : `仅主状态为「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可结束技术测试；当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}`,
   };
 }
 
@@ -304,7 +304,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
       // 而不是把三项预算静默丢掉、悄悄改用阶段默认值（2026-10-05 复核 REQ-13a）。
       setFailure({
         code: 'client/argument-invalid',
-        message: '预算上限必须是正整数；解析失败时不提交，避免静默改用阶段默认值',
+        message: '预算上限需为正整数；解析失败时不提交',
       });
       return;
     }
@@ -330,7 +330,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
         <p className="pentest-runcontrols__mode-current">
           {`当前审批模式：${APPROVAL_MODE_LABELS[currentApprovalMode]}`}
         </p>
-        <Field label="切换审批模式" hint="收紧（切回人工审批）立刻生效；放宽（切到高权限）意味着之后的预设内动作不再经人过目。">
+        <Field label="切换审批模式" hint="收紧为人工审批立刻生效；放宽到高权限后，预设内动作不再经人过目。">
           <select
             className="pentest-select"
             value={modeTarget}
@@ -340,7 +340,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
               if ((APPROVAL_MODES as readonly string[]).includes(next)) setModeTarget(next as ApprovalMode);
             }}
           >
-            <option value="" disabled>切换到…（必选）</option>
+            <option value="" disabled>选择档位</option>
             {APPROVAL_MODES.map((mode) => (
               <option key={mode} value={mode}>{APPROVAL_MODE_LABELS[mode]}</option>
             ))}
@@ -379,7 +379,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
           <Badge
             text={`活动会话 ${state.activeWorkerSessionId.slice(0, 8)}`}
             tone="done"
-            hint="单活动会话（§2.1）：一个 engagement 同时只有一个 Worker"
+            hint="单活动会话：一个 engagement 同时只有一个 Worker"
           />
         )}
       </div>
@@ -392,7 +392,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
       {/* ── 启动 ── */}
       {state !== null && !canStartNow ? null : (
         <div className="pentest-runcontrols__start">
-          <Field label="阶段" hint="五个阶段严格 1:1 对应一个 Agent 会话（§2.1）；首个阶段通常从情报收集开始">
+          <Field label="阶段" hint="五个阶段严格 1:1 对应一个 Agent 会话；首个阶段通常从情报收集开始">
             {/*
               五个阶段是**互斥选项**，且它们的关系本身就是本设计的核心（§1.2、§2.1）。
               用横排按钮而不是下拉：下拉把五个阶段藏进一次点击里，而这五格是
@@ -416,7 +416,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
 
           <Field
             label="任务提示词"
-            hint="本轮要让 Agent 做什么。它会作为任务简报进入新会话——写得越具体，Agent 越不容易跑偏（§6.4）"
+            hint="本轮要让 Agent 做什么。它会作为任务简报进入新会话；写得越具体，Agent 越不容易跑偏"
           >
             <TextArea
               value={taskPrompt}
@@ -426,13 +426,13 @@ export function RunControls(props: RunControlsProps): ReactNode {
           </Field>
 
           <div className="pentest-runcontrols__budget">
-            <Field label="token 上限" hint="三项要么都填、要么都不填；不填即用阶段默认上限。达到硬阈值会自动暂停并等你决定（§10.5）">
+            <Field label="token 上限" hint="三项要么都填、要么都不填；不填即用阶段默认上限。达到硬阈值会自动暂停并等待人工决定">
               <TextInput value={budget.maxTokensText} onChange={(v) => { setBudget((b) => ({ ...b, maxTokensText: v })); }} placeholder="例如 200000" />
             </Field>
             <Field label="步数上限" hint="留空即不设限">
               <TextInput value={budget.maxStepsText} onChange={(v) => { setBudget((b) => ({ ...b, maxStepsText: v })); }} placeholder="例如 60" />
             </Field>
-            <Field label="挂钟上限（秒）" hint="留空即不设限">
+            <Field label="挂钟上限" hint="留空即不设限；单位：秒">
               <TextInput value={budget.maxSecondsText} onChange={(v) => { setBudget((b) => ({ ...b, maxSecondsText: v })); }} placeholder="例如 3600" />
             </Field>
           </div>
@@ -476,7 +476,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
 
         <Field
           label="插话内容"
-          hint="运行中按步骤边界送达；它改变 Agent 的判断，**不改变范围与权限**（§6.7）"
+          hint="运行中按步骤边界送达；改变 Agent 的判断，不改变范围与权限"
         >
           <TextArea value={interjection} onChange={setInterjection} placeholder="例如：跳过那个端口，它属于客户的生产系统" />
         </Field>
@@ -493,7 +493,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
           disabled={!availability.canInterject || interjection.trim() === '' || busy}
           reason={
             availability.interjectReason ??
-            (interjection.trim() === '' ? '必须填写插话内容' : busy ? '正在提交' : undefined)
+            (interjection.trim() === '' ? '插话内容必填' : busy ? '正在提交' : undefined)
           }
         />
 
@@ -503,7 +503,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
             checked={abortConfirmed}
             onChange={(event) => { setAbortConfirmed(event.target.checked); }}
           />
-          我确认要终止（不可撤销）
+          确认终止，不可撤销
         </label>
         <Button
           label="终止"
@@ -521,7 +521,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
           // 它不接阶段切换（那是「下一阶段」按钮的事），只把作业送进 report_ready 并生成草稿。
           onClick={() => {
             settle(props.controller.finishTechnicalTesting('人类结束技术测试'), () => {
-              setNotice('已结束技术测试：报告草稿已生成（可在报告面板复核与签字）。');
+              setNotice('已结束技术测试：报告草稿已生成，可在报告面板复核与签字。');
             });
           }}
           disabled={!availability.canFinishTesting || busy}
@@ -531,7 +531,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
 
       <p className="pentest-runcontrols__hint">
         {`状态版本 ${formatCount(state?.stateVersion ?? 0)} · 图迭代 ${formatCount(state?.graphIteration ?? 0)}。`}
-        {' 所有写操作都记入人类决策与审计（操作者 + 时间）；不要求你填理由。'}
+        {' 所有写操作都记入人类决策与审计：操作者与时间。'}
       </p>
     </Card>
   );

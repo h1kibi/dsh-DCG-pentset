@@ -45,10 +45,10 @@ const CARD_TITLE = '授权与范围向导';
 
 /** §1.2：向导不创建 Agent。这句话必须出现在确认之前。 */
 const NO_AGENT_NOTICE =
-  '这里只会建立授权与范围（范围版本 1），不会创建任何 Agent；首个 Worker 由你在建立之后显式启动。';
+  '这里只建立授权与范围，范围版本 1；不会创建任何 Agent。首个 Worker 需在建立后显式启动。';
 
 const SCOPE_ACK_LABEL =
-  '我已核对以上目标、排除项、授权的动作类别与服务端将展开的行为预设，并确认它们在授权范围内（§13.1）';
+  '以上目标、排除项、授权动作类别与服务端展开的行为预设均已核对，确认在授权范围内';
 
 const TARGET_KIND_LABELS: Readonly<Record<ScopeTarget['kind'], string>> = {
   domain: '域名',
@@ -275,7 +275,7 @@ function parsePorts(text: string): PortParse {
   for (const token of tokens) {
     const match = /^(\d{1,5})(?:-(\d{1,5}))?$/.exec(token);
     if (match === null) {
-      return { ok: false, detail: `端口写法无法解析：${token}（合法形态：80、443、8000-8100）` };
+      return { ok: false, detail: `端口写法无法解析：${token}；合法形态如 80、443、8000-8100` };
     }
     const from = Number(match[1]);
     const to = match[2] === undefined ? from : Number(match[2]);
@@ -358,7 +358,7 @@ function checkRow(row: TargetRow, preview: ScopePreviewEntry | undefined): RowCh
       row,
       ok: false,
       code: 'protocol_undetermined',
-      detail: '未声明协议集合，协议无法确定（§10.2.2）',
+      detail: '未声明协议集合，协议无法确定',
       ports: null,
       normalized: null,
     };
@@ -368,7 +368,7 @@ function checkRow(row: TargetRow, preview: ScopePreviewEntry | undefined): RowCh
       row,
       ok: false,
       code: null,
-      detail: '尚未校验：点「校验范围」由服务端裁定（范围规范化只有服务端一份实现）',
+      detail: '尚未校验：经「校验范围」由服务端裁定',
       ports: ports.ports,
       normalized: null,
     };
@@ -389,10 +389,10 @@ function checkRow(row: TargetRow, preview: ScopePreviewEntry | undefined): RowCh
 /** 留空端口的语义由条目类型决定（§10.2.2），必须写出来，不能让人类猜。 */
 function portsTextOf(check: RowCheck): string {
   if (check.ports === null) return '—';
-  if (check.row.protocols.length === 1 && check.row.protocols[0] === 'icmp') return '无端口维度（ICMP）';
+  if (check.row.protocols.length === 1 && check.row.protocols[0] === 'icmp') return '无端口维度：ICMP';
   if (check.ports.length > 0) {
     const any = check.ports.some((range) => range.from === 0 && range.to === 65535);
-    return `${formatPortsForInput(check.ports)}${any ? '（任意端口）' : ''}`;
+    return `${formatPortsForInput(check.ports)}${any ? '，任意端口' : ''}`;
   }
   // 留空对**所有类型**都是「默认 80/443」。此前网段与资产标签会被拒，现在一致了——
   // 想表达「任意端口」要显式勾选，那会记入范围版本与放行记录。
@@ -563,16 +563,16 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
     // （键盘回车、脚本点击、React 状态竞态都能绕过它）。
     const profile = form.behaviorProfile;
     if (profile === null) {
-      setError({ code: 'behavior_profile_required', message: '请先选择行为预设（必选项，没有默认值）' });
+      setError({ code: 'behavior_profile_required', message: '需先选择行为预设：必选项，没有默认值' });
       return;
     }
     if (profile === 'custom' && form.customGuidance.trim() === '') {
-      setError({ code: 'custom_guidance_required', message: '自定义预设必须写一段指引（它是注入会话的行为指引本体）' });
+      setError({ code: 'custom_guidance_required', message: '自定义预设必须写一段指引：它是注入会话的行为指引本体' });
       return;
     }
     const mode = form.approvalMode;
     if (mode === null) {
-      setError({ code: 'approval_mode_required', message: '请先选择审批模式（必选项，没有默认值）' });
+      setError({ code: 'approval_mode_required', message: '需先选择审批模式：必选项，没有默认值' });
       return;
     }
     setBusy(true);
@@ -585,7 +585,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           return;
         }
         const id = engagementIdOf(result.value);
-        setCreatedId(id ?? '（服务端未返回标识）');
+        setCreatedId(id ?? '标识缺失');
         setCreatedPolicy(policyProjectionOf(result.value));
         // 标识拿不到时不回调：把占位文本当标识传出去，调用方会跳到一个不存在的地方
         if (id !== null) props.onCreated?.(id);
@@ -608,12 +608,12 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
         <>
           <p className="pentest-wizard__done">
             <Badge text="已建立" tone="done" />
-            engagement {createdId} 已创建（状态 READY）。下一步由你显式启动首个 Agent。
+            已创建 engagement {createdId}，状态 READY。下一步需显式启动首个 Agent。
           </p>
           {/* 策略投影：人类刚建完最需要核对的不是「建成功了」，而是「服务端最终冻结了哪套预设」。 */}
           <p className="pentest-wizard__done">
             策略 {createdPolicy === null ? 'v—' : `v${String(createdPolicy.policyVersion)}`} · 快照哈希{' '}
-            {createdPolicy === null ? '—（服务端未返回）' : createdPolicy.policySnapshotHash}
+            {createdPolicy === null ? '服务端未返回' : createdPolicy.policySnapshotHash}
           </p>
         </>
       )}
@@ -641,7 +641,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           <h4 className="pentest-wizard__section-title">范围入口与行为预设</h4>
           <Field
             label="范围入口"
-            hint="范围入口只描述怎么填目标，具体条目仍按 §10.2.2 由服务端规范化。"
+            hint="范围入口只描述怎么填目标，具体条目仍由服务端规范化。"
           >
             <select
               className="pentest-select"
@@ -659,8 +659,8 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
             </select>
           </Field>
           <Field
-            label="行为预设（必选）"
-            hint="没有默认值。预设决定注入 Agent 的行为指引（四档场景差异都在这里）与宿主侧速率/并发；服务端展开后写入冻结策略快照。"
+            label="行为预设 · 必选"
+            hint="没有默认值。预设决定注入 Agent 的行为指引与宿主侧速率/并发；服务端展开后写入冻结策略快照。"
           >
             <select
               className="pentest-select"
@@ -672,7 +672,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
                 }
               }}
             >
-              <option value="" disabled>请选择本作业的场景（必选）</option>
+              <option value="" disabled>选择本作业的场景 · 必选</option>
               {BEHAVIOR_PROFILES.map((profile) => (
                 <option key={profile} value={profile}>{BEHAVIOR_PROFILE_LABELS[profile]}</option>
               ))}
@@ -688,8 +688,8 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
             <p className="pentest-wizard__section-hint">{BEHAVIOR_PROFILE_HINTS[form.behaviorProfile]}</p>
           )}
           <Field
-            label="审批模式（必选）"
-            hint="没有默认值。人工审批：逐次放行类别的每个动作都要你在控制台点一次。高权限：预设内且非默认禁用类别的动作由服务端自行放行，只有越界申请才找你。"
+            label="审批模式 · 必选"
+            hint="没有默认值。人工审批：逐次放行类别的每个动作都需在控制台确认一次。高权限：预设内且非默认禁用类别的动作由服务端自行放行，只有越界申请才转人工。"
           >
             <select
               className="pentest-select"
@@ -701,7 +701,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
                 }
               }}
             >
-              <option value="" disabled>请选择审批模式（必选）</option>
+              <option value="" disabled>选择审批模式 · 必选</option>
               {APPROVAL_MODES.map((mode) => (
                 <option key={mode} value={mode}>{APPROVAL_MODE_LABELS[mode]}</option>
               ))}
@@ -719,7 +719,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           {form.behaviorProfile === 'custom' ? (
             <>
               <p className="pentest-wizard__section-hint">
-                {`自定义指引会逐字注入该作业下每一次会话的提示词，并随策略快照冻结、进哈希——改它等于改策略。上限 ${String(CUSTOM_GUIDANCE_MAX_CHARS)} 字。`}
+                {`自定义指引会逐字注入该作业下每一次会话的提示词，并随策略快照冻结、进哈希；改它等于改策略。上限 ${String(CUSTOM_GUIDANCE_MAX_CHARS)} 字。`}
               </p>
               <TextArea
                 value={form.customGuidance}
@@ -741,17 +741,17 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           </p>
       <ScopeRows
         label="目标"
-        hint="域名与 IP 留空端口即默认 80/443；网段与资产标签必须显式写端口或协议，否则服务端拒绝加载（§10.2.2）"
+        hint="域名与 IP 留空端口即默认 80/443；网段与资产标签必须显式写端口或协议，否则服务端拒绝加载"
         rows={form.targets}
         onChange={(rows) => { patch({ targets: rows }); }}
       />
         </div>
 
         <div className="pentest-wizard__section">
-          <h4 className="pentest-wizard__section-title">公共记忆（可选）</h4>
+          <h4 className="pentest-wizard__section-title">公共记忆 · 可选</h4>
           <p className="pentest-wizard__section-hint">
-            写在这里的规则会注入本作业下**每一次新建会话**；建完之后也能在「公共记忆」面板里改。
-            **授权依据、限制条件、客户约定这类说明写在这里最合适** —— 它们是给人看与给模型读的
+            写在这里的规则会注入本作业下每一次新建会话；建完之后也能在「公共记忆」面板里改。
+            授权依据、限制条件、客户约定这类说明写在这里最合适：它们是给人看与给模型读的
             文字，不必塞进上面的结构化字段。
           </p>
           <TextArea
@@ -777,19 +777,19 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           <span aria-hidden="true">{advancedOpen ? '▾' : '▸'}</span>
           <span>高级选项</span>
           <span className="pentest-wizard__section-hint">
-            授权依据与到期、排除项、规则、时间窗、紧急停止 —— 都可留空
+            授权依据与到期、排除项、规则、时间窗、紧急停止，都可留空
           </span>
         </button>
         {advancedOpen ? (
           <>
-        <Field label="授权依据引用" hint="授权主体与内部批准记录的引用。只进档案与审计——范围判定不读它，留空也能建立。">
+        <Field label="授权依据引用" hint="授权主体与内部批准记录的引用。只进档案与审计；范围判定不读它，留空也能建立。">
           <TextInput
             value={form.authorizationRef}
             onChange={(next) => { patch({ authorizationRef: next }); }}
             placeholder="例如：TICKET-1234 / 授权书编号"
           />
         </Field>
-        <Field label="授权到期时间" hint="到期后新动作会被拒（§11.1）——证书到期不是提醒，是硬边界。">
+        <Field label="授权到期时间" hint="到期后新动作会被拒。证书到期不是提醒，是硬边界。">
           <TextInput
             type="datetime-local"
             value={form.authorizationExpiresAt}
@@ -799,7 +799,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
 
         <ScopeRows
           label="排除项"
-          hint="排除项优先于目标：判为排除的请求即使落在目标网段内也会被拒。上游依赖与共享基础设施写在这里（§11.1）"
+          hint="排除项优先于目标：判为排除的请求即使落在目标网段内也会被拒。上游依赖与共享基础设施写在这里"
           rows={form.exclusions}
           onChange={(rows) => { patch({ exclusions: rows }); }}
         />
@@ -812,7 +812,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
             placeholder="被动指纹, 认证扫描"
           />
         </Field>
-        <Field label="速率上限（每秒请求数）">
+        <Field label="速率上限 · 每秒请求数">
           <TextInput
             value={form.rateLimitPerSecond}
             onChange={(next) => { patch({ rateLimitPerSecond: next }); }}
@@ -826,7 +826,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
             placeholder="例如：2"
           />
         </Field>
-        <Field label="最大影响" hint="允许的最大影响面；破坏性动作默认关闭（§11.1）">
+        <Field label="最大影响" hint="允许的最大影响面；破坏性动作默认关闭">
           <TextInput
             value={form.maxImpact}
             onChange={(next) => { patch({ maxImpact: next }); }}
@@ -899,7 +899,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
             placeholder="姓名 / 值班方式"
           />
         </Field>
-        <Field label="紧急停止条件" hint="每行一条；触发即终止（§11.1）">
+        <Field label="紧急停止条件" hint="每行一条；触发即终止">
           <TextArea
             value={form.stopConditions}
             onChange={(next) => { patch({ stopConditions: next }); }}
@@ -915,7 +915,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
 
       {/* ⑥ 规范化后的最终范围与限制（§13.1：展示 → 人类确认 → 才提交） */}
       <div className="pentest-wizard__preview">
-        <h4 className="pentest-wizard__preview-title">规范化后的最终范围（服务端同一套规范化逻辑）</h4>
+        <h4 className="pentest-wizard__preview-title">规范化后的最终范围 · 服务端同一套规范化逻辑</h4>
         <Table
           columns={[
             { key: 'section', header: '分区' },
@@ -928,7 +928,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           ]}
           rows={preview}
           keyOf={(row) => row.key}
-          empty={<Empty title="还没有目标条目" reason="至少填写一个目标才能建立 engagement（§11.1）" />}
+          empty={<Empty title="还没有目标条目" reason="至少填写一个目标才能建立 engagement" />}
           renderCell={(row, column) => {
             switch (column) {
               case 'section':
@@ -960,8 +960,8 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           至少要知道自己选的两个预设是什么，以及服务端会在创建时把它们展开并冻结。 */}
       <p className="pentest-wizard__policy-note">
         {`范围入口：${SCOPE_ENTRY_PROFILE_LABELS[form.scopeEntryProfile]}；行为预设：` +
-          `${form.behaviorProfile === null ? '（尚未选择——必选）' : BEHAVIOR_PROFILE_LABELS[form.behaviorProfile]}；审批模式：` +
-          `${form.approvalMode === null ? '（尚未选择——必选）' : APPROVAL_MODE_LABELS[form.approvalMode]}。`}
+          `${form.behaviorProfile === null ? '尚未选择 · 必选' : BEHAVIOR_PROFILE_LABELS[form.behaviorProfile]}；审批模式：` +
+          `${form.approvalMode === null ? '尚未选择 · 必选' : APPROVAL_MODE_LABELS[form.approvalMode]}。`}
         {'服务端会在创建时展开并冻结这两个预设，策略快照哈希随创建结果返回。'}
       </p>
       <label className="pentest-wizard__ack">
@@ -973,7 +973,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
         <span>{SCOPE_ACK_LABEL}</span>
       </label>
 
-      <Field label="决策理由" hint="写入 human_decisions（§16.1），与提交一同留痕">
+      <Field label="决策理由" hint="写入 human_decisions，与提交一同留痕">
         <TextInput
           value={form.reason}
           onChange={(next) => { patch({ reason: next }); }}
@@ -997,7 +997,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           disabled={props.onRequestPreview === undefined}
           reason={
             props.onRequestPreview === undefined
-              ? '调用方未接入校验回调（onRequestPreview）'
+              ? '调用方未接入校验回调 onRequestPreview'
               : undefined
           }
         />
@@ -1006,7 +1006,7 @@ export function EngagementWizard(props: EngagementWizardProps): ReactNode {
           kind="primary"
           onClick={submit}
           disabled={blocked}
-          reason={busy ? '正在提交' : createdId !== null ? '已建立；重复提交会创建第二个 engagement（§15.3）' : gates.join('；')}
+          reason={busy ? '正在提交' : createdId !== null ? '已建立；重复提交会创建第二个 engagement' : gates.join('；')}
         />
         {props.onCancel === undefined ? null : (
           <Button label="取消" onClick={props.onCancel} />
@@ -1023,9 +1023,9 @@ function limitSummary(form: WizardForm): string {
   parts.push(form.rateLimitPerSecond.trim() === '' ? '速率未限制' : `速率 ≤ ${form.rateLimitPerSecond.trim()} 次/秒`);
   parts.push(form.maxConcurrency.trim() === '' ? '并发未限制' : `并发 ≤ ${form.maxConcurrency.trim()}`);
   parts.push(form.maxImpact.trim() === '' ? '最大影响未声明' : `最大影响：${form.maxImpact.trim()}`);
-  const days = form.allowedDays.length === WEEKDAYS.length ? '每天' : form.allowedDays.length === 0 ? '未选择任何日期（无法执行）' : form.allowedDays.join('/');
+  const days = form.allowedDays.length === WEEKDAYS.length ? '每天' : form.allowedDays.length === 0 ? '未选择任何日期，无法执行' : form.allowedDays.join('/');
   const window = form.windowFrom.trim() === '' && form.windowTo.trim() === '' ? '全天' : `${form.windowFrom.trim() || '00:00'}–${form.windowTo.trim() || '24:00'}`;
-  parts.push(`时间窗：${days} ${window}（${form.timezone.trim() || '未声明时区'}）`);
+  parts.push(`时间窗：${days} ${window}，时区 ${form.timezone.trim() || '未声明'}`);
   parts.push(form.stopConditions.trim() === '' ? '紧急停止条件未声明' : '紧急停止条件已声明');
   return parts.join('；');
 }
@@ -1038,19 +1038,19 @@ function collectGates(
   now: Date | undefined,
 ): readonly string[] {
   const gates: string[] = [];
-  if (form.name.trim() === '') gates.push('必须填写名称（§11.1）');
+  if (form.name.trim() === '') gates.push('必须填写名称');
   // 行为预设是**必选项**：不选就不让提交（理由写在按钮上方，而不是留一个灰按钮让人猜）。
   if (form.behaviorProfile === null) {
-    gates.push('必须选择行为预设（必选）：它决定注入 Agent 的行为指引与宿主侧节奏');
+    gates.push('必须选择行为预设：它决定注入 Agent 的行为指引与宿主侧节奏');
   }
   if (form.behaviorProfile === 'custom' && form.customGuidance.trim() === '') {
     gates.push('custom 预设必须写自定义指引：那段文字就是注入会话的行为指引本体');
   }
   if (form.approvalMode === null) {
-    gates.push('必须选择审批模式（必选）：人工审批逐条人批，高权限让服务端自行放行预设内的动作');
+    gates.push('必须选择审批模式：人工审批逐条人批，高权限让服务端自行放行预设内的动作');
   }
   if (form.customGuidance.trim().length > CUSTOM_GUIDANCE_MAX_CHARS) {
-    gates.push(`自定义指引过长：上限 ${String(CUSTOM_GUIDANCE_MAX_CHARS)} 字（它会逐次注入每一次会话提示词）`);
+    gates.push(`自定义指引过长：上限 ${String(CUSTOM_GUIDANCE_MAX_CHARS)} 字；它会逐次注入每一次会话提示词`);
   }
   // 授权依据引用与到期时间**不再是闸门**。
   //
@@ -1059,24 +1059,24 @@ function collectGates(
   // 两者降为「建议填」，但**填了就必须是合法值**——否则会存进一个谁也读不懂的字符串。
   const expiry = form.authorizationExpiresAt.trim();
   if (expiry !== '' && !Number.isFinite(Date.parse(expiry))) {
-    gates.push('授权到期时间无法解析（留空表示不作限制，但填了就必须是合法时间）');
+    gates.push('授权到期时间无法解析；留空表示不作限制，但填了就必须是合法时间');
   } else if (expiry !== '' && Date.parse(expiry) <= (now ?? new Date()).getTime()) {
     // 建一个「已经过期」的授权没有意义：它连第一个动作都过不去（§11.1）
-    gates.push('授权到期时间已过去——那会让这个作业刚建好就无法执行任何动作；请填未来的时间或留空');
+    gates.push('授权到期时间已过去；那会让这个作业刚建好就无法执行任何动作；需填未来的时间或留空');
   }
-  if (targetChecks.length === 0) gates.push('至少需要一个授权目标（§11.1）');
+  if (targetChecks.length === 0) gates.push('至少需要一个授权目标');
   // 「校验失败」与「尚未校验」必须分开说：前者是人类要改的输入问题，
   // 后者是人类要点一下「校验范围」的动作问题。混在一句里会让人不知道该改什么。
   const failed = [...targetChecks, ...exclusionChecks].filter((check) => !check.ok && check.code !== null);
   if (failed.length > 0) {
-    gates.push(`有 ${String(failed.length)} 个条目无法通过范围校验（服务端会整体拒绝，§10.2.2）：${failed.map((check) => `${check.row.value} ${check.code ?? ''}`).join('、')}`);
+    gates.push(`有 ${String(failed.length)} 个条目无法通过范围校验，服务端会整体拒绝：${failed.map((check) => `${check.row.value} ${check.code ?? ''}`).join('、')}`);
   }
   const unchecked = [...targetChecks, ...exclusionChecks].filter((check) => !check.ok && check.code === null);
   if (unchecked.length > 0) {
-    gates.push(`有 ${String(unchecked.length)} 个条目尚未校验：点「校验范围」由服务端裁定（§13.1）`);
+    gates.push(`有 ${String(unchecked.length)} 个条目尚未校验：经「校验范围」由服务端裁定`);
   }
-  if (form.reason.trim() === '') gates.push('写操作必须携带非空理由（§16.1 决策记录）');
-  if (!form.acknowledged) gates.push('需勾选确认已核对范围与限制（§13.1）');
+  if (form.reason.trim() === '') gates.push('写操作必须携带非空理由');
+  if (!form.acknowledged) gates.push('需勾选确认已核对范围与限制');
   return gates;
 }
 
@@ -1209,7 +1209,7 @@ function ScopeRows(props: {
             <TextInput
               value={row.portsText}
               onChange={(next) => { replace(index, { ...row, portsText: next }); }}
-              placeholder="端口（80,443；留空=默认 80/443）"
+              placeholder="端口 80,443；留空即默认 80/443"
             />
             {/*
               「任意端口」必须是**人类可见的显式选项**（§10.2.2 的原话）。
@@ -1219,7 +1219,7 @@ function ScopeRows(props: {
             */}
             <label
               className="pentest-wizard__anyport"
-              title="授权该条目范围内的全部端口（0-65535）。这是一次宽授权，会记入范围版本与放行记录。"
+              title="授权该条目范围内的全部端口 0-65535。这是一次宽授权，会记入范围版本与放行记录。"
             >
               <input
                 type="checkbox"

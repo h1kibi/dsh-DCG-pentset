@@ -444,7 +444,7 @@ test('状态条：审批模式一键切换按钮（当前档位可见；缺回�
     createElement(PentestStatusPill, { facts, onOpen: () => undefined, onToggleMode: () => undefined }),
   );
   assert.match(html, /pentest-statusbar__mode/, '要有切换按钮');
-  assert.match(html, /审批：高权限（Agent 自行放行）/, '当前档位必须直接显示在按钮上');
+  assert.match(html, /审批：高权限 · Agent 自行放行/, '当前档位必须直接显示在按钮上');
   assert.match(html, /切到「人工审批」/, 'tooltip 要说清点一下会切到哪一档');
   assert.match(html, /不需要理由/, 'tooltip 里写明不需要理由（人类是主人）');
 

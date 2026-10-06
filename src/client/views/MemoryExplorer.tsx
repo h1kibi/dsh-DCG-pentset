@@ -64,21 +64,21 @@ import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextInput } fr
 export const REASONING_NOTE = '模型内部推理，不等同于事实';
 
 /** 思考链开关的标签。写全 `include_reasoning`，让它与文档/接口参数一一对上。 */
-const REASONING_SWITCH_LABEL = '纳入思考链（include_reasoning 筛选开关）';
+const REASONING_SWITCH_LABEL = '纳入思考链：include_reasoning 筛选开关';
 
 /** 开关的说明：这是本视图最容易被误读的一处（见文件头第 1 条）。 */
 export const REASONING_SWITCH_HINT =
-  '这是筛选开关，不是权限门禁：思考链对本 engagement 的全部 Worker 都开放检索与阅读（§8.3）。'
-  + '勾选与否只决定本次检索是否返回思考链条目，不代表获得了或失去了任何权限。';
+  '这是筛选开关，不是权限门禁：思考链对本 engagement 的全部 Worker 都开放检索与阅读。'
+  + '勾选与否只决定本次检索是否返回思考链条目，不改变任何人的读取权限。';
 
 const REASONING_SWITCH_ON_NOTE =
-  '思考链与其他记忆类型使用完全相同的排序规则：既不额外加分也不降权，只多一个「模型内部推理」标注（§8.6）。';
+  '思考链与其他记忆类型使用完全相同的排序规则：既不额外加分也不降权，只多一个「模型内部推理」标注。';
 
 const REASONING_SWITCH_OFF_NOTE =
-  '本次检索不返回思考链条目——仅筛选，不改变任何人的读取权限（§8.3）。';
+  '本次检索不返回思考链条目。仅筛选，不改变任何人的读取权限。';
 
 const AUDIT_NOTE =
-  '读取原文会写入访问审计（§8.3：记录会话、查询与命中的条目）。因此本页渲染不会自动展开：'
+  '读取原文会写入访问审计，记录会话、查询与命中的条目。本页渲染不会自动展开，'
   + '只有点击「展开原文」才触发读取。';
 
 // ───────────────────────── 取值域与标签 ─────────────────────────
@@ -390,10 +390,10 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
 
   return (
     <div className="pentest-memory-explorer">
-      <Card title="记忆检索（§8.7 混合检索）">
+      <Card title="记忆检索">
         <Field
           label="查询"
-          hint="自然语言问题或标识符（域名、命令、函数名、哈希都走全文与三元组信号，§8.6）"
+          hint="自然语言问题或标识符：域名、命令、函数名、哈希都走全文与三元组信号"
         >
           <TextInput
             value={form.query}
@@ -404,7 +404,7 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
           />
         </Field>
 
-        <Field label="阶段" hint="按事件所属阶段过滤；「不限」表示不过滤（§8.6 过滤维度）">
+        <Field label="阶段" hint="按事件所属阶段过滤；「不限」表示不过滤">
           <select
             className="pentest-select"
             value={form.phase ?? ''}
@@ -423,8 +423,8 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
         </Field>
 
         <CheckboxGroup
-          legend="记忆类型（kinds）"
-          hint="不勾选即全部类型；思考链是其中一类（14 类见 §8.5 的分块来源表）"
+          legend="记忆类型"
+          hint="不勾选即全部类型；思考链是其中一类，共 14 类"
           options={MEMORY_KIND_OPTIONS}
           selected={form.kinds}
           onToggle={(value, next) => {
@@ -433,8 +433,8 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
         />
 
         <CheckboxGroup
-          legend="来源可信度（trust_levels）"
-          hint="可过滤、可展示，但不进排序评分（§8.6）；不勾选即不限"
+          legend="来源可信度"
+          hint="可过滤、可展示，不进排序评分；不勾选即不限"
           options={TRUST_FILTER_ORDER.map((value) => ({ value, label: trustLabel(value) }))}
           selected={form.trustLevels}
           onToggle={(value, next) => {
@@ -442,7 +442,7 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
           }}
         />
 
-        <Field label="资产" hint="资产标识，逗号或空格分隔；留空即不限（§8.6）。被排除资产的内容不会返回">
+        <Field label="资产" hint="资产标识，逗号或空格分隔；留空即不限。被排除资产的内容不会返回">
           <TextInput
             value={form.assetIdsText}
             onChange={(next) => {
@@ -456,7 +456,7 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
             asset_ids/include_reasoning/limit。收了服务端不接受的输入，等于让人类
             白填一遍——时间范围由结果里的水位与事件时间自己说明（§8.4）。 */}
         <div className="pentest-memory-explorer__times">
-          <Field label="结果上限" hint={`1–${String(MAX_MEMORY_LIMIT)}；§8.7 的默认值是 ${String(DEFAULT_MEMORY_LIMIT)}`}>
+          <Field label="结果上限" hint={`1–${String(MAX_MEMORY_LIMIT)}；默认值 ${String(DEFAULT_MEMORY_LIMIT)}`}>
             <TextInput
               type="number"
               value={form.limitText}
@@ -500,13 +500,13 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
         {props.loading === true ? <Badge text="检索中" tone="active" /> : null}
         {props.onSearch === undefined ? (
           <p className="pentest-memory-explorer__gap" role="note">
-            端点缺口：控制台方法表未导出记忆检索端点（memory.search），本页只渲染表单、不提交检索。
-            {' '}检索能力目前在 Agent 工具面（memory_search / memory_read，`src/tools/worker.ts`）与检索服务面（§8.6/§8.7）。
+            端点缺口：控制台方法表未导出记忆检索端点 memory.search，本页只渲染表单、不提交检索。
+            {' '}检索能力目前在 Agent 工具面 memory_search 与 memory_read，以及检索服务面。
           </p>
         ) : null}
       </Card>
 
-      <Card title={`检索结果（${formatCount(props.hits.length)} 条）`}>
+      <Card title={`检索结果：${formatCount(props.hits.length)} 条`}>
         <WatermarkBlock watermark={props.watermark ?? null} now={props.now} />
         <LedgerVerifyBlock controller={props.controller} engagementId={engagementId} now={props.now} />
 
@@ -516,7 +516,7 @@ export function MemoryExplorer(props: MemoryExplorerProps): ReactNode {
         {props.snapshot.conflict ? (
           <ErrorBar
             code="stale_state_version"
-            message="另一个界面先提交了改动；本页显示的可能不是最新状态（§15.4）。"
+            message="另一个界面先提交了改动；本页显示的可能不是最新状态。"
             tone="attention"
           />
         ) : null}
@@ -556,10 +556,10 @@ function searchBlockers(input: {
     blockers.push('查询不能为空：空查询会把整库按时间近远铺开，不构成检索');
   }
   if (input.engagementId === null) {
-    blockers.push('尚未选中 engagement：检索范围绑定当前 engagement，Agent 也不能指定别的（§8.6/§8.7）');
+    blockers.push('尚未选中 engagement：检索范围绑定当前 engagement，Agent 也不能指定别的');
   }
   if (!input.provided) {
-    blockers.push('控制台方法表未导出记忆检索端点（memory.search）：检索无法提交');
+    blockers.push('控制台方法表未导出记忆检索端点 memory.search：检索无法提交');
   }
   if (input.loading) {
     blockers.push('上一次检索尚未返回');
@@ -576,7 +576,7 @@ function emptyState(
     return (
       <Empty
         title="尚未检索"
-        reason="填好条件后点「检索」。检索范围受当前范围版本约束：未纳入范围的资产内容不会返回（§8.6）。"
+        reason="填好条件后点「检索」。检索范围受当前范围版本约束：未纳入范围的资产内容不会返回。"
       />
     );
   }
@@ -587,14 +587,14 @@ function emptyState(
     return (
       <Empty
         title="检索未完成，不是没有匹配"
-        reason={`这次检索以 ${failure.code} 结束（原因见上方错误码），因此这里不显示结果集。修好后重新点「检索」即可。`}
+        reason={`这次检索以 ${failure.code} 结束，原因见上方错误码，因此这里不显示结果集。修好后重新点「检索」即可。`}
       />
     );
   }
   return (
     <Empty
       title="没有匹配的记忆条目"
-      reason="可放宽时间范围、记忆类型或来源可信度筛选。两点固定约束：被排除资产的内容不会返回（§8.6），尚未索引的事件也不在结果里（§8.4）。"
+      reason="可放宽时间范围、记忆类型或来源可信度筛选。两点固定约束：被排除资产的内容不会返回，尚未索引的事件也不在结果里。"
     />
   );
 }
@@ -609,7 +609,7 @@ function WatermarkBlock(props: { readonly watermark: IndexWatermarkView | null; 
           label="索引水位"
           value="—"
           tone="attention"
-          hint="调用方未提供水位：无法判断结果是否遗漏了尚未索引的事件（§8.4）"
+          hint="调用方未提供水位：无法判断结果是否遗漏了尚未索引的事件"
         />
       </div>
     );
@@ -621,7 +621,7 @@ function WatermarkBlock(props: { readonly watermark: IndexWatermarkView | null; 
       <Stat
         label="索引水位"
         value={`链序 ${formatCount(watermark.lastChainSeq)}`}
-        hint="已建索引的事件链序。原始账本才是唯一事实源，索引是可重建的派生数据（§8.4）"
+        hint="已建索引的事件链序。原始账本是唯一事实源，索引是可重建的派生数据"
       />
       <Stat
         label="滞后量"
@@ -638,7 +638,7 @@ function WatermarkBlock(props: { readonly watermark: IndexWatermarkView | null; 
       <Stat label="索引至" value={formatTimestamp(watermark.occurredAt, props.now)} />
       {lagging ? (
         <p className="pentest-memory-explorer__lag" role="note">
-          {`索引滞后：本次结果可能遗漏尚未索引的事件，正在工作的 Agent 也因此可能看不到它们（§8.4）。`}
+          {`索引滞后：本次结果可能遗漏尚未索引的事件，正在工作的 Agent 也可能看不到它们。`}
         </p>
       ) : null}
     </div>
@@ -661,13 +661,13 @@ export function LedgerVerifyResult(props: {
     const first = result.failures[0];
     problems.push(
       `哈希链校验失败 ${formatCount(result.failures.length)} 处` +
-        (first === undefined ? '' : `（首个：链序 ${formatCount(first.chainSeq)}，${first.detail}）`),
+        (first === undefined ? '' : `，首个位于链序 ${formatCount(first.chainSeq)}：${first.detail}`),
     );
   }
   if (!result.anchored) {
-    problems.push('没有锚点可比：链自洽只说明行内没被改，无法证明整段未被替换或截断（§9.5）');
+    problems.push('没有锚点可比：链自洽只说明行内没被改，无法证明整段未被替换或截断');
   } else if (result.mismatches.length > 0) {
-    problems.push(`与最近锚点不一致：${result.mismatches.join('、')}（典型表现是尾部截断）`);
+    problems.push(`与最近锚点不一致：${result.mismatches.join('、')}。典型表现是尾部截断`);
   }
   return (
     <div className="pentest-memory-explorer__ledger-result">
@@ -675,18 +675,18 @@ export function LedgerVerifyResult(props: {
         label="账本完整性"
         value={result.ok ? '校验通过' : '未通过'}
         tone={result.ok ? 'done' : 'danger'}
-        hint="链自洽且与锚点一致才判通过；「未锚定」按未通过处理（无法证明未被截断）"
+        hint="链自洽且与锚点一致才判通过；「未锚定」按未通过处理，无法证明未被截断"
       />
       <Stat
         label="事件数"
         value={formatCount(result.eventCount)}
-        hint="实时重算的链上事件数（原始账本是唯一事实源，§8.4）"
+        hint="实时重算的链上事件数，原始账本是唯一事实源"
       />
       <Stat
         label="锚点"
         value={result.anchored ? '已锚定' : '无锚点'}
         tone={result.anchored ? 'done' : 'attention'}
-        hint="锚点把链头与事件数固定到独立记录，用于发现整段替换与尾部截断（§9.5）"
+        hint="锚点把链头与事件数固定到独立记录，用于发现整段替换与尾部截断"
       />
       <Stat label="校验时间" value={formatTimestamp(result.checkedAt, props.now)} />
       {problems.length === 0 ? null : (
@@ -748,7 +748,7 @@ function LedgerVerifyBlock(props: {
       {state.failed ? (
         <ErrorBar
           code="ledger_verify_unavailable"
-          message="校验请求失败（读不到结果）。这既不代表账本有问题，也不代表没问题——原因见错误码。"
+          message="校验请求失败，读不到结果。这既不代表账本有问题，也不代表没问题，原因见错误码。"
         />
       ) : null}
       {result === null ? null : <LedgerVerifyResult result={result} now={props.now} />}
@@ -781,22 +781,22 @@ function MemoryHitRow(props: {
         <Badge
           text={trustLabel(hit.trustLevel)}
           tone={trustTone(hit.trustLevel)}
-          hint="来源可信度：可过滤、可展示，但不进排序评分（§8.6 只给人工决策与工具观测 1 个 RRF 单位的权威度加成）"
+          hint="来源可信度：可过滤、可展示，不进排序评分"
         />
         {hit.provisional === true ? (
           <Badge
             text="暂定"
             tone="attention"
-            hint="来自未完成的流式片段：只有收到完整块或工具结果后，才允许从中派生候选事实（§8.4）"
+            hint="来自未完成的流式片段：只有收到完整块或工具结果后，才允许从中派生候选事实"
           />
         ) : null}
         {hit.humanAccepted === true ? (
-          <Badge text="已人工接受" tone="done" hint="已被人类接受（§8.6 的过滤维度之一）" />
+          <Badge text="已人工接受" tone="done" hint="已被人类接受，是过滤维度之一" />
         ) : null}
         <Stat
           label="评分"
           value={formatScore(hit.score)}
-          hint="倒数排名融合分（§8.6）：只在同一次检索内做相对比较，绝对值没有意义"
+          hint="倒数排名融合分：只在同一次检索内做相对比较，绝对值没有意义"
         />
       </div>
 
@@ -817,12 +817,12 @@ function MemoryHitRow(props: {
         <Stat
           label="会话"
           value={hit.workerSessionId === undefined || hit.workerSessionId === null ? '—' : truncate(hit.workerSessionId, 18)}
-          hint={hit.workerSessionId ?? '无来源会话（如人工决策）'}
+          hint={hit.workerSessionId ?? '无来源会话，如人工决策'}
         />
         <Stat
           label="阶段"
           value={hit.phase === undefined || hit.phase === null ? '—' : phaseLabel(hit.phase)}
-          hint="事件所属阶段；人工决策、压缩摘要、思考链没有阶段归属，该格显示「—」是正常的（§8.6）"
+          hint="事件所属阶段；人工决策、压缩摘要、思考链没有阶段归属，该格显示「—」是正常情况"
         />
         <Stat label="时间" value={formatTimestamp(hit.occurredAt, props.now)} />
       </div>
@@ -830,19 +830,19 @@ function MemoryHitRow(props: {
       {hit.routes === undefined || hit.routes.length === 0 ? null : (
         <p className="pentest-memory-hit__routes">
           {hit.routes.map((route) => (
-            <Badge key={route} text={ROUTE_LABELS[route]} hint="命中的检索信号（§8.6 三路融合）" />
+            <Badge key={route} text={ROUTE_LABELS[route]} hint="命中的检索信号，三路融合" />
           ))}
         </p>
       )}
 
-      <Field label="引用标识" hint="Agent 侧引用同一条记忆时用的就是它（§8.7）">
+      <Field label="引用标识" hint="Agent 侧引用同一条记忆时用的就是它">
         <code className="pentest-memory-hit__citation">{hit.citation}</code>
       </Field>
 
       <Button
-        label="展开原文（写入访问审计）"
+        label="展开原文 · 写入访问审计"
         disabled={!expandable}
-        reason="调用方未提供 onExpand：控制台未导出记忆读取端点（memory.read）"
+        reason="调用方未提供 onExpand：控制台未导出记忆读取端点 memory.read"
         onClick={() => {
           props.onExpand?.({
             memoryId: hit.chunkId,

@@ -58,7 +58,7 @@ export function publicMemoryBlockers(input: {
   }
   if (input.content.length > PUBLIC_MEMORY_MAX_CHARS) {
     out.push(
-      `超出上限 ${String(PUBLIC_MEMORY_MAX_CHARS)} 字符（当前 ${String(input.content.length)}）：` +
+      `超出上限 ${String(PUBLIC_MEMORY_MAX_CHARS)} 字符，当前 ${String(input.content.length)}：` +
         '它会被注入每一次会话，过长会挤掉任务本身需要的上下文。',
     );
   }
@@ -91,7 +91,7 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
       <Card title="公共记忆">
         <Empty
           title="尚未选中作业"
-          reason="公共记忆属于具体的作业——它是这个作业下所有 Agent 的共同前提。先在列表里选一个。"
+          reason="公共记忆属于具体的作业，是这个作业下所有 Agent 的共同前提。先在列表里选一个。"
         />
       </Card>
     );
@@ -142,9 +142,9 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
   return (
     <Card title="公共记忆">
       <p className="pentest-publicmemory__hint">
-        这里写的内容会注入**本作业下每一次新建会话**的系统提示词——包括重做与阶段切换，
+        这里写的内容会注入本作业下每一次新建会话的系统提示词，包括重做与阶段切换，
         不只是下一个新会话。适用场景：这个作业的通用规矩、客户的硬性限制、已经确认过的
-        共识（例如「只做被动读取」「不要碰生产网段」「报告一律用中文」）。
+        共识，例如「只做被动读取」「不要碰生产网段」「报告一律用中文」。
       </p>
 
       {props.memory === null ? (
@@ -158,7 +158,7 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
             label="正文"
             hint={
               props.memory.updatedAt === null
-                ? '从未修改过（当前为空）'
+                ? '从未修改过，当前为空'
                 : `最后修改：${formatTimestamp(props.memory.updatedAt, props.now)}` +
                   (props.memory.updatedBy === null ? '' : ` · ${props.memory.updatedBy}`)
             }
@@ -173,7 +173,7 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
 
           <Field
             label="改动理由"
-            hint="写入 human_decisions（§16.1）。只在内容真的改过时才要求填写。"
+            hint="写入 human_decisions。只在内容真的改过时才要求填写。"
           >
             <TextArea
               value={reason}

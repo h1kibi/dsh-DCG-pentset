@@ -206,7 +206,7 @@ export function SessionChat(props: SessionChatProps): ReactNode {
 
       <p className="pentest-session-chat__intro">
         Agent 会主动询问目标、排除项、协议、端口、允许动作、时间窗；收集完整后它会提交一份
-        <strong>待人类确认的范围方案</strong>（就在下方）。范围确认前它不能执行任何目标动作。
+        <strong>待人类确认的范围方案</strong>。范围确认前它不能执行任何目标动作。
       </p>
 
       <div className="pentest-session-chat" ref={transcriptRef} aria-live="polite" aria-label="授权会话记录">
@@ -380,11 +380,11 @@ function ScopeProposalCard(props: {
   const submit = (): void => {
     if (engagementId === null) return;
     if (behaviorProfile === '') {
-      setError('请先选择行为预设（必选项，没有默认值）');
+      setError('请先选择行为预设：必选项，没有默认值');
       return;
     }
     if (approvalMode === '') {
-      setError('请先选择审批模式（必选项，没有默认值）');
+      setError('请先选择审批模式：必选项，没有默认值');
       return;
     }
     const chosenProfile: BehaviorProfile = behaviorProfile;
@@ -435,19 +435,19 @@ function ScopeProposalCard(props: {
   if (authorizationNote.trim() === '') gates.push('授权说明不能为空');
   // 「取不到预览」与「预览被拦」是两回事：前者是还没问服务端，后者是问了但服务端不让过。
   if (behaviorProfile === '') {
-    gates.push('必须选择行为预设（必选）：它决定注入 Agent 的行为指引与宿主侧节奏');
+    gates.push('必须选择行为预设：它决定注入 Agent 的行为指引与宿主侧节奏');
   }
   if (behaviorProfile === 'custom' && customGuidance.trim() === '') {
     gates.push('custom 预设必须写自定义指引：那段文字就是注入会话的行为指引本体');
   }
   if (approvalMode === '') {
-    gates.push('必须选择审批模式（必选）：人工审批逐条人批，高权限让服务端自行放行预设内的动作');
+    gates.push('必须选择审批模式：人工审批逐条人批，高权限让服务端自行放行预设内的动作');
   }
   if (preview === null) gates.push('尚未取得服务端预览：没有服务端冻结的事实就不能确认');
-  else if (!preview.ok) gates.push(`服务端预览被拦下（${String(preview.blockers.length)} 条原因）：未解决前不能确认`);
+  else if (!preview.ok) gates.push(`服务端预览被拦下：${String(preview.blockers.length)} 条原因，未解决前不能确认`);
   const acknowledged = preview !== null && acknowledgedHash === preview.snapshotHash;
   if (!acknowledged) {
-    gates.push('需勾选确认已核对服务端规范化的目标、地址裁决、节奏与动作权限（策略任何变化都会要求重新勾选）');
+    gates.push('需勾选确认已核对服务端规范化的目标、地址裁决、节奏与动作权限；策略任何变化都会要求重新勾选');
   }
 
   return (
@@ -494,7 +494,7 @@ function ScopeProposalCard(props: {
       )}
 
       <p className="pentest-proposal__actions">
-        {`允许的动作类别：${props.proposal.allowedActions.map(actionClassLabel).join('、') || '（空——确认后将没有可执行的动作类别）'}`}
+        {`允许的动作类别：${props.proposal.allowedActions.map(actionClassLabel).join('、') || '空：确认后将没有可执行的动作类别'}`}
       </p>
 
       {/* ── 服务端将冻结的事实（§6.2.0.5）──
@@ -515,7 +515,7 @@ function ScopeProposalCard(props: {
 
             {preview.ok ? null : (
               <div className="pentest-proposal__preview-blockers" role="alert">
-                <p>{`服务端预览被拦下（${String(preview.blockers.length)} 条原因）；上述原因未解决前不能确认：`}</p>
+                <p>{`服务端预览被拦下：${String(preview.blockers.length)} 条原因，未解决前不能确认：`}</p>
                 <ul>
                   {preview.blockers.map((blocker) => (
                     <li key={blocker}>{blocker}</li>
@@ -570,7 +570,7 @@ function ScopeProposalCard(props: {
             <List
               items={Object.entries(preview.resolvedAddresses)}
               keyOf={([host]) => host}
-              empty={<p>（服务端未返回地址裁决）</p>}
+              empty={<p>服务端未返回地址裁决</p>}
               render={([host, addresses]) =>
                 addresses.length === 0 ? (
                   <span>
@@ -597,9 +597,9 @@ function ScopeProposalCard(props: {
               {'动作权限 '}
               {preview.dualConfirmed ? <Badge text="已二次确认" tone="done" /> : null}
             </h4>
-            <p>{`启用：${preview.enabledActionClasses.join('、') || '（无）'}`}</p>
-            <p>{`禁用：${preview.disabledActionClasses.join('、') || '（无）'}`}</p>
-            <p>{`逐动作放行：${preview.perActionApprovalClasses.join('、') || '（无）'}`}</p>
+            <p>{`启用：${preview.enabledActionClasses.join('、') || '无'}`}</p>
+            <p>{`禁用：${preview.disabledActionClasses.join('、') || '无'}`}</p>
+            <p>{`逐动作放行：${preview.perActionApprovalClasses.join('、') || '无'}`}</p>
             {preview.enabledDisabledClasses.length === 0 ? null : (
               <p>{`默认禁用类别：${preview.enabledDisabledClasses.join('、')}`}</p>
             )}
@@ -609,15 +609,15 @@ function ScopeProposalCard(props: {
             <List
               items={preview.stopConditions}
               keyOf={(condition) => condition}
-              empty={<p>（服务端未给出停止条件）</p>}
+              empty={<p>服务端未给出停止条件</p>}
               render={(condition) => <span>{condition}</span>}
             />
 
-            <h4>执行约束（将进入哈希）</h4>
+            <h4>执行约束 · 将进入哈希</h4>
             <List
               items={Object.entries(preview.executionConstraints)}
               keyOf={([key]) => key}
-              empty={<p>（服务端未给出执行约束）</p>}
+              empty={<p>服务端未给出执行约束</p>}
               render={([key, value]) => (
                 <span>
                   <code>{key}</code>：{typeof value === 'string' ? value : JSON.stringify(value)}
@@ -629,7 +629,7 @@ function ScopeProposalCard(props: {
             <p>
               {`确认后：范围 v${String(preview.nextScopeVersion)} · 策略 v${String(preview.nextPolicyVersion)} · ` +
                 (preview.nextPolicyEpoch === preview.currentPolicyEpoch
-                  ? `epoch 保持 ${String(preview.currentPolicyEpoch)}（首次确认没有在途动作可撤销；后续修订会推进它）`
+                  ? `epoch 保持 ${String(preview.currentPolicyEpoch)}：首次确认没有在途动作可撤销，后续修订会推进它`
                   : `epoch ${String(preview.currentPolicyEpoch)} → ${String(preview.nextPolicyEpoch)}`)}
             </p>
             <p>
@@ -643,7 +643,7 @@ function ScopeProposalCard(props: {
       </Card>
 
       <Field
-        label="行为预设（必选）"
+        label="行为预设 · 必选"
         hint="没有默认值。四档对应四种作业场景，决定注入 Agent 的行为指引与宿主侧节奏；确认后随策略快照冻结、进哈希。"
       >
         <select
@@ -657,7 +657,7 @@ function ScopeProposalCard(props: {
             }
           }}
         >
-          <option value="" disabled>请选择本作业的场景（必选）</option>
+          <option value="" disabled>请选择本作业的场景</option>
           {BEHAVIOR_PROFILES.map((profile) => (
             <option key={profile} value={profile}>{BEHAVIOR_PROFILE_LABELS[profile]}</option>
           ))}
@@ -673,7 +673,7 @@ function ScopeProposalCard(props: {
         <p className="pentest-proposal__preview-meta">{BEHAVIOR_PROFILE_HINTS[behaviorProfile]}</p>
       )}
       <Field
-        label="审批模式（必选）"
+        label="审批模式 · 必选"
         hint="没有默认值。人工审批：逐条人批；高权限：预设内且非默认禁用类别的动作由服务端自行放行，只有越界申请才找你。"
       >
         <select
@@ -687,7 +687,7 @@ function ScopeProposalCard(props: {
             }
           }}
         >
-          <option value="" disabled>请选择审批模式（必选）</option>
+          <option value="" disabled>请选择审批模式</option>
           {APPROVAL_MODES.map((mode) => (
             <option key={mode} value={mode}>{APPROVAL_MODE_LABELS[mode]}</option>
           ))}
@@ -723,7 +723,7 @@ function ScopeProposalCard(props: {
           authorizationNote.trim() === ''
             ? // Agent 提交方案时不会填这一项（工具只提交目标与动作范围，见 requestScopeConfirmation）：
               // 说清「这里为什么是空的、谁来填」，否则人类会以为界面丢了他的输入。
-              'Agent 提交方案时没有提供授权说明（它只提交目标与动作范围）；这里由你填写，确认后写进范围版本 1 的 authorization_ref'
+              'Agent 提交方案时没有提供授权说明，它只提交目标与动作范围；这里由你填写，确认后写进范围版本 1 的 authorization_ref'
             : '授权依据与有效期来源；确认后写进范围版本 1 的 authorization_ref'
         }
       >
@@ -736,7 +736,7 @@ function ScopeProposalCard(props: {
       </Field>
 
       <Field
-        label="第一阶段任务提示词（可选）"
+        label="第一阶段任务提示词 · 可选"
         hint="留空则用目标说明。这一段会作为情报收集阶段 Agent 的任务简报"
       >
         <TextArea

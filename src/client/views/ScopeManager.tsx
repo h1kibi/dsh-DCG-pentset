@@ -58,9 +58,9 @@ const DECISION_LABELS: Readonly<Record<ScopeDecision, string>> = {
  * 「暂时先纳入」。§5.5 只对后果有规定，对措辞没有，因此这里逐项说明后果。
  */
 const DECISION_EFFECTS: Readonly<Record<ScopeDecision, string>> = {
-  included: '纳入本轮范围：参与后续检索、扫描与验证，横向移动放行要求目标在此集合内（§10.3）。',
+  included: '纳入本轮范围：参与后续检索、扫描与验证，横向移动放行要求目标在此集合内。',
   excluded: '不纳入：本资产不参与后续任何阶段，直到下一次范围修订。',
-  pending: '不纳入：与「排除」的后果相同——未纳入的资产不参与后续任何阶段（§5.5）。差异只在于你尚未做出判断。',
+  pending: '不纳入：与「排除」的后果相同。未纳入的资产不参与后续任何阶段。差异只在于尚未做出判断。',
 };
 
 const DECISION_TONES: Readonly<Record<ScopeDecision, Tone>> = {
@@ -138,7 +138,7 @@ interface AmendmentGateInput {
 export function amendmentBlockers(input: AmendmentGateInput): readonly AmendmentBlocker[] {
   const blockers: AmendmentBlocker[] = [];
   if (input.reason.trim().length === 0) {
-    blockers.push({ code: 'reason-required', message: '修订理由必填：它随新版本一并存档（§5.5 的审计链）。' });
+    blockers.push({ code: 'reason-required', message: '修订理由必填：它随新版本一并存档。' });
   }
   if (input.engagementId === null) {
     blockers.push({ code: 'engagement-missing', message: '尚未选中 engagement：先在列表里选一个作业。' });
@@ -146,7 +146,7 @@ export function amendmentBlockers(input: AmendmentGateInput): readonly Amendment
   if (input.candidateCount === 0) {
     blockers.push({
       code: 'no-candidates',
-      message: '没有待决的内部资产：回环修订的输入是后渗透阶段报告的候选资产（§5.5）。',
+      message: '没有待决的内部资产：回环修订的输入是后渗透阶段报告的候选资产。',
     });
   }
   return blockers;
@@ -164,11 +164,11 @@ export function formatScopeTarget(target: ScopeTarget): string {
         ? '默认端口 80/443'
         : '无端口维度';
   } else if (target.ports.some((range) => range.from === ANY_PORT.from && range.to === ANY_PORT.to)) {
-    ports = '任意端口（显式）';
+    ports = '显式任意端口';
   } else {
     ports = target.ports.map((range) => `${String(range.from)}-${String(range.to)}`).join('、');
   }
-  const wildcard = target.wildcardSubdomain === true ? '（含子域通配）' : '';
+  const wildcard = target.wildcardSubdomain === true ? ' · 含子域通配' : '';
   return `${target.kind} ${target.value}${wildcard} · ${protocols} · ${ports}`;
 }
 
@@ -265,13 +265,13 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
       <Card title="当前范围版本">
         {props.readEndpointGap === undefined ? null : (
           <p className="pentest-scope__gap">
-            {`端点缺口：控制台方法表未导出 ${props.readEndpointGap}，范围与历史版本只能渲染调用方注入的数据（写端点 amendScope 已在表里）。`}
+            {`端点缺口：控制台方法表未导出 ${props.readEndpointGap}，范围与历史版本只能渲染调用方注入的数据；写端点 amendScope 已在表里。`}
           </p>
         )}
         {props.snapshot.conflict ? (
           <ErrorBar
             code="stale_state_version"
-            message="另一个界面先提交了：已重读最新状态（§15.4）。请基于当前版本重新提交修订。"
+            message="另一个界面先提交了：已重读最新状态。需基于当前版本重新提交修订。"
             tone="attention"
           />
         ) : null}
@@ -290,7 +290,7 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
           <>
             <div className="pentest-scope__summary">
               <Stat label="当前版本" value={`v${formatCount(props.current.version)}`} tone="active" />
-              <Stat label="所属迭代" value={`第 ${formatCount(props.current.iteration)} 轮`} hint="回环会同时递增迭代计数与范围版本（§5.5）" />
+              <Stat label="所属迭代" value={`第 ${formatCount(props.current.iteration)} 轮`} hint="回环会同时递增迭代计数与范围版本" />
               <Stat label="目标条目" value={formatCount(props.current.targets.length)} />
               <Stat
                 label="排除条目"
@@ -307,11 +307,11 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
               <Stat label="生成时间" value={formatTimestamp(props.current.createdAt, now)} />
             </div>
 
-            <Field label="目标清单（纳入当前范围）">
+            <Field label="目标清单：纳入当前范围">
               <List
                 items={props.current.targets}
                 keyOf={(target) => `${target.kind}:${target.value}`}
-                empty={<Empty title="目标清单为空" reason="没有纳入任何目标时，任何触及目标的动作都会被范围判定拒绝（§10.2.2）。" />}
+                empty={<Empty title="目标清单为空" reason="没有纳入任何目标时，任何触及目标的动作都会被范围判定拒绝。" />}
                 render={(target) => <span className="pentest-scope__target">{formatScopeTarget(target)}</span>}
               />
             </Field>
@@ -330,11 +330,11 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
         )}
       </Card>
 
-      <Card title={`回环修订：待决内部资产（${formatCount(props.candidateAssets.length)} 项）`}>
+      <Card title={`回环修订：待决内部资产 · ${formatCount(props.candidateAssets.length)} 项`}>
         <p className="pentest-scope__rule">
-          §5.5：内网发现的主机
+          内网发现的主机
           <strong>默认不在授权范围内</strong>
-          。逐项三选一——「纳入」进本轮范围，「排除」与「待确认」
+          。逐项三选一：「纳入」进本轮范围，「排除」与「待确认」
           <strong>都不纳入</strong>
           ，未纳入的资产不参与后续任何阶段的检索、扫描或验证。
         </p>
@@ -342,7 +342,7 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
         <Table
           columns={[
             { key: 'asset', header: '候选资产' },
-            { key: 'origin', header: '发现来源（§5.5）' },
+            { key: 'origin', header: '发现来源' },
             { key: 'decision', header: '三选一' },
             { key: 'effect', header: '后果' },
           ]}
@@ -398,7 +398,7 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
           empty={
             <Empty
               title="没有待决的内部资产"
-              reason="回环修订只在后渗透阶段报告了内部可见资产时才需要（§5.5）。若要修订范围本身，请走创建 engagement 时的授权向导。"
+              reason="回环修订只在后渗透阶段报告了内部可见资产时才需要。若要修订范围本身，走创建 engagement 时的授权向导。"
             />
           }
         />
@@ -414,19 +414,19 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
             label="待确认"
             value={formatCount(pendingCount)}
             tone={pendingCount === 0 ? 'neutral' : 'attention'}
-            hint="不纳入——与「排除」后果相同，差异只在于尚未判断（§5.5）"
+            hint="不纳入：与「排除」后果相同，差异只在于尚未判断"
           />
         </div>
 
-        <Field label="授权依据（可选）" hint="留痕用：原授权文件的覆盖范围或补充授权引用。本部署不要求授权凭据——留空也能提交。">
+        <Field label="授权依据" hint="留痕用：原授权文件的覆盖范围或补充授权引用。本部署不要求授权凭据，留空也能提交。">
           <TextInput
             value={authorizationRef}
             onChange={setAuthorizationRef}
-            placeholder="例如：SOW-2026-014 §3.2 内部网段 / 补充授权邮件 2026-09-12"
+            placeholder="例如：SOW-2026-014 第 3.2 节内部网段 / 补充授权邮件 2026-09-12"
           />
         </Field>
 
-        <Field label="修订理由（必填）">
+        <Field label="修订理由">
           <TextArea
             value={reason}
             onChange={setReason}
@@ -438,7 +438,7 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
         <p className="pentest-scope__consequence" role="note">
           {'提交后会生成'}
           <strong>{`新的范围版本 v${formatCount((props.current?.version ?? 0) + 1)}`}</strong>
-          {'，递增策略 epoch 并中止按旧 epoch 签发的在途动作（§10.3.1）。绑定旧版本的放行凭证随即失效，需由会话重新申请。旧版本保持可读。'}
+          {'，递增策略 epoch 并中止按旧 epoch 签发的在途动作。绑定旧版本的放行凭证随即失效，需由会话重新申请。旧版本保持可读。'}
         </p>
 
         {ready ? null : (
@@ -461,7 +461,7 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
         />
       </Card>
 
-      <Card title={`历史版本（${formatCount(props.history.length)} 个，只读）`}>
+      <Card title={`历史版本 · ${formatCount(props.history.length)} 个 · 只读`}>
         <Table
           columns={[
             { key: 'version', header: '版本' },
@@ -500,7 +500,7 @@ export function ScopeManager(props: ScopeManagerProps): ReactNode {
           empty={
             <Empty
               title="还没有历史版本"
-              reason="第一次范围修订（回环）后，这里会列出所有旧版本——它们保持可读，便于事后核对当时授权的是什么（§5.5）。"
+              reason="第一次范围修订后，这里会列出所有旧版本，保持可读，便于事后核对当时授权的内容。"
             />
           }
         />

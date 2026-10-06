@@ -40,7 +40,7 @@ export function PhaseTrack(props: PhaseTrackProps): ReactNode {
       <Card title="阶段轨道">
         <Empty
           title="尚未开始任何阶段"
-          reason="人类在控制台选择首个阶段并启动 Agent 后，这里会显示五个节点的进度"
+          reason="在控制台选择首个阶段并启动 Agent 后，这里显示五个节点的进度"
         />
       </Card>
     );
@@ -58,7 +58,7 @@ export function PhaseTrack(props: PhaseTrackProps): ReactNode {
   const loopEdge = track.edges.find((e) => e.kind === 'loop') ?? null;
 
   return (
-    <Card title={`阶段轨道（第 ${String(track.currentIteration)} 轮迭代）`}>
+    <Card title={`阶段轨道 · 第 ${String(track.currentIteration)} 轮迭代`}>
       <div className="pentest-track" role="list">
         {track.nodes.map((node, index) => (
           <Fragment key={node.phase}>
@@ -116,7 +116,7 @@ function EdgeConnector(props: { readonly edge: PhaseEdge | null; readonly reache
     <div
       className={toneClass('pentest-track__edge', edgeTone(edge.kind))}
       data-edge-kind={edge.kind}
-      title={edge.evidence.length === 0 ? label : `${label}（依据 ${String(edge.evidence.length)} 条会话关联）`}
+      title={edge.evidence.length === 0 ? label : `${label} · 依据 ${String(edge.evidence.length)} 条会话关联`}
       aria-hidden="true"
     >
       <span className="pentest-track__edge-label">{label}</span>
@@ -182,7 +182,7 @@ function PhaseNodeView(props: {
           {truncate(node.latestNote, props.noteMaxChars)}
           {/* 派生便签必须标注：人类需要知道那不是 Agent 写的（§6.2.2） */}
           {node.latestNoteSource === 'derived' ? (
-            <em className="pentest-track__node-note-source">（自动摘要）</em>
+            <em className="pentest-track__node-note-source">自动摘要</em>
           ) : null}
           {node.latestNoteAt === null ? null : (
             <em className="pentest-track__node-note-time">
@@ -209,11 +209,11 @@ function LoopArc(props: { readonly edge: PhaseEdge }): ReactNode {
     <div
       className="pentest-track__loop"
       data-edge-kind="loop"
-      title={`回环 ${String(props.edge.iterations.length)} 次（迭代 ${props.edge.iterations.join('、')}）：范围已修订、新一轮开始`}
+      title={`回环 ${String(props.edge.iterations.length)} 次 · 迭代 ${props.edge.iterations.join('、')}：范围已修订、新一轮开始`}
     >
       <span className="pentest-track__loop-label">
         回环 → 情报收集
-        {props.edge.iterations.length === 0 ? null : `（第 ${props.edge.iterations.join('、')} 轮）`}
+        {props.edge.iterations.length === 0 ? null : ` · 第 ${props.edge.iterations.join('、')} 轮`}
       </span>
     </div>
   );

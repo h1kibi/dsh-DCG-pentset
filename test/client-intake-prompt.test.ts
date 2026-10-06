@@ -297,7 +297,7 @@ test('Agent 会话里的阶段横条也必须能推进：人类就在这一页�
       }),
     ),
   );
-  assert.ok(html.includes('进入下一阶段（威胁建模）'), `横条卡里必须出现推进按钮：${html.slice(0, 300)}`);
+  assert.ok(html.includes('进入下一阶段：威胁建模'), `横条卡里必须出现推进按钮：${html.slice(0, 300)}`);
   assert.ok(!html.includes('disabled=""'), '闸门都成立时按钮必须可点');
 });
 

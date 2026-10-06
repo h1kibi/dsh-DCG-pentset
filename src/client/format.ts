@@ -196,7 +196,7 @@ export function formatTimestamp(value: string | null | undefined, now?: Date): s
   const reference = now ?? new Date();
   const deltaMs = reference.getTime() - ts;
   // 一小时内的用相对时间：运维看的是「多久之前」，而不是具体时刻
-  if (deltaMs >= 0 && deltaMs < 60 * 60 * 1000) return `${base}（${relative(deltaMs)}前）`;
+  if (deltaMs >= 0 && deltaMs < 60 * 60 * 1000) return `${base} · ${relative(deltaMs)}前`;
   return base;
 }
 

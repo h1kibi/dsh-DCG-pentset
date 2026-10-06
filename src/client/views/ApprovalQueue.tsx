@@ -64,8 +64,8 @@ export function noticeFailureOf(
   return {
     code: 'approval/notice-undelivered',
     message:
-      '放行已记录（凭证已生效），但没能唤醒 Agent 会话——宿主重启过，旧会话不属于当前进程。' +
-      '请用「插话」提醒它继续，或在当前阶段「重做」后重新申请放行；这条凭证到期会自动失效。',
+      '放行已记录，凭证已生效；没能唤醒 Agent 会话：宿主重启后，旧会话不属于当前进程。' +
+      '继续方式：「插话」提醒，或在当前阶段「重做」后重新申请放行。凭证到期自动失效。',
   };
 }
 
@@ -74,7 +74,7 @@ export function noticeFailureOf(
 // （`deliverApprovalNotice`），所以这里不设闸门，只在文案上说清它去哪儿。
 
 /** 必需字段读出来是 null 时的占位。它显式表示「这里本该有值」，而不是「值是空的」。 */
-const MISSING = '（记录缺失）';
+const MISSING = '记录缺失';
 
 /** 决定人类能否看懂「自己要批什么」的那些字段。缺任何一个都不许放行。 */
 function missingFields(item: ApprovalItem): readonly string[] {
@@ -111,8 +111,8 @@ type ApprovalResolution =
 /** 处置状态的中文标签。键与 `ApprovalResolution` 对齐，缺项会在类型层暴露。 */
 const RESOLUTION_LABELS: Readonly<Record<ApprovalResolution, string>> = {
   awaiting: '待放行',
-  approved: '已放行（待执行）',
-  consumed: '已放行 → 已完成',
+  approved: '已放行 · 待执行',
+  consumed: '已放行 · 已完成',
   expired: '已过期',
   rejected: '已拒绝',
   revoked: '已撤销',
@@ -169,7 +169,7 @@ const COLUMNS = [
   { key: 'target', header: '规范化目标' },
   { key: 'command', header: '即将执行的完整命令' },
   { key: 'class', header: '动作类别与风险' },
-  { key: 'binding', header: '请求方与绑定（理由 / 范围版本）' },
+  { key: 'binding', header: '请求方与绑定 · 理由 / 范围版本' },
   { key: 'expiry', header: '有效期与状态' },
   { key: 'actions', header: '操作' },
 ] as const;
@@ -329,7 +329,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
   // 这与「过期不复活」同理：不确定就拒绝，绝不因为「likely 没问题」而放行。
   const missing = missingFields(item);
   if (missing.length > 0) {
-    const why = `放行记录不完整（缺少：${missing.join('、')}），无法确认将要执行的内容，因此不得放行（§10.3.1）。请让 Agent 重新申请。`;
+    const why = `放行记录不完整：缺少 ${missing.join('、')}。无法确认将要执行的内容，不得放行。需由 Agent 重新申请。`;
     return {
       resolution: 'malformed',
       stateLabel: RESOLUTION_LABELS.malformed,
@@ -342,7 +342,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
       approveDisabledReason: why,
       rejectDisabledReason: null,
       revokeDisabledReason: why,
-      guidance: '可以拒绝它（拒绝不需要看到命令全文）。要执行则必须重新申请一条完整记录。',
+      guidance: '可以拒绝：拒绝不需要看到命令全文。要执行需重新申请一条完整记录。',
     };
   }
 
@@ -353,7 +353,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
     !consumed && (item.decision === 'expired' || !Number.isFinite(expiryMs) || expiryMs <= now.getTime());
 
   if (consumed) {
-    const why = '凭证已被一次执行消费：同一条命令不会被执行第二次（§10.3.1）。';
+    const why = '凭证已被一次执行消费：同一条命令不会被执行第二次。';
     return {
       resolution: 'consumed',
       stateLabel: RESOLUTION_LABELS.consumed,
@@ -371,7 +371,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
   }
 
   if (expired) {
-    const why = '已过期：过期凭证不复活（§15.2），本凭证不可放行、不可撤销。';
+    const why = '已过期：过期凭证不复活。本凭证不可放行、不可撤销。';
     return {
       resolution: 'expired',
       stateLabel: RESOLUTION_LABELS.expired,
@@ -384,12 +384,12 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
       approveDisabledReason: why,
       rejectDisabledReason: why,
       revokeDisabledReason: why,
-      guidance: '该动作不会执行。需放行时由该会话重新申请——旧凭证不会被复活，也不会被自动重试（§15.2）。',
+      guidance: '该动作不会执行。需放行时由该会话重新申请：旧凭证不复活，也不自动重试。',
     };
   }
 
   if (item.decision === 'rejected') {
-    const why = '该凭证已被人类拒绝（终态）。';
+    const why = '该凭证已被拒绝，已是终态。';
     return {
       resolution: 'rejected',
       stateLabel: RESOLUTION_LABELS.rejected,
@@ -402,17 +402,17 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
       approveDisabledReason: why,
       rejectDisabledReason: why,
       revokeDisabledReason: why,
-      guidance: '如需继续，由该会话重新申请放行（§10.3.1：失效后重新调用会被拒绝并提示需要重新申请）。',
+      guidance: '如需继续，由该会话重新申请放行：失效后重新调用会被拒绝并提示重新申请。',
     };
   }
 
   if (item.decision === 'revoked') {
-    const why = '该凭证已被人类撤销（终态）。';
+    const why = '该凭证已被撤销，已是终态。';
     return {
       resolution: 'revoked',
       stateLabel: RESOLUTION_LABELS.revoked,
       stateTone: 'danger',
-      note: '撤销后凭证失效，在途动作由策略 epoch 终止（§10.3.1）。',
+      note: '撤销后凭证失效，在途动作由策略 epoch 终止。',
       interactive: false,
       canApprove: false,
       canReject: false,
@@ -425,7 +425,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
   }
 
   if (item.decision === 'superseded') {
-    const why = '该凭证已被取代（目标、命令、范围版本或策略版本变化，§10.3.1）。';
+    const why = '该凭证已被取代：目标、命令、范围版本或策略版本变化。';
     return {
       resolution: 'superseded',
       stateLabel: RESOLUTION_LABELS.superseded,
@@ -438,7 +438,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
       approveDisabledReason: why,
       rejectDisabledReason: why,
       revokeDisabledReason: why,
-      guidance: '看最新那条放行记录——被取代的这条不能再放行。',
+      guidance: '以最新那条放行记录为准：被取代的这条不能再放行。',
     };
   }
 
@@ -447,7 +447,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
       resolution: 'approved',
       stateLabel: RESOLUTION_LABELS.approved,
       stateTone: 'active',
-      note: '凭证已签发：等该会话携带 approval_id 重新调用执行（§10.3.1）。执行前服务端会重新裁决范围、策略与会话租约。',
+      note: '凭证已签发：等该会话携带 approval_id 重新调用执行。执行前服务端会重新裁决范围、策略与会话租约。',
       interactive: true,
       canApprove: false,
       canReject: false,
@@ -465,7 +465,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
     resolution: 'awaiting',
     stateLabel: RESOLUTION_LABELS.awaiting,
     stateTone: 'attention',
-    note: '等你判断：放行后 Agent 会携带 approval_id 重新调用执行（§10.3.1）。',
+    note: '待判断：放行后 Agent 会携带 approval_id 重新调用执行。',
     interactive: true,
     canApprove: true,
     canReject: true,
@@ -473,7 +473,7 @@ export function approvalGateOf(item: ApprovalItem, reason: string, now: Date): A
     approveDisabledReason: null,
     rejectDisabledReason: null,
     revokeDisabledReason: null,
-    guidance: '补充选填：填了会随决定投递给 Agent，作为它下一步的上下文。',
+    guidance: '补充选填：填了会随决定投递给 Agent，作为下一步的上下文。',
   };
 }
 
@@ -562,14 +562,14 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
               <Badge
                 text="逐次放行"
                 tone="attention"
-                hint="§10.3：该类别逐目标逐动作放行，凭证一次性消费"
+                hint="该类别逐目标逐动作放行，凭证一次性消费"
               />
             ) : null}
             {Object.hasOwn(DEFAULT_DISABLED, row.actionClass) ? (
               <Badge
                 text="默认不启用"
                 tone="danger"
-                hint="§10.3：该类别默认不启用，需在 engagement 策略中显式开启并双人确认"
+                hint="该类别默认不启用，需在 engagement 策略中显式开启并双人确认"
               />
             ) : null}
             <span className="pentest-approval__risk-tier">{RISK_TIER_LABELS[row.actionClass]}</span>
@@ -597,7 +597,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
             ) : (
               <span
                 className="pentest-approval__scope-version"
-                title={`策略 epoch ${formatCount(row.policyEpoch)}：范围或策略变化会递增 epoch 并中止在途动作（§10.3.1）`}
+                title={`策略 epoch ${formatCount(row.policyEpoch)}：范围或策略变化会递增 epoch 并中止在途动作`}
               >
                 {`范围版本 v${formatCount(row.scopeVersion)} · 策略 epoch ${formatCount(row.policyEpoch)}`}
               </span>
@@ -622,14 +622,14 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
         return (
           <div className="pentest-approval__actions" data-approval-id={row.id} data-decision={row.decision}>
             {gate.interactive ? (
-              <Field label="补充（选填）" hint="填了会随决定进审计，并投递给 Agent 作为下一步的上下文补充">
+              <Field label="补充说明" hint="选填。填了会随决定进审计，并投递给 Agent 作为下一步的上下文补充">
                 <TextArea
                   value={reason}
                   onChange={(next) => {
                     setReasons((current) => ({ ...current, [row.id]: next }));
                   }}
                   rows={2}
-                  placeholder="可选：给 Agent 的补充说明（例如「只测这一个端口，别扩散」）"
+                  placeholder="可选：给 Agent 的补充说明，例如「只测这一个端口，别扩散」"
                 />
               </Field>
             ) : null}
@@ -684,7 +684,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
                       purpose: revision.purpose,
                     };
                   } catch {
-                    setFailure({ code: 'client/invalid-modified-plan', message: '修改计划的参数必须是合法 JSON 对象。' });
+                    setFailure({ code: 'client/invalid-modified-plan', message: '修改计划的参数需为 JSON 对象。' });
                     return;
                   }
                 }
@@ -720,11 +720,11 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
   };
 
   return (
-    <Card title={`放行队列（${formatCount(pending)} 条待判断 / ${formatCount(props.items.length)} 条）`}>
+    <Card title={`放行队列 · ${formatCount(pending)} 条待判断 / ${formatCount(props.items.length)} 条`}>
       <p className="pentest-approval__rule">
-        §10.3.1 approve-what-you-see：你批准的是
+        批准对象是
         <strong>即将执行的这条命令</strong>
-        ，不是一个抽象动作名。凭证绑定会话、目标、命令、范围版本与有效期；目标、命令、范围或状态任一变化，旧凭证失效。
+        ，不是抽象动作名。凭证绑定会话、目标、命令、范围版本与有效期；目标、命令、范围或状态任一变化，旧凭证失效。
       </p>
 
       {props.readEndpointGap === undefined ? null : (
@@ -736,7 +736,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
       {props.snapshot.conflict ? (
         <ErrorBar
           code="stale_state_version"
-          message="另一个界面先提交了：已重读最新状态（§15.4）。请基于当前版本重新判断。"
+          message="另一个界面先提交了：已重读最新状态。请基于当前版本重新判断。"
           tone="attention"
         />
       ) : null}
@@ -754,7 +754,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
         empty={
           <Empty
             title="放行队列为空"
-            reason="该 engagement 当前没有待处理的放行申请。Worker 调用 pentest_request_action_approval 申请高风险动作放行后，条目会出现在这里（§10.3.1）。"
+            reason="该 engagement 当前没有待处理的放行申请。Worker 调用 pentest_request_action_approval 申请高风险动作放行后，条目会出现在这里。"
           />
         }
       />

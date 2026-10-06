@@ -125,7 +125,7 @@ export function ConsoleShell(props: ConsoleShellProps): ReactNode {
     if (!scopePending) return null;
     // 公共记忆是作业级的（与范围无关），范围确认前也允许改。
     if (candidate === 'publicmemory') return null;
-    return '范围尚未确认：先在下方「授权范围 intake」里确认范围方案，或点上方「新建 engagement」走授权向导（§13.1）';
+    return '范围尚未确认：先在下方「授权范围 intake」里确认范围方案，或点上方「新建 engagement」走授权向导';
   };
   const enabledPanels = CONSOLE_PANELS.filter((candidate) => lockReasonOf(candidate) === null);
 

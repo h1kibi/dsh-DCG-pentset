@@ -143,7 +143,7 @@ export function signBlockers(input: SignGateInput): readonly ExportGateBlocker[]
   if (input.undisposedCount > 0) {
     blockers.push({
       code: 'undisposed-findings',
-      message: `还有 ${formatCount(input.undisposedCount)} 条结论未处置：§8.9 不允许带着未处置条目出报告`,
+      message: `还有 ${formatCount(input.undisposedCount)} 条结论未处置，不能带未处置条目出报告`,
     });
   }
   if (input.engagementId === null) {
@@ -152,13 +152,13 @@ export function signBlockers(input: SignGateInput): readonly ExportGateBlocker[]
   if (input.draftVersion === null) {
     blockers.push({
       code: 'draft-missing',
-      message: '还没有报告草稿：先完成技术测试（finishTechnicalTesting）生成草稿',
+      message: '还没有报告草稿：先完成技术测试 finishTechnicalTesting 生成草稿',
     });
   }
   if (input.contentHash === null) {
     blockers.push({
       code: 'content-hash-missing',
-      message: '尚无内容哈希：Host 未返回报告版本引用，§8.9 的签字以内容哈希为准',
+      message: '尚无内容哈希：Host 未返回报告版本引用，签字以内容哈希为准',
     });
   }
   if (input.mainStatus === null) {
@@ -166,7 +166,7 @@ export function signBlockers(input: SignGateInput): readonly ExportGateBlocker[]
   } else if (input.mainStatus !== 'report_ready') {
     blockers.push({
       code: 'not-report-ready',
-      message: `只有报告就绪状态可以签字（当前：${mainStatusLabel(input.mainStatus)}）`,
+      message: `只有报告就绪状态可以签字，当前 ${mainStatusLabel(input.mainStatus)}`,
     });
   }
   return blockers;
@@ -187,7 +187,7 @@ export function exportBlockers(input: ExportGateInput): readonly ExportGateBlock
   if (!input.endpointExported) {
     blockers.push({
       code: 'endpoint-missing',
-      message: `控制台未导出端点 ${REPORT_EXPORT_METHOD_NAME}（console/method-unavailable）：导出发不出去`,
+      message: `控制台未导出端点 ${REPORT_EXPORT_METHOD_NAME}：console/method-unavailable，导出发不出去`,
     });
   }
   if (!input.wired) {
@@ -302,12 +302,12 @@ export function ReportExport(props: ReportExportProps): ReactNode {
   };
 
   return (
-    <Card title="报告签字与导出（§8.9）">
+    <Card title="报告签字与导出">
       <div className="pentest-report-export__summary">
         <Stat
           label="报告版本"
           value={props.draft === null ? '—' : `v${formatCount(props.draft.version)}`}
-          hint={props.draft === null ? 'Host 还没有报告草稿' : '报告版本号在 engagement 级锁内分配（§15.4）'}
+          hint={props.draft === null ? 'Host 还没有报告草稿' : '报告版本号在 engagement 级锁内分配'}
         />
         <Stat
           label="内容哈希"
@@ -315,21 +315,21 @@ export function ReportExport(props: ReportExportProps): ReactNode {
           tone={contentHash === null ? 'attention' : 'neutral'}
           hint={
             contentHash === null
-              ? '尚无哈希：签字以内容哈希为准，没有哈希不能签字（§8.9）'
-              : `签字绑定到该哈希（服务端记入 human_decisions.subject_id）：${contentHash}`
+              ? '尚无哈希：签字以内容哈希为准，没有哈希不能签字'
+              : `签字绑定到该哈希 · 服务端记入 human_decisions.subject_id：${contentHash}`
           }
         />
         <Stat
           label="未处置结论"
           value={formatCount(props.undisposedCount)}
           tone={props.undisposedCount > 0 ? 'danger' : 'done'}
-          hint="Host 的 listUndisposed 结果；> 0 时签字被硬阻断（§8.9）"
+          hint="Host 的 listUndisposed 结果；> 0 时签字被硬阻断"
         />
         <Stat
           label="主状态"
           value={mainStatus === null ? '—' : mainStatusLabel(mainStatus)}
           tone={signed ? 'done' : mainStatus === 'report_ready' ? 'active' : 'neutral'}
-          hint="状态来自 Host 快照（§4.1：客户端不持有权威状态）"
+          hint="状态来自 Host 快照；客户端不持有权威状态"
         />
         <Stat
           label="运行标记"
@@ -343,11 +343,11 @@ export function ReportExport(props: ReportExportProps): ReactNode {
       */}
       {signed ? (
         <p className="pentest-report-export__signed">
-          报告已签字：Host 状态为「已完成」（决策经 signReport 落库，非模型声明）。
+          报告已签字：Host 状态为「已完成」，决策经 signReport 落库。
         </p>
       ) : null}
 
-      <Field label="需人工注意的限制项" hint="报告投影里的限制条件（§6.2.1 要求列出，不能省略）">
+      <Field label="需人工注意的限制项" hint="报告投影里的限制条件，不能省略">
         <List
           items={limitations}
           keyOf={(item) => item.key}
@@ -355,7 +355,7 @@ export function ReportExport(props: ReportExportProps): ReactNode {
           empty={
             <Empty
               title="未标注限制项"
-              reason="这不等于没有限制：报告投影未提供限制条件，签字前请人工确认（§6.2.1）"
+              reason="这不等于没有限制：报告投影未提供限制条件，签字前需人工确认"
             />
           }
         />
@@ -363,8 +363,8 @@ export function ReportExport(props: ReportExportProps): ReactNode {
 
       {MISSING_CONSOLE_METHODS.length === 0 ? null : (
         <p className="pentest-report-export__gap">
-          {`端点缺口：以下报告面端点不在控制台方法表里（console/method-unavailable）——${MISSING_CONSOLE_METHODS.join('、')}。`}
-          {' 缺哪个就少哪条链路；导出另外还要求调用方经 onExport 接线（本视图不直接发 RPC）。'}
+          {`端点缺口：以下报告面端点不在控制台方法表里：console/method-unavailable，${MISSING_CONSOLE_METHODS.join('、')}。`}
+          {' 缺哪个就少哪条链路；导出另外还要求调用方经 onExport 接线，本视图不直接发 RPC。'}
         </p>
       )}
 
@@ -378,7 +378,7 @@ export function ReportExport(props: ReportExportProps): ReactNode {
           kind="primary"
           tone="done"
           disabled={signGate.length > 0 || busy || signed}
-          reason={signed ? '报告已签字（Host 状态已完成）' : (signGate[0]?.message ?? '正在提交：等待上一次操作返回')}
+          reason={signed ? '报告已签字：Host 状态已完成' : (signGate[0]?.message ?? '正在提交：等待上一次操作返回')}
           onClick={sign}
         />
         {(['markdown', 'json'] as const).map((format) => (
@@ -397,9 +397,9 @@ export function ReportExport(props: ReportExportProps): ReactNode {
 
       {signOutcome === null ? null : signOutcome.ok ? (
         <Badge
-          text={signOutcome.replay ? '签字已记录（幂等重放，未重复执行）' : '签字已记录'}
+          text={signOutcome.replay ? '签字已记录，幂等重放未重复执行' : '签字已记录'}
           tone="done"
-          hint="结果来自 Host RPC（§15.3）"
+          hint="结果来自 Host RPC"
         />
       ) : (
         <ErrorBar code={signOutcome.code} message={signOutcome.message} />
@@ -413,10 +413,10 @@ export function ReportExport(props: ReportExportProps): ReactNode {
           <Stat
             label="导出内容哈希"
             value={truncate(exportOutcome.result.contentHash, 16)}
-            hint="与签字用的哈希比对：不一致说明导出的是另一个版本（§8.9）"
+            hint="与签字用的哈希比对：不一致说明导出的是另一个版本"
           />
           <p className="pentest-report-export__hint">
-            完整导出内容由宿主的下载通道交付，不在本页内联（避免把报告正文灌进 DOM）。
+            完整导出内容由宿主的下载通道交付，不在本页内联。
           </p>
         </div>
       ) : (

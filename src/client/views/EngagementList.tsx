@@ -94,8 +94,8 @@ export function engagementActionAvailability(
     // 人类会以为上次那一下没生效（2026-10-05 实测：确实这么误会了）。
     purgeDisabled: purged,
     purgeReason: purged
-      ? '内容已清空（不可恢复）；审计骨架按 §9.5 永久保留'
-      : '两段确认后才能点最终删除',
+      ? '内容已清空，不可恢复；审计骨架永久保留'
+      : '两段确认后方可最终删除',
   };
 }
 
@@ -179,7 +179,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
       .previewEngagementPurge(id)
       .then((value) => {
         if (value === null) {
-          setActionError('预览读不到（未选中作业或服务端未返回）');
+          setActionError('预览读不到：未选中作业或服务端未返回');
           return;
         }
         setPurge({
@@ -237,7 +237,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
     ) : (
       <Empty
         title="还没有 engagement"
-        reason="点上方「新建 engagement」起个名字、填一个授权目标即可开始；建立不等于启动 Agent（§1.2）"
+        reason="上方「新建 engagement」起名并填一个授权目标即可开始；建立不等于启动 Agent"
       />
     );
 
@@ -273,7 +273,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
           disabled={props.onRequestCreate === undefined}
           reason={
             props.onRequestCreate === undefined
-              ? '调用方未接入新建回调（onRequestCreate）'
+              ? '调用方未接入新建回调 onRequestCreate'
               : undefined
           }
         />
@@ -286,7 +286,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
             checked={showArchived}
             onChange={() => { setShowArchived((value) => !value); }}
           />
-          <span>{`显示已归档（${formatCount(props.engagements.filter((item) => item.archivedAt != null).length)}）`}</span>
+          <span>{`显示已归档：${formatCount(props.engagements.filter((item) => item.archivedAt != null).length)}`}</span>
         </label>
         {props.onFilterChange === undefined ? null : (
           <Field label="筛选" hint="按名称、标识、阶段或状态过滤；清空即显示全部">
@@ -316,21 +316,21 @@ export function EngagementList(props: EngagementListProps): ReactNode {
         <div className="pentest-engagement-list__purge">
           <strong>{`清空「${purge.name}」的内容`}</strong>
           <p className="pentest-engagement-list__purge-warn">
-            {`将删除 ${formatCount(purge.total)} 行内容（${Object.entries(purge.counts)
+            {`将删除 ${formatCount(purge.total)} 行内容：${Object.entries(purge.counts)
               .filter(([, n]) => n > 0)
               .sort((a, b) => b[1] - a[1])
               .slice(0, 6)
               .map(([table, n]) => `${table} ${formatCount(n)}`)
-              .join('、')}）。**这一步不可恢复**：归档可以撤销，清空不行。`}
+              .join('、')}。这一步不可恢复：归档可以撤销，清空不行。`}
           </p>
           <p className="pentest-engagement-list__purge-note">
-            {`按 §9.5，审计账本行**不能删除**（只允许追加）：${formatCount(purge.retainedTotal)} 行` +
-              `（${Object.entries(purge.retained)
+            {`审计账本行不能删除，只允许追加：${formatCount(purge.retainedTotal)} 行，其中 ` +
+              `${Object.entries(purge.retained)
                 .filter(([, n]) => n > 0)
                 .sort((a, b) => b[1] - a[1])
                 .slice(0, 5)
                 .map(([table, n]) => `${table} ${formatCount(n)}`)
-                .join('、')}）连同作业行一起保留——作业在列表里显示为「已清理」，不再有内容可读。`}
+                .join('、')} 连同作业行一起保留。作业在列表里显示为「已清理」，不再有内容可读。`}
           </p>
           <GateList blockers={purge.blockers} />
           <Field
@@ -345,7 +345,7 @@ export function EngagementList(props: EngagementListProps): ReactNode {
           </Field>
           <div className="pentest-engagement-list__purge-actions">
             <Button
-              label={busyId === purge.id ? '清空中…' : '确认清空内容（不可恢复）'}
+              label={busyId === purge.id ? '清空中…' : '确认清空内容'}
               kind="secondary"
               onClick={confirmPurge}
               disabled={
@@ -355,9 +355,9 @@ export function EngagementList(props: EngagementListProps): ReactNode {
               }
               reason={
                 purge.blockers.length > 0
-                  ? '上面还有拦路的项：先解决它们'
+                  ? '有未解决的拦截项：先解决它们'
                   : purge.confirmName.trim() !== purge.name
-                    ? '作业名不一致：请原样输入'
+                    ? '作业名不一致：需原样输入'
                     : undefined
               }
             />
@@ -404,7 +404,7 @@ function renderCell(
             onClick={() => { props.onSelect(item.id); }}
           />
           {selected ? <Badge text="当前" tone="active" /> : null}
-          {item.purgedAt == null ? null : <Badge text="已清理" tone="attention" hint="内容已清空；审计账本行按 §9.5 保留" />}
+          {item.purgedAt == null ? null : <Badge text="已清理" tone="attention" hint="内容已清空；审计账本行永久保留" />}
           {item.purgedAt == null && item.archivedAt != null ? <Badge text="已归档" tone="neutral" /> : null}
         </span>
       );

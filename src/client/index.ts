@@ -322,7 +322,7 @@ function intakeNotice(snapshot: ConsoleSnapshot): string | null {
   const selected = snapshot.engagements.find((entry) => entry.id === snapshot.selectedEngagementId);
   if (selected === undefined || !selected.name.startsWith('未命名任务')) return null;
   return (
-    '这份作业是打开控制台时自动建立的（名字形如「未命名任务 …」）：它绑定当前会话，用来承载授权范围对话。' +
+    '这份作业是打开控制台时自动建立的，名字形如「未命名任务 …」：它绑定当前会话，用来承载授权范围对话。' +
     '确认范围后它才成为可启动 Agent 的正式作业；想另建一份就用上方的「新建 engagement」授权向导。'
   );
 }
@@ -955,7 +955,7 @@ function renderConsole(getRpc: () => HostRpcLike | undefined, ctx: Context): Rea
     return createElement(
       'div',
       { className: 'dsh-pentest-console', 'data-stage': 'unavailable' },
-      '渗透作业控制台需要宿主的 Connection 服务（ctx.connection.rpc）才能读取数据。',
+      '渗透作业控制台需要宿主的 Connection 服务才能读取数据。',
     );
   }
   return createElement(ConnectedConsole, { rpc, ctx });
@@ -998,7 +998,7 @@ function renderUnavailable(): ReactNode {
   return createElement(
     'div',
     { className: 'dsh-pentest-console', 'data-stage': 'unavailable' },
-    '渗透作业控制台需要宿主的 Connection 服务（ctx.connection.rpc）才能读取数据。',
+    '渗透作业控制台需要宿主的 Connection 服务才能读取数据。',
   );
 }
 

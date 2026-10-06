@@ -265,7 +265,7 @@ test('报告审阅：四类分节标题恒定出现，条目按 §8.9 归类并�
   );
 
   for (const title of ['已验证结论', '已评估但不成立', '未验证候选', '待审阅']) {
-    assert.ok(html.includes(`${title}（1）`), `缺少分节或计数错误：${title}`);
+    assert.ok(html.includes(`${title} · 1`), `缺少分节或计数错误：${title}`);
   }
   assert.ok(html.includes('接受过的结论'));
   assert.ok(html.includes('没人处置的结论'));

@@ -266,13 +266,13 @@ test('RunControls：运行中渲染六个动作；**暂停不需要填理由**�
   assert.ok(!html.includes('暂停理由'), '理由输入框必须删除');
   assert.ok(!html.includes('终止理由'), '理由输入框必须删除');
   // 恢复在运行中不可用，且说明为什么（可用性说明保留——那是状态，不是要人写作文）
-  assert.ok(html.includes('只有已暂停（paused）或已阻塞（blocked）可以恢复'), '恢复的禁用原因必须出现');
+  assert.ok(html.includes('仅已暂停或已阻塞可恢复'), '恢复的禁用原因必须出现');
   // 「结束技术测试」必须在界面上有入口：服务端早就实现了这条边，但没有视图调用它，
   // 人类只能看到报告面板提示「先完成技术测试」却点不到任何按钮。
   assert.ok(html.includes('结束技术测试'), '结束技术测试必须渲染出按钮');
   // 这个快照是主状态 ready（还没启动任何 Worker）：按钮存在但不可用，且说明原因。
   assert.ok(
-    html.includes('只有「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可以结束技术测试（当前主状态：'),
+    html.includes('仅主状态为「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可结束技术测试；当前主状态：'),
     '非法起点必须给出禁用原因（按钮存在 ≠ 可用）',
   );
 });
@@ -287,7 +287,7 @@ test('RunControls：等待人工判断时「结束技术测试」可用（§5.2 
   );
   assert.ok(html.includes('结束技术测试'));
   assert.ok(
-    !html.includes('时可以结束技术测试（当前'),
+    !html.includes('可结束技术测试；当前主状态：'),
     '合法起点不得显示禁用原因——否则按钮永远点不动，等于没有入口',
   );
 });
@@ -301,7 +301,7 @@ test('RunControls：终止只要二次确认（不可撤销的防手滑），不
     }),
   );
   assert.ok(!blocked.includes('必须填写终止理由'), '不该再要求填终止理由');
-  assert.ok(blocked.includes('我确认要终止'), '二次确认必须可见——它不可撤销');
+  assert.ok(blocked.includes('确认终止，不可撤销'), '二次确认必须可见——它不可撤销');
   assert.ok(blocked.includes('需勾选二次确认'), '未勾选时的禁用原因必须写出来');
 });
 
@@ -337,7 +337,7 @@ test('HandoffPanel：没有待确认内容时给出「进入下一阶段」入�
     }),
   );
   assert.ok(html.includes('进入下一阶段'), '必须有入口，否则阶段切换在界面上走不通');
-  assert.ok(html.includes('服务端会按阶段定义和当前状态'), '要说清内容从哪来（服务端起稿，不经 Agent 的草稿回合）');
+  assert.ok(html.includes('服务端按阶段定义起草'), '要说清内容从哪来（服务端起稿，不经 Agent 的草稿回合）');
   assert.ok(!html.includes('草稿'), '界面上不该再有草稿措辞');
 });
 
@@ -350,8 +350,8 @@ test('HandoffPanel：未选中 engagement 时显示空态而不是请求入口',
       onDraft: () => {},
     }),
   );
-  assert.ok(html.includes('先选择一个 engagement'));
-  assert.ok(!html.includes('进入下一阶段（生成可编辑内容）'), '没有 engagement 就不该给出入口');
+  assert.ok(html.includes('先选择一个作业'));
+  assert.ok(!html.includes('进入下一阶段'), '没有 engagement 就不该给出入口');
 });
 
 // ───────────────────── 回环状态透传 ─────────────────────

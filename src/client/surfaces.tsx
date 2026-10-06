@@ -251,7 +251,7 @@ export function PentestStatusPill(props: {
             title:
               `当前审批模式：${APPROVAL_MODE_LABELS[facts.approvalMode]}。` +
               `点击切到「${APPROVAL_MODE_LABELS[otherMode]}」——运行中随时可切、不需要理由；` +
-              '切换会写新策略版本并推进 policy epoch（旧放行凭证与在途计划当场失效）。',
+              '切换会写新策略版本并推进 policy epoch：旧放行凭证与在途计划当场失效。',
             onClick: (event: { readonly stopPropagation: () => void }) => {
               // 状态条整体点击是「打开控制台」，这个按钮必须拦住冒泡。
               event.stopPropagation();

@@ -86,12 +86,12 @@ export function RunHeader(props: RunHeaderProps): ReactNode {
             <Stat
               label="迭代"
               value={`第 ${formatCount(state.graphIteration)} 轮`}
-              hint="每次回环（后渗透→情报收集）递增，表示攻击深度增加了一层"
+              hint="每次后渗透→情报收集的回环递增，表示攻击深度增加了一层"
             />
             <Stat
               label="状态版本"
               value={formatCount(state.stateVersion)}
-              hint="乐观锁：提交时带上它，防止覆盖另一个界面的改动（§15.4）"
+              hint="乐观锁：提交时带上它，防止覆盖另一个界面的改动"
             />
           </>
         )}
@@ -99,7 +99,7 @@ export function RunHeader(props: RunHeaderProps): ReactNode {
         <Stat
           label="范围版本"
           value={props.scopeVersion === null || props.scopeVersion === undefined ? '—' : `v${String(props.scopeVersion)}`}
-          hint="会话绑定范围版本；修订后新会话才用新版本（§10.2.2）"
+          hint="会话绑定范围版本；修订后新会话才用新版本"
         />
 
         <Stat
@@ -133,7 +133,7 @@ export function RunHeader(props: RunHeaderProps): ReactNode {
           tone={props.indexLagEvents === null || props.indexLagEvents === undefined
             ? 'neutral'
             : props.indexLagEvents === 0 ? 'done' : 'attention'}
-          hint="滞后量不为零时，Agent 可能看不到尚未索引的事件（§8.4）"
+          hint="滞后量不为零时，Agent 可能看不到尚未索引的事件"
         />
       </div>
 

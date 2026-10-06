@@ -72,6 +72,6 @@ export async function requestAdvanceDraft(input: {
   if (!result.ok) return fail(`${result.code}：${result.message}`);
 
   const draft = handoffDraftOf(result.value);
-  if (draft === null) return fail('交接草稿的返回形状不符合契约（缺少 draftId），已忽略这次结果');
+  if (draft === null) return fail('交接草稿的返回形状不符合契约，缺少 draftId，已忽略这次结果');
   return { ok: true, draft };
 }

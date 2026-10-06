@@ -401,8 +401,8 @@ export function projectTranscript(records: readonly SessionRecord[]): Transcript
             seq,
             role,
             label: role === 'human'
-              ? (source?.['kind'] === 'plugin' ? `插件转投（${String(source['plugin'] ?? '未知')}）` : '你')
-              : `系统（${String(role)}）`,
+              ? (source?.['kind'] === 'plugin' ? `插件转投 · ${String(source['plugin'] ?? '未知')}` : '你')
+              : `系统 · ${String(role)}`,
             text: blocksToText(message['content']).text,
           });
           showed = true;
@@ -438,7 +438,7 @@ export function projectTranscript(records: readonly SessionRecord[]): Transcript
           seq,
           role: 'system',
           label: '系统提示词',
-          text: text === '' ? '（空）' : `已注入 ${formatChars(text.length)}（此处折叠，完整内容见会话事件）`,
+          text: text === '' ? '无内容' : `已注入 ${formatChars(text.length)} · 此处折叠，完整内容见会话事件`,
         });
         break;
       }
@@ -582,7 +582,7 @@ function stringifyArgs(value: unknown): string {
  */
 function clip(text: string): string {
   const clean = stripControlSequences(text);
-  return clean.length <= TRACE_TEXT_LIMIT ? clean : `${clean.slice(0, TRACE_TEXT_LIMIT)}\n…（已截断，完整内容见会话事件）`;
+  return clean.length <= TRACE_TEXT_LIMIT ? clean : `${clean.slice(0, TRACE_TEXT_LIMIT)}\n…已截断，完整内容见会话事件`;
 }
 
 /**

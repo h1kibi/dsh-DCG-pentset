@@ -59,27 +59,27 @@ import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, Table, TextAre
  * 人类即将把一段陌生文本变成 Agent 指令的时刻。
  */
 export const INJECTION_RISK =
-  'skill 正文是 Agent 会遵循的指令文本：装载来源不明的 skill，等于允许其作者向 Agent 注入指令（§2.2）。';
+  'skill 正文是 Agent 会遵循的指令文本：装载来源不明的 skill，等于允许其作者向 Agent 注入指令。';
 
 /** §2.2 会话隔离。 */
 export const SESSION_ISOLATION =
-  'skill 装载在创建会话时冻结：修改库里的 skill 不影响已创建的会话，只对之后创建的会话生效（§2.2）。';
+  'skill 装载在创建会话时冻结：修改库里的 skill 不影响已创建的会话，只对之后创建的会话生效。';
 
 /** §2.2「可选择」：不按阶段硬性限制。 */
 const ANY_PHASE_NOTE =
-  '任意阶段的 Agent 都可以装载库中任意 skill，不按阶段硬性限制——是否合适由装载它的人类判断，插件不预设（§2.2）。';
+  '任意阶段的 Agent 都可以装载库中任意 skill，不按阶段硬性限制——是否合适由装载它的人类判断，插件不预设。';
 
 /** §2.2「可为空」：空集是显式选项。 */
-const EMPTY_SET_LABEL = '不装载任何 skill（空集，合法状态）';
+const EMPTY_SET_LABEL = '不装载任何 skill';
 const EMPTY_SET_HINT =
-  '空集意味着 Agent 仅凭自身 Profile 与人类写清楚的任务提示词工作（§2.2）。'
-  + '取消勾选表示「还没决定」——空集本身是合法状态，但必须被显式选中，以区分「有意为空」与「漏了」（§7.2）。';
+  '空集意味着 Agent 仅凭自身 Profile 与人类写清楚的任务提示词工作。'
+  + '取消勾选表示「还没决定」；要表达不装载，就显式勾上这一项。';
 
 const UNDECIDED_NOTE =
   '尚未作出装载选择：请显式勾选「不装载任何 skill」或至少勾选一个条目。';
 
 const AUDIT_NOTE =
-  '新增与修改会记录操作者、时间与内容哈希，形成审计条目（§2.2）。';
+  '新增与修改会记录操作者、时间与内容哈希，形成审计条目。';
 
 // ───────────────────────── 类型 ─────────────────────────
 
@@ -148,20 +148,20 @@ export function skillDraftBlockers(input: {
 }): readonly string[] {
   const blockers: string[] = [];
   const name = input.form.name.trim();
-  if (name === '') blockers.push('名称必填（§2.2：新增需要名称、描述与正文）');
-  if (input.form.description.trim() === '') blockers.push('描述必填（§2.2）');
+  if (name === '') blockers.push('名称必填');
+  if (input.form.description.trim() === '') blockers.push('描述必填');
   if (input.form.body.trim() === '') {
-    blockers.push('正文必填：正文就是 Agent 会遵循的指令文本，空正文等于装载一个没有指令的 skill（§2.2）');
+    blockers.push('正文必填：正文就是 Agent 会遵循的指令文本，空正文等于装载一个没有指令的 skill');
   }
   // 停用的条目同样占用名称：`pentest.skills.name` 的唯一约束不看 `disabled`。
   const duplicated = input.skills.some(
     (skill) => skill.id !== input.editingSkillId && skill.name === name,
   );
   if (name !== '' && duplicated) {
-    blockers.push('名称已存在：skill 名称在库中唯一（`pentest.skills.name` 的唯一约束）');
+    blockers.push('名称已存在：skill 名称在库中唯一 · pentest.skills.name 的唯一约束');
   }
   if (!input.provided) {
-    blockers.push(`控制台方法表未导出 skill 端点（${input.method}）：改动无法提交`);
+    blockers.push(`控制台方法表未导出 skill 端点 ${input.method}：改动无法提交`);
   }
   return blockers;
 }
@@ -238,7 +238,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
 
   return (
     <div className="pentest-skill-library">
-      <Card title="Skill 库（§2.2 可添加 / 可选择 / 可为空）">
+      <Card title="Skill 库">
         <div className="pentest-skill-library__summary">
           <Stat label="库内条目" value={formatCount(props.skills.length)} />
           <Stat
@@ -251,7 +251,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
           {selectionMode ? (
             <Stat
               label="已选择"
-              value={selection === null ? '尚未决定' : selection.length === 0 ? '空集（有意）' : formatCount(selection.length)}
+              value={selection === null ? '尚未决定' : selection.length === 0 ? '空集 · 有意' : formatCount(selection.length)}
               tone={selection === null ? 'attention' : selection.length === 0 ? 'done' : 'active'}
               hint={selection === null ? UNDECIDED_NOTE : undefined}
             />
@@ -264,7 +264,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
         {props.snapshot.conflict ? (
           <ErrorBar
             code="stale_state_version"
-            message="另一个界面先提交了改动；本页显示的可能不是最新状态（§15.4）。"
+            message="另一个界面先提交了改动；本页显示的可能不是最新状态。"
             tone="attention"
           />
         ) : null}
@@ -297,18 +297,18 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
           empty={(
             <Empty
               title="skill 库为空"
-              reason="可以新增 skill（名称、描述、正文）；也可以直接选择「不装载任何 skill」——空集是合法状态（§2.2）。"
+              reason="可以新增 skill，填名称、描述、正文；也可以直接选择「不装载任何 skill」。"
             />
           )}
         />
       </Card>
 
       {!selectionMode ? null : (
-        <Card title="勾选装载（会话创建 / 阶段切换用）">
+        <Card title="勾选装载 · 会话创建 / 阶段切换用">
           <p className="pentest-skill-library__note" role="note">
             {props.snapshot.selectedEngagementId === null
               ? '尚未选中 engagement：装载集合在创建会话时生效。'
-              : `装载集合将用于 engagement ${props.snapshot.selectedEngagementId} 之后创建的会话（已创建的会话不受影响）。`}
+              : `装载集合将用于 engagement ${props.snapshot.selectedEngagementId} 之后创建的会话；已创建的会话不受影响。`}
           </p>
 
           <label className="pentest-check">
@@ -335,7 +335,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
             empty={(
               <Empty
                 title="库里没有可装载的 skill"
-                reason="新增一条 skill 后即可勾选；或者直接选中「不装载任何 skill」——空集是合法状态（§2.2）。"
+                reason="新增一条 skill 后即可勾选；或者直接选中「不装载任何 skill」。"
               />
             )}
             render={(skill) => (
@@ -366,7 +366,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
         </Card>
       )}
 
-      <Card title="新增 skill（§2.2 可添加）">
+      <Card title="新增 skill">
         <p className="pentest-skill-library__risk" role="note">
           {INJECTION_RISK}
         </p>
@@ -389,7 +389,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
             placeholder="一句话说明适用范围与预期产出"
           />
         </Field>
-        <Field label="正文" hint="Agent 会遵循的指令文本。装载后这段文字即成为 Agent 的指令（§2.2）">
+        <Field label="正文" hint="Agent 会遵循的指令文本。装载后这段文字即成为 Agent 的指令">
           <TextArea
             value={draft.body}
             onChange={(next) => {
@@ -404,7 +404,7 @@ export function SkillLibrary(props: SkillLibraryProps): ReactNode {
           label="加入 skill 库"
           kind="primary"
           disabled={addBlockers.length > 0 || addResubmitBlocked}
-          reason={addBlockers[0] ?? (addResubmitBlocked ? '这份内容已提交（幂等键已生成）：改动任意字段即可再次提交' : undefined)}
+          reason={addBlockers[0] ?? (addResubmitBlocked ? '这份内容已提交，幂等键已生成：改动任意字段即可再次提交' : undefined)}
           onClick={() => {
             if (addBlockers.length > 0 || addResubmitBlocked) return;
             const submitted = draft;
@@ -498,7 +498,7 @@ export function SkillEditForm(props: {
           rows={2}
         />
       </Field>
-      <Field label="正文" hint="改动只对之后创建的会话生效（§2.2）">
+      <Field label="正文" hint="改动只对之后创建的会话生效">
         <TextArea
           value={draft.body}
           onChange={(next) => {
@@ -550,13 +550,13 @@ function renderSkillCell(input: {
         <>
           <span className="pentest-skill-library__name">{skill.name}</span>
           {skill.revision > 1 ? (
-            <Badge text={`第 ${formatCount(skill.revision)} 版`} hint="编辑会使修订号递增（§2.2）" />
+            <Badge text={`第 ${formatCount(skill.revision)} 版`} hint="编辑会使修订号递增" />
           ) : null}
           {skill.disabled ? (
             <Badge
               text="已停用"
               tone="neutral"
-              hint="删除是停用而不是物理删除：已创建会话冻结的装载集合仍然可读（§2.2 会话隔离）"
+              hint="删除是停用而不是物理删除：已创建会话冻结的装载集合仍然可读"
             />
           ) : null}
         </>
@@ -590,7 +590,7 @@ function renderSkillCell(input: {
             disabled={skill.disabled || !input.removable}
             reason={skill.disabled
               ? '该条目已停用'
-              : '控制台方法表未导出 skill 删除端点（removeSkill）'}
+              : '控制台方法表未导出 skill 删除端点 removeSkill'}
             onClick={() => {
               input.onRemove?.({ skillId: skill.id, name: skill.name, idempotencyKey: input.newKey() });
             }}

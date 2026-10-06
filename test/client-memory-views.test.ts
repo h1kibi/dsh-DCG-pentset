@@ -537,7 +537,7 @@ test('空集是显式选项，且与「尚未决定」区分开（§2.2 可为�
     now: FIXED_NOW,
   }));
 
-  assert.ok(emptyChoosen.includes('空集（有意）'), '有意为空是一种明确状态');
+  assert.ok(emptyChoosen.includes('空集 · 有意'), '有意为空是一种明确状态');
   assert.ok(!emptyChoosen.includes('尚未作出装载选择'));
 });
 
@@ -653,5 +653,5 @@ test('skillDraftBlockers：三字段必填、名称唯一、缺端点各有理�
     provided: false,
     method: 'addSkill',
   });
-  assert.ok(unprovided.includes('控制台方法表未导出 skill 端点（addSkill）：改动无法提交'));
+  assert.ok(unprovided.includes('控制台方法表未导出 skill 端点 addSkill：改动无法提交'));
 });

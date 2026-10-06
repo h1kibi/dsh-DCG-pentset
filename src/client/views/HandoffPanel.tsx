@@ -35,16 +35,8 @@ interface HandoffPanelProps {
   readonly draft: HandoffDraft | null;
   /** 草稿生成后的回调：调用方保存它，下次渲染即显示编辑器。 */
   readonly onDraft: (draft: HandoffDraft | null) => void;
-  /** 交接编辑器的其余透传（目录、范围修订状态等）。 */
+  /** 交接编辑器的其余透传（范围修订状态等）。 */
   readonly scopeAmendment?: { readonly completed: boolean; readonly newVersion: number | null };
-  /** 「展开引用原文」的意图出口（与记忆浏览器同一个回调）。 */
-  readonly onExpandRef?: (ref: {
-    readonly memoryId: string;
-    readonly citation: string;
-    readonly idempotencyKey: string;
-  }) => void;
-  /** 已取回的原文（按裸 memoryId 索引）。 */
-  readonly refDetails?: Readonly<Record<string, string>>;
   readonly contentHash?: string | null;
 }
 
@@ -56,15 +48,15 @@ export function draftRequestBlockers(input: {
   readonly reason: string;
 }): readonly string[] {
   const gates: string[] = [];
-  if (!input.selected) gates.push('先选择一个 engagement');
+  if (!input.selected) gates.push('先选择一个作业');
   // 服务端的准入（`pg-workflow.ts` 的 requestHandoffDraft）：只有等待人工判断时可以请求。
   if (input.mainStatus !== 'waiting_human_review') {
     gates.push(
-      `只有 Agent 交了报告、等你判断时才能进入下一阶段（当前主状态：${input.mainStatus ?? '未知'}）——` +
-        '先让当前 Agent 提交报告（§5.2）',
+      `只有 Agent 交了报告、等待判断时才能进入下一阶段：当前主状态 ${input.mainStatus ?? '未知'}。` +
+        '先让当前 Agent 提交报告',
     );
   }
-  if (!input.hasActiveSession) gates.push('当前没有活动 Worker 会话：交接是「从某个会话交接出去」，没有会话就无从生成');
+  if (!input.hasActiveSession) gates.push('当前没有活动 Worker 会话：交接从某个会话交接出去，没有会话就无从生成');
   // 不要求理由（2026-10-05 人类明确要求）：操作者与时间照记进决策与审计。
   return gates;
 }
@@ -131,8 +123,8 @@ export function HandoffPanel(props: HandoffPanelProps): ReactNode {
 
   if (engagementId === null) {
     return (
-      <Card title="交接编辑">
-        <Empty title="先选择一个 engagement" reason="交接包属于具体的 engagement 与它的活动会话" />
+      <Card title="阶段交接">
+        <Empty title="先选择一个作业" reason="交接包归属单个作业及其活动会话" />
       </Card>
     );
   }
@@ -145,8 +137,6 @@ export function HandoffPanel(props: HandoffPanelProps): ReactNode {
         draft={props.draft}
         {...(props.contentHash === undefined ? {} : { contentHash: props.contentHash })}
         {...(props.scopeAmendment === undefined ? {} : { scopeAmendment: props.scopeAmendment })}
-        {...(props.onExpandRef === undefined ? {} : { onExpandRef: props.onExpandRef })}
-        {...(props.refDetails === undefined ? {} : { refDetails: props.refDetails })}
         onClose={() => { props.onDraft(null); }}
       />
     );
@@ -160,12 +150,12 @@ export function HandoffPanel(props: HandoffPanelProps): ReactNode {
   });
 
   return (
-    <Card title="交接编辑">
+    <Card title="阶段交接">
       <Empty
-        title="还没有要确认的交接"
+        title="尚未起草交接"
         reason={
-          '点上面的按钮就够：服务端会按阶段定义和当前状态**直接起草**一份可直接编辑的内容' +
-          '（阶段目标、应产出、上一阶段要点、边界、工具与放行类别），你改完确认才创建新会话。'
+          '服务端按阶段定义起草：阶段目标、应产出、上一阶段要点、边界、工具与放行类别。' +
+          '改完确认才创建新会话。'
         }
       />
 
@@ -173,21 +163,18 @@ export function HandoffPanel(props: HandoffPanelProps): ReactNode {
         <p className="pentest-handoff__failure">{`${failure.code}：${failure.message}`}</p>
       )}
 
-      <Field
-        label="期望的下一阶段"
-        hint="Agent 会据此起草交接内容；这只是**候选**，确认时你可以改（§7.2）"
-      >
+      <Field label="期望的下一阶段" hint="Agent 据此起草交接内容">
         <TextInput value={targetPhase} onChange={(next) => { setTargetPhase(next as Phase); }} />
       </Field>
 
-      <Field label="请求理由" hint="写入 human_decisions 与审计（§16.1）">
-        <TextArea value={reason} onChange={setReason} placeholder="例如：本轮情报收集已交报告，准备进入威胁建模" />
+      <Field label="请求理由" hint="写入人工决策与审计">
+        <TextArea value={reason} onChange={setReason} placeholder="本轮情报收集已交报告，准备进入威胁建模" />
       </Field>
 
       <GateList blockers={gates} label="生成前置条件" />
 
       <Button
-        label={busy ? '正在生成…' : '进入下一阶段（生成可编辑内容）'}
+        label={busy ? '正在生成…' : '进入下一阶段'}
         kind="primary"
         onClick={request}
         disabled={gates.length > 0 || busy}

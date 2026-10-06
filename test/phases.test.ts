@@ -409,7 +409,7 @@ describe('§5.4 回补与回环的区分', () => {
     assert.deepEqual(planPhaseMove({ from: 'post-exploitation', to: 'intelligence-gathering' }), {
       ok: false,
       code: 'scope_amendment_required',
-      message: '回环到情报收集前必须完成范围修订并生成新的范围版本（§5.4 步骤 4、§13.7）',
+      message: '回环到情报收集前须完成范围修订并生成新的范围版本',
     });
     const halfDone = planPhaseMove({
       from: 'post-exploitation',

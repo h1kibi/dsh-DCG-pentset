@@ -68,10 +68,10 @@ const SECTION_TITLES: Readonly<Record<ReportSection, string>> = {
 };
 
 const SECTION_NOTES: Readonly<Record<ReportSection, string>> = {
-  verified_findings: '人工接受的结论，严重度为人工确认值（§8.9）。',
-  assessed_not_confirmed: '人类已评估并判定不成立；证据引用按 §8.9 保留，不删除。',
-  unverified_candidates: '人类已暂缓处置（未经确认）：不得当作已证实的风险。',
-  awaiting_review: '尚未处置——列在这里即表示签字前置条件未满足（§8.9）。',
+  verified_findings: '人工接受的结论，严重度为人工确认值。',
+  assessed_not_confirmed: '人类已评估并判定不成立，证据引用保留，不删除。',
+  unverified_candidates: '人类已暂缓处置，未经确认：不得当作已证实的风险。',
+  awaiting_review: '尚未处置：列在这里即表示签字前置条件未满足。',
 };
 
 const SEVERITY_LABELS: Readonly<Record<Severity, string>> = {
@@ -192,13 +192,13 @@ export function dispositionBlockers(input: DispositionGateInput): readonly GateB
   if (input.action === 'accept' && input.severity === null) {
     blockers.push({
       code: 'severity-required',
-      message: '严重度需人工确认：没有严重度的结论不能进「已验证结论」（§8.9）',
+      message: '严重度需人工确认：没有严重度的结论不能进「已验证结论」',
     });
   }
   if (input.action !== 'accept' && input.reason.trim().length === 0) {
     blockers.push({
       code: 'reason-required',
-      message: `${ACTION_LABELS[input.action]}必须填写理由（§8.9：理由与结论一并存档）`,
+      message: `${ACTION_LABELS[input.action]}必须填写理由：理由与结论一并存档`,
     });
   }
   if (input.engagementId === null) {
@@ -207,7 +207,7 @@ export function dispositionBlockers(input: DispositionGateInput): readonly GateB
   if (!input.endpointExported) {
     blockers.push({
       code: 'endpoint-missing',
-      message: `控制台未导出端点 ${DISPOSITION_METHOD_NAME}（console/method-unavailable）：这条链路发不出去`,
+      message: `控制台未导出端点 ${DISPOSITION_METHOD_NAME} · console/method-unavailable：这条链路发不出去`,
     });
   }
   if (!input.wired) {
@@ -339,14 +339,14 @@ export function ReportReview(props: ReportReviewProps): ReactNode {
 
   return (
     <div className="pentest-report-review">
-      <Card title="报告审阅（§8.9）">
+      <Card title="报告审阅">
         <div className="pentest-report-review__summary">
           <Stat label="结论总数" value={formatCount(props.findings.length)} />
           <Stat
             label="未处置"
             value={formatCount(undisposed)}
             tone={undisposed > 0 ? 'danger' : 'done'}
-            hint="候选态且从未给出处置的结论数；> 0 时签字被阻止（§8.9）"
+            hint="候选态且从未给出处置的结论数；大于 0 时签字被阻止"
           />
           <Stat label="已验证结论" value={formatCount(groups.verified_findings.length)} tone="done" />
           <Stat label="已评估但不成立" value={formatCount(groups.assessed_not_confirmed.length)} />
@@ -354,25 +354,25 @@ export function ReportReview(props: ReportReviewProps): ReactNode {
           <Stat
             label="状态版本"
             value={props.snapshot.state === null ? '—' : formatCount(props.snapshot.state.stateVersion)}
-            hint="乐观锁版本（§15.4）：处置基于这个版本提交，冲突时界面重读"
+            hint="乐观锁版本：处置基于这个版本提交，冲突时界面重读"
           />
         </div>
 
         {undisposed > 0 ? (
           <p className="pentest-report-review__block" role="alert">
-            {`签字被阻止：还有 ${formatCount(undisposed)} 条结论从未处置。§8.9 不允许带着未处置条目出报告。`}
+            {`签字被阻止：还有 ${formatCount(undisposed)} 条结论从未处置；带着未处置条目不能出报告。`}
           </p>
         ) : null}
 
         {superseded === 0 ? null : (
           <p className="pentest-report-review__superseded">
-            {`另有 ${formatCount(superseded)} 条结论已被取代：不进报告，但保留在记忆中可检索（§8.9）。`}
+            {`另有 ${formatCount(superseded)} 条结论已被取代：不进报告，但保留在记忆中可检索。`}
           </p>
         )}
 
         {endpointExported ? null : (
           <p className="pentest-report-review__gap">
-            {`端点缺口：控制台方法表里没有 ${DISPOSITION_METHOD_NAME}（console/method-unavailable）。`}
+            {`端点缺口：控制台方法表里没有 ${DISPOSITION_METHOD_NAME} · console/method-unavailable。`}
             {' 处置按钮只渲染不提交，由调用方经 onDispose 接线到报告服务入口。'}
           </p>
         )}
@@ -380,7 +380,7 @@ export function ReportReview(props: ReportReviewProps): ReactNode {
         {props.snapshot.conflict ? (
           <ErrorBar
             code="stale_state_version"
-            message="另一个界面先提交了：已重读最新状态（§15.4）。请基于当前版本重新处置。"
+            message="另一个界面先提交了：已重读最新状态。请基于当前版本重新处置。"
             tone="attention"
           />
         ) : null}
@@ -392,13 +392,13 @@ export function ReportReview(props: ReportReviewProps): ReactNode {
         {props.findings.length === 0 ? (
           <Empty
             title="还没有任何结论"
-            reason="Agent 提交带候选结论的报告后，这里会按 §8.9 的四节分列，供人类逐条处置"
+            reason="Agent 提交带候选结论的报告后，这里会按四节分列，供人类逐条处置"
           />
         ) : null}
       </Card>
 
       {REVIEW_SECTION_ORDER.map((section) => (
-        <Card key={section} title={`${SECTION_TITLES[section]}（${formatCount(groups[section].length)}）`}>
+        <Card key={section} title={`${SECTION_TITLES[section]} · ${formatCount(groups[section].length)}`}>
           <p className="pentest-report-review__note">{SECTION_NOTES[section]}</p>
           <List
             items={groups[section]}
@@ -481,19 +481,19 @@ function FindingReviewRow(props: {
         <span className="pentest-finding__title">{finding.title}</span>
         <Badge text={STATUS_LABELS[finding.status]} tone={statusTone(finding.status)} hint={finding.status} />
         <Badge
-          text={severity === null ? '严重度待人工确认' : `${SEVERITY_LABELS[severity]}（${severity}）`}
+          text={severity === null ? '严重度待人工确认' : `${SEVERITY_LABELS[severity]} · ${severity}`}
           tone={severityTone(severity)}
-          hint="最终报告使用人工确认后的严重度（§8.9）"
+          hint="最终报告使用人工确认后的严重度"
         />
         <Badge
           text={latestAction === null ? '从未处置' : `已${ACTION_LABELS[latestAction]}`}
           tone={latestAction === null ? 'danger' : dispositionTone(latestAction)}
           hint={
             undisposed
-              ? '未处置条目会阻止签字（§8.9）'
+              ? '未处置条目会阻止签字'
               : latestAction === null
                 ? '状态为候选态但查不到处置记录'
-                : '最近一次处置（来自 human_decisions，§9.5）或状态蕴含的处置'
+                : '最近一次处置或状态蕴含的处置，来源 human_decisions'
           }
         />
       </div>
@@ -503,13 +503,13 @@ function FindingReviewRow(props: {
         <Stat
           label="受影响资产"
           value={formatCount(finding.affectedAssetIds.length)}
-          hint="结论与资产是引用关系：资产变化时结论自动反映最新数据（§8.9）"
+          hint="结论与资产是引用关系：资产变化时结论自动反映最新数据"
         />
         <Stat
           label="证据引用"
           value={formatCount(finding.evidenceRefs.length)}
           tone={finding.evidenceRefs.length === 0 ? 'attention' : 'neutral'}
-          hint="无证据引用的结论不应被当作已验证（§8.9）"
+          hint="无证据引用的结论不应被当作已验证"
         />
         <Stat
           label="人工接受时间"
@@ -564,7 +564,7 @@ function FindingReviewRow(props: {
       )}
 
       <div className="pentest-finding__dispose">
-        <Field label="严重度（人工确认）" hint="模型给的是建议值；改为你确认后的等级（§8.9）">
+        <Field label="严重度 · 人工确认" hint="模型给的是建议值；改为你确认后的等级">
           <select
             className="pentest-select"
             value={severity ?? ''}
@@ -572,16 +572,16 @@ function FindingReviewRow(props: {
               setSeverity(SEVERITIES.find((candidate) => candidate === event.target.value) ?? null);
             }}
           >
-            <option value="">（未确认）</option>
+            <option value="">未确认</option>
             {SEVERITIES.map((candidate) => (
               <option key={candidate} value={candidate}>
-                {`${SEVERITY_LABELS[candidate]}（${candidate}）`}
+                {`${SEVERITY_LABELS[candidate]} · ${candidate}`}
               </option>
             ))}
           </select>
         </Field>
 
-        <Field label="处置理由" hint="拒绝与暂缓必填；接受可选。理由与结论一并存档（§8.9）">
+        <Field label="处置理由" hint="拒绝与暂缓必填；接受可选。理由与结论一并存档">
           <TextArea
             value={reason}
             onChange={setReason}
@@ -617,9 +617,9 @@ function FindingReviewRow(props: {
           {busy ? <Badge text="提交中" tone="active" /> : null}
           {outcome === null ? null : outcome.ok ? (
             <Badge
-              text={outcome.replay === true ? '已处置（幂等重放，未重复执行）' : '已处置'}
+              text={outcome.replay === true ? '已处置 · 幂等重放，未重复执行' : '已处置'}
               tone="done"
-              hint="结果来自 Host RPC，不是界面推断（§15.3）"
+              hint="结果来自 Host RPC，不是界面推断"
             />
           ) : (
             <ErrorBar code={outcome.code} message={outcome.message} />

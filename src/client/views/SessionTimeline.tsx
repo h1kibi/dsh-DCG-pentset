@@ -68,7 +68,7 @@ export function SessionTimeline(props: SessionTimelineProps): ReactNode {
     <Card title="会话时间轴">
       {/* 迷你地图：长链的第一屏答案（§6.2） */}
       {minimap.length === 0 ? null : (
-        <div className="pentest-minimap" aria-label="会话迷你地图（按迭代分组）">
+        <div className="pentest-minimap" aria-label="会话迷你地图 · 按迭代分组">
           {minimap.map((group) => (
             <div key={String(group.iteration)} className="pentest-minimap__group" data-iteration={group.iteration}>
               <span className="pentest-minimap__label">
@@ -192,7 +192,7 @@ function SessionRow(props: {
           <span className="pentest-timeline__note" title={session.statusNote}>
             {truncate(session.statusNote, props.noteMaxChars)}
             {session.statusNoteSource === 'derived' ? (
-              <em className="pentest-timeline__note-source">（自动摘要）</em>
+              <em className="pentest-timeline__note-source">自动摘要</em>
             ) : null}
           </span>
         )}

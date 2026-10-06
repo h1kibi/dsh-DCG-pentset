@@ -24,7 +24,6 @@ import type { ConsoleControllerDeps } from '../src/client/controller.ts';
 import { EngagementList, engagementActionAvailability } from '../src/client/views/EngagementList.tsx';
 import { EngagementWizard } from '../src/client/views/EngagementWizard.tsx';
 import { HandoffEditor } from '../src/client/views/HandoffEditor.tsx';
-import { HANDOFF_MAX_CONTEXT_REFS } from '../src/contracts.ts';
 import type { EngagementSummary, HandoffDraft } from '../src/contracts.ts';
 
 const NOW = new Date('2026-09-19T12:00:00Z');
@@ -201,7 +200,7 @@ test('向导：全端口是**界面上可见的选项**，不是靠知道 0-6553
   assert.ok(html.includes('任意端口'), '必须有可见的「任意端口」入口');
   assert.ok(html.includes('pentest-wizard__anyport'), '它要有自己的可点元素，而不是只写在提示文字里');
   // 提示里也要说清「留空 = 默认 80/443」——两者是不同的事，不能混。
-  assert.ok(html.includes('留空=默认 80/443'), '留空的语义必须写出来，否则会被当成「没有限制」');
+  assert.ok(html.includes('留空即默认 80/443'), '留空的语义必须写出来，否则会被当成「没有限制」');
 });
 
 test('向导：补齐字段后仅剩「已核对」这一项闸门', () => {
@@ -289,11 +288,11 @@ test('向导：过期授权被拦下，且未声明协议按服务端同一码�
   assertDisabled(bad, '确认并建立 engagement', '范围校验');
 });
 
-// ───────────────────────────── 交接编辑（§6.5、§7.2、§7.4） ─────────────────────────────
+// ───────────────────────────── 交接编辑（§6.5、§7.4） ─────────────────────────────
 
-test('交接编辑器展示可编辑的初始内容、引用与「不继承 transcript」提示', () => {
-  // 界面上不再有只读的「草稿」区（2026-10-05 人类要求删掉草稿概念）：内容直接以**可编辑**的
-  // 初值呈现，人类改的就是要注入的那一份。
+test('交接编辑器只保留两段文字与确认/取消：能力面与引用编辑不再呈现', () => {
+  // 2026-10-07 操作者裁定：本屏只做两件事——改要注入下一阶段的两段文字、确认或取消。
+  // skill 勾选、工具允许列表、逐次放行类别、上下文引用编辑全部撤下，取值在确认时原样取自草稿。
   const html = renderToStaticMarkup(
     createElement(HandoffEditor, {
       controller: inertController(),
@@ -303,12 +302,9 @@ test('交接编辑器展示可编辑的初始内容、引用与「不继承 tran
     }),
   );
 
-  assert.ok(html.includes('进入下一阶段：审阅并确认'), '标题说清这是要确认的下一步');
+  assert.ok(html.includes('阶段交接'), '标题应说明这是阶段交接');
   assert.ok(html.includes('为内部靶场建立信任边界与攻击路径'), '任务目标以初值呈现且可编辑');
   assert.ok(html.includes('基于资产清单构建攻击路径'), '提示词以初值呈现且可编辑');
-  assert.ok(html.includes('memory_search'), '应显示工具建议（§7.2 tool_capability_suggestion.allowed）');
-  assert.ok(html.includes('asset-graph'), '应显示建议的 skill');
-  assert.ok(html.includes('memory:aaa'), '应显示上下文引用');
   // §6.5 第 6 块：内容哈希
   assert.ok(html.includes('sha256:9f2c1d'), '应显示服务端给出的内容哈希');
   assert.ok(
@@ -316,89 +312,25 @@ test('交接编辑器展示可编辑的初始内容、引用与「不继承 tran
     '完整哈希放在 title 上（前缀显示、全文可核对，与报告导出页同一约定）',
   );
   // §7.4：新会话的上下文隔离
-  assert.ok(html.includes('不会继承旧 transcript'), '应提示不继承旧 transcript');
-  // 草稿概念已经删干净：界面上不该再出现「草稿」字样的区块标题或按钮。
-  assert.ok(!/保存为草稿版本|草稿提示词|草稿版本/.test(html), '不该再有草稿措辞');
-  assert.ok(!html.includes('3. 强制跳转确认'), '推荐边不应出现强制跳转块');
-})
+  assert.ok(html.includes('不继承旧对话'), '应提示不继承旧对话');
 
-test('交接编辑器：引用超出预算时，在**点确认之前**就告诉人类哪些不会带过去', () => {
-  // 截断发生在服务端确认那一刻，但人类必须在那之前知道——否则他会以为 60 条引用全进了下一会话。
-  const many = Array.from({ length: HANDOFF_MAX_CONTEXT_REFS + 5 }, (_, i) => ({
-    memoryId: `memory:r${String(i)}`,
-    reason: `理由 ${String(i)}`,
-  }));
-  const html = renderToStaticMarkup(
-    createElement(HandoffEditor, {
-      controller: inertController(),
-      engagementId: 'e1',
-      draft: { ...draft(), contextRefs: many },
-    }),
-  );
-  assert.ok(html.includes('引用预算提醒'), '超预算时必须出现提醒');
-  assert.ok(html.includes(`超出上限 ${String(HANDOFF_MAX_CONTEXT_REFS)} 条`), '要说清上限是多少');
-  assert.ok(html.includes('truncatedRefs'), '要说清没带过去的部分去了哪里');
-  assert.ok(html.includes('排到前面'), '要给出可执行动作（排序/删减）');
-});
-
-test('交接编辑器：引用没超预算时不出提醒（避免狼来了）', () => {
-  const html = renderToStaticMarkup(
-    createElement(HandoffEditor, {
-      controller: inertController(),
-      engagementId: 'e1',
-      draft: draft(),
-    }),
-  );
-  assert.ok(!html.includes('引用预算提醒'));
-});
-
-test('交接编辑器：引用带类型与可信度时并排显示——「工具观测」与「Agent 陈述」必须能一眼分开（§8.10）', () => {
-  const html = renderToStaticMarkup(
-    createElement(HandoffEditor, {
-      controller: inertController(),
-      engagementId: 'e1',
-      draft: {
-        ...draft(),
-        contextRefs: [
-          { memoryId: 'memory:aaa', reason: '资产清单', kind: 'asset', trust: 'tool_observation', provisional: false },
-          { memoryId: 'memory:bbb', reason: '压缩摘要', kind: 'compaction_summary', trust: 'agent_statement', provisional: true },
-          { memoryId: 'memory:ccc', reason: '服务端没补到元信息' },
-        ],
-      },
-    }),
-  );
-  assert.ok(html.includes('工具观测'), '工具观测要显式标出');
-  assert.ok(html.includes('Agent 陈述'), 'Agent 陈述要显式标出——压缩摘要属于后者，不得与观测混同');
-  assert.ok(html.includes('暂定'), '暂定分块要有标记');
-  assert.ok(html.includes('asset'), '分块类型要显示');
-  // 元信息缺失时不伪造：第三个引用既不该被标成观测，也不该被标成陈述。
-  assert.ok(!html.includes('ccc：工具观测'));
-});
-
-test('交接编辑器：没有展开回调时按钮禁用并说明原因，不假装能展开', () => {
-  const html = renderToStaticMarkup(
-    createElement(HandoffEditor, {
-      controller: inertController(),
-      engagementId: 'e1',
-      draft: draft(),
-    }),
-  );
-  assert.ok(html.includes('展开原文'), '按钮存在');
-  assert.ok(html.includes('未提供 onExpandRef') || html.includes('未把记忆读取端点接到本屏'), '要说明为什么点不了');
-});
-
-test('交接编辑器：给了原文就渲染出来（人类确认新会话会看到什么，靠的就是它）', () => {
-  const html = renderToStaticMarkup(
-    createElement(HandoffEditor, {
-      controller: inertController(),
-      engagementId: 'e1',
-      draft: draft(),
-      onExpandRef: () => undefined,
-      refDetails: { aaa: '这是 memory:aaa 的原文内容' },
-    }),
-  );
-  assert.ok(html.includes('这是 memory:aaa 的原文内容'), '已取回的原文必须显示');
-  assert.ok(html.includes('收起'), '展开后按钮语义变为收起');
+  // 撤下的编辑器不得以任何形式留在 HTML 里——旧控件的取值（skill、工具、引用）与
+  // 旧控件标签都算。夹具已带这些值，因此这是一条有效的反向断言。
+  const gone = [
+    'memory_search',
+    'asset-graph',
+    'memory:aaa',
+    'skill 勾选',
+    '工具允许列表',
+    '需逐次放行的动作类别',
+    '展开原文',
+    '引用预算提醒',
+    '手动添加工具',
+    '新增引用',
+  ];
+  for (const word of gone) {
+    assert.equal(html.includes(word), false, `不该再出现「${word}」`);
+  }
 });
 
 test('交接编辑器：没有哈希预览值时如实说明，不伪造', () => {
@@ -412,13 +344,13 @@ test('交接编辑器：没有哈希预览值时如实说明，不伪造', () =>
       draft: draft(),
     }),
   );
-  assert.ok(html.includes('调用方没有提供'), '应说明缺失原因（读端点未提供/未透传）');
+  assert.ok(html.includes('内容哈希不可用'), '缺哈希预览值时要如实说明');
   assert.ok(!html.includes('sha256:'), '不得编造一个像哈希的字符串');
 });
 
 test('交接编辑器：理由**不是**闸门——不填也能确认（人类动作不要求理由）', () => {
-  // 2026-10-05 人类明确要求：别再在确认前逼人填理由。操作者与时间照记进 human_decisions 与审计，
-  // 理由降级为可选备注——所以两个按钮都必须**可点**（其他闸门在夹具里已满足：skill 与放行类别都有值）。
+  // 2026-10-05 人类明确要求：别再在确认前逼人填理由。操作者与时间照记进人工决策与审计，
+  // 理由降级为可选备注——所以两个按钮都必须**可点**（本屏没有理由输入框，闸门只来自阶段推进）。
   const html = renderToStaticMarkup(
     createElement(HandoffEditor, {
       controller: inertController(),
@@ -426,8 +358,8 @@ test('交接编辑器：理由**不是**闸门——不填也能确认（人类�
       draft: draft({ suggestedSkillIds: ['asset-graph'], toolCapabilitySuggestion: { allowed: ['memory_search'], approvalRequired: ['active_probing'] } }),
     }),
   );
-  assert.equal(buttonTag(html, '确认并创建新会话').includes('disabled=""'), false, '不填理由也要能确认');
-  assert.equal(buttonTag(html, '取消（不创建新会话）').includes('disabled=""'), false, '取消更不该要求理由');
+  assert.equal(buttonTag(html, '确认并创建会话').includes('disabled=""'), false, '不填理由也要能确认');
+  assert.equal(buttonTag(html, '取消').includes('disabled=""'), false, '取消更不该要求理由');
   assert.ok(!html.includes('保存为草稿版本'), '不该再有「另存草稿」这一步');
   assert.ok(!html.includes('必须填写切换理由'), '不该再有理由闸门');
 });
@@ -441,19 +373,7 @@ test('交接编辑器：回环未完成范围修订时确认禁用（§5.4 步�
       scopeAmendment: { completed: false, newVersion: null },
     }),
   );
-  assertDisabled(html, '确认并创建新会话', '范围修订');
-});
-
-test('交接编辑器：skill 清空后未表决时确认禁用（§7.2 可空键须已表决）', () => {
-  const html = renderToStaticMarkup(
-    createElement(HandoffEditor, {
-      controller: inertController(),
-      engagementId: 'e1',
-      draft: draft({ suggestedSkillIds: [] }),
-    }),
-  );
-  assert.ok(html.includes('确认不装载任何 skill'), '清空 skill 后应要求显式表决');
-  assertDisabled(html, '确认并创建新会话', '尚未表决');
+  assertDisabled(html, '确认并创建会话', '范围修订');
 });
 
 // ───────────────────────────── 强制跳转确认块（§5.3 条件 2、3） ─────────────────────────────
@@ -499,19 +419,19 @@ test('清理列：未归档只给「归档」；已归档给「取消归档」+�
     archiveLabel: '归档',
     purgeVisible: false,
     purgeDisabled: false,
-    purgeReason: '两段确认后才能点最终删除',
+    purgeReason: '两段确认后方可最终删除',
   });
 
   const archived = engagementActionAvailability({ archivedAt: '2026-01-02T00:00:00Z', purgedAt: null });
   assert.equal(archived.archiveLabel, '取消归档');
   assert.equal(archived.purgeVisible, true, '已归档才谈得上清空（服务端也是这么拦的）');
   assert.equal(archived.purgeDisabled, false);
-  assert.equal(archived.purgeReason, '两段确认后才能点最终删除');
+  assert.equal(archived.purgeReason, '两段确认后方可最终删除');
 
   const purged = engagementActionAvailability({ archivedAt: '2026-01-02T00:00:00Z', purgedAt: '2026-01-03T00:00:00Z' });
   assert.equal(purged.purgeVisible, true, '清空过仍然显示这一格——它承载「已清理」这件事的说明');
   assert.equal(purged.purgeDisabled, true, '清空过就不该再给可点的按钮');
-  assert.match(purged.purgeReason ?? '', /内容已清空（不可恢复）/);
+  assert.match(purged.purgeReason ?? '', /内容已清空，不可恢复/);
 });
 
 test('清理列接线：未归档行渲染「归档」且**不是**禁用态（漏传控制器会在这里露馅）', () => {

@@ -304,9 +304,6 @@ export function buildPanels(input: BuildPanelsInput): Partial<Readonly<Record<Co
     // 草稿内容哈希由读端点带回（REQ-9）：编辑器**不自己算**——客户端手里那份副本
     // 与服务端库里那一行可能已经不是同一份内容，显示的值必须来自权威来源。
     ...(input.handoffDraft === null ? {} : { contentHash: input.handoffDraft.contentHash }),
-    // 与记忆浏览器共用同一条「展开原文」通道（同一份 details 状态、同一个审计读操作）。
-    ...(input.onMemoryExpand === undefined ? {} : { onExpandRef: input.onMemoryExpand }),
-    refDetails: input.memoryDetails,
   });
 
   if (input.approvals !== null) {
