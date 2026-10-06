@@ -199,14 +199,14 @@ sh scripts/dev-sandbox-up.sh up     # 建网 + 推镜像 + 打印要抄的 diges
 
 启动器预检会比对摘要，不一致直接拒绝启动（fail-closed）；代码只认 digest、不认标签。
 
-#### ⑤ 重跑 skill 冒烟证明（23 份）
+#### ⑤ 重跑 skill 冒烟证明（24 份）
 
 `skills/*/SKILL.md` 的 `metadata.smoked` 绑的是镜像摘要前 12 位，摘要一换 `test/skill-pack.test.ts` 就红——
 **这是刻意的**：逼人重跑命令，而不是让旧背书一直挂着。
 
 **注意顺序**：先**真的重跑**（见下），再改摘要——反了就是拿新摘要包装旧结论。
 
-改摘要这一步是机械的，用脚本（别手工改 23 份）：
+改摘要这一步是机械的，用脚本（别手工改 24 份）：
 
 ```bash
 npm run build  # 一次性检查文件没写坏
@@ -229,6 +229,17 @@ node scripts/resync-smoke-stamps.mjs <新摘要前 12 位>   # 输出：改了 N
 
 - **静态 Web**：`fx-web`（`172.29.0.x:8080`，含 `.env`/`.git/HEAD`/`swagger.json`/`robots.txt`/登录表单）
   与 `fx-tls`（自签 TLS）——起法见 `skills/AUTHORING-SPEC.md` §4。
+- **API 靶站**：`fx-api`（`docker/lab-api/labapi.py`，单文件、无依赖，含刻意做错的 REST/GraphQL 面：
+  未授权列表、BOLA/IDOR、`Allow` 声明与实现不一致、Content-Type 判定、mass assignment、GraphQL introspection、
+  verbose 报错与 debug 端点）：
+
+  ```bash
+  docker run -d --name fx-api --network pentest-lab-internal \
+    -v "$PWD/docker/lab-api:/srv:ro" --entrypoint python3 python:3.10-slim-bookworm /srv/labapi.py 9000
+  ```
+
+  地址用 `docker inspect fx-api` 现取（或直接用容器名 `fx-api:9000`，同网容器可解析）。
+  `vuln-api-checks` 的 `smoked` 就是对着它跑出来的。
 - **AD 域**：`pentest-ad-dc:lab`（Samba AD DC，域 `LAB.LOCAL`，管理员 `Passw0rd!234`）：
 
   ```bash

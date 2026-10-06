@@ -70,6 +70,16 @@ docker run -d --name fx-tls --network pentest-lab-internal python:3.10-slim-book
 
 靶标地址：**fx-web `172.29.0.2:8080`**、**fx-tls `172.29.0.3:8443`**（SNI `smoke.local`）。**别打别的地址。**
 
+需要 API 面时再起一个靶站（`docker/lab-api/labapi.py`，单文件无依赖）：
+
+```bash
+docker run -d --name fx-api --network pentest-lab-internal \
+  -v "$PWD/docker/lab-api:/srv:ro" --entrypoint python3 python:3.10-slim-bookworm /srv/labapi.py 9000
+```
+
+它内置了刻意做错的形态（未授权列表、BOLA、`Allow` 与实现不一致、Content-Type 判定、mass assignment、
+GraphQL introspection、verbose 报错），写 API 技能时就拿它当判据来源。
+
 需要 AD 面时再起一个实验室域控（域 `LAB.LOCAL`，构建与限制见 `docker/ad-dc/` 与 RUNBOOK §2.1⑤）：
 
 ```bash
