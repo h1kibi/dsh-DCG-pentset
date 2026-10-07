@@ -20,6 +20,7 @@ import type {
   SessionStatus,
   TrustLevel,
 } from '../contracts.ts';
+import { Fragment, createElement, type ReactNode } from 'react';
 
 /** 五个阶段的中文名。键与契约的 `Phase` 对齐，缺项会在类型层暴露。 */
 const PHASE_LABELS: Readonly<Record<Phase, string>> = {
@@ -242,4 +243,45 @@ export function truncate(text: string, maxChars: number): string {
 export function formatCount(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   return String(value);
+}
+
+/**
+ * 行内 Markdown → **React 节点**（`**粗体**`、`` `代码` ``、`*斜体*`）。
+ *
+ * 为什么要它：模型写的便签/摘要/结论天然带 Markdown 标记，而视图是**当纯文本插值**渲染的
+ * ⇒ 界面上出现字面的 `**零目标动作**`（2026-10-07 人类反馈 + 截图）。产出侧改不动：
+ * 同一段文本还要给模型与交接用（那里标记有用），且产出点很多——所以修在**渲染边界**。
+ *
+ * 三条硬约束：
+ *  1. **返回节点，不拼 HTML 字符串** ⇒ 不用 `dangerouslySetInnerHTML`：模型产出的文本不可信；
+ *  2. **只用原生 `strong`/`code`/`em`** ⇒ 零新样式类，不需要动样式表与 `verify:styles`；
+ *  3. **只认行内语法**：块级（标题/列表/表格）原样显示——这些文本块本来就该是行内的，
+ *     真出现块级标记说明内容放错了地方，原样显示反而是信号。
+ */
+export function renderInlineMarkdown(text: string): ReactNode {
+  const parts: ReactNode[] = [];
+  const pattern = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g;
+  let last = 0;
+  let key = 0;
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    const [bold, code, italic] = [match[1], match[2], match[3]];
+    if (bold !== undefined) parts.push(createElement('strong', { key: key++ }, bold));
+    else if (code !== undefined) parts.push(createElement('code', { key: key++ }, code));
+    else if (italic !== undefined) parts.push(createElement('em', { key: key++ }, italic));
+    last = match.index + match[0].length;
+  }
+  if (parts.length === 0) return text;
+  if (last < text.length) parts.push(text.slice(last));
+  return createElement(Fragment, null, ...parts);
+}
+
+/**
+ * 去掉行内标记，供**只能是纯文本**的地方：`title=` 提示、日志行、导出文件名。
+ * **不要**拿它去洗给模型/交接的内容——那里标记是有用的。
+ */
+export function stripInlineMarkdown(text: string): string {
+  return text.replace(/\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g, (_whole, bold, code, italic) =>
+    String(bold ?? code ?? italic ?? ''),
+  );
 }

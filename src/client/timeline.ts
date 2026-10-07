@@ -15,7 +15,7 @@
  */
 
 import type { Phase, SessionStatus, WorkerSessionSummary } from '../contracts.ts';
-import { phaseLabel as sessionPhaseLabel, sessionStatusLabel, sessionStatusTone, type Tone } from './format.ts';
+import { phaseLabel as sessionPhaseLabel, sessionStatusLabel, sessionStatusTone, stripInlineMarkdown, type Tone } from './format.ts';
 
 /**
  * 一个会话为什么被标为「需要留意」。
@@ -158,7 +158,7 @@ export function buildMinimap(sessions: readonly WorkerSessionSummary[]): readonl
       tone,
       iteration: s.iteration,
       phase: s.phase,
-      title: `${s.phase} · ${s.status}${s.statusNote === null ? '' : ` · ${s.statusNote}`}`,
+      title: `${s.phase} · ${s.status}${s.statusNote === null ? '' : ` · ${stripInlineMarkdown(s.statusNote)}`}`,
     };
     const list = byIteration.get(s.iteration);
     if (list === undefined) byIteration.set(s.iteration, [block]);

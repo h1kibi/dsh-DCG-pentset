@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 import type { WorkerSessionSummary } from '../../contracts.ts';
 import type { SessionChatRpc } from '../session-chat.ts';
 import { SessionChatClient, traceTranscript, type TraceRow } from '../session-chat.ts';
-import { phaseLabel, sessionStatusLabel, sessionStatusTone } from '../format.ts';
+import { phaseLabel, renderInlineMarkdown, sessionStatusLabel, sessionStatusTone, stripInlineMarkdown } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar } from '../ui.tsx';
 
 /** 运行中的会话读得勤一点；已结束的会话没有再读的必要，给一个慢周期。 */
@@ -104,7 +104,10 @@ export function AgentTrace(props: AgentTraceProps): ReactNode {
       </p>
 
       {session.statusNote === null ? null : (
-        <p className="pentest-intake__note" title={session.statusNote}>{`状态便签：${session.statusNote}`}</p>
+        <p className="pentest-intake__note" title={stripInlineMarkdown(session.statusNote)}>
+          {'状态便签：'}
+          {renderInlineMarkdown(session.statusNote)}
+        </p>
       )}
 
       {error === null ? null : <ErrorBar code="session-read-failed" message={error} />}

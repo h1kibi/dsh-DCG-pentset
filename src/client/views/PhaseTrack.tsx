@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 import type { WorkerSessionSummary } from '../../contracts.ts';
 import { buildPhaseTrack, phaseTone } from '../phase-track.ts';
 import type { PhaseEdge, PhaseNode } from '../phase-track.ts';
-import { formatCount, formatTimestamp, truncate } from '../format.ts';
+import { formatCount, formatTimestamp, renderInlineMarkdown, stripInlineMarkdown, truncate } from '../format.ts';
 import { Badge, Card, Empty, toneClass } from '../ui.tsx';
 
 interface PhaseTrackProps {
@@ -178,8 +178,8 @@ function PhaseNodeView(props: {
       </span>
 
       {node.latestNote === null ? null : (
-        <span className="pentest-track__node-note" title={node.latestNote}>
-          {truncate(node.latestNote, props.noteMaxChars)}
+        <span className="pentest-track__node-note" title={stripInlineMarkdown(node.latestNote)}>
+          {renderInlineMarkdown(truncate(stripInlineMarkdown(node.latestNote), props.noteMaxChars))}
           {/* 派生便签必须标注：人类需要知道那不是 Agent 写的（§6.2.2） */}
           {node.latestNoteSource === 'derived' ? (
             <em className="pentest-track__node-note-source">自动摘要</em>

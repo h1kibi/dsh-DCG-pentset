@@ -36,7 +36,7 @@ import type { BehaviorProfile } from '../../contracts.ts';
 import type { ConsoleCallResult } from '../../console/client.ts';
 import type { ConsoleController } from '../controller.ts';
 import { approvalItemOf, approvalGateOf, formatBytes, type ApprovalItem } from './ApprovalQueue.tsx';
-import { actionClassLabel, formatDuration, formatTimestamp, mainStatusLabel, phaseLabel } from '../format.ts';
+import { actionClassLabel, formatDuration, formatTimestamp, mainStatusLabel, phaseLabel, renderInlineMarkdown } from '../format.ts';
 import { Badge, Button, Card, ErrorBar, Field, TextArea, TextInput } from '../ui.tsx';
 import { APPROVAL_MODES, BEHAVIOR_PROFILES, CUSTOM_GUIDANCE_MAX_CHARS } from '../../contracts.ts';
 import type { ApprovalMode } from '../../contracts.ts';
@@ -436,7 +436,10 @@ export function PhaseStrip(props: {
         })}
       </ol>
       {props.statusNote === null ? null : (
-        <p className="pentest-proposal__note">最新状态便签：{props.statusNote}</p>
+        <p className="pentest-proposal__note">
+          {'最新状态便签：'}
+          {renderInlineMarkdown(props.statusNote)}
+        </p>
       )}
       {props.children}
     </Card>
