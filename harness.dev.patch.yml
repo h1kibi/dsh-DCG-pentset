@@ -46,7 +46,7 @@
           sandbox:
             allowedImages:
               - name: 127.0.0.1:5005/pentest-tools
-                digest: sha256:3c49879dd61b271a8f553dfcf896591d8880e59db17b935cb1288af2f36e39a2
+                digest: sha256:81483611f0a0cfe0b7119cdae86e82962bf5c9e1ae5df8a2a407327025a662c2
             # internal=true 的网络：容器**没有**外网出口，只能打到同网容器。
             # 出网必须经下面的代理——这正是 §10.4 第 2 层边界想守住的形状。
             internalNetwork: pentest-internal

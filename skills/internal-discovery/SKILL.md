@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, MITRE ATT&CK T1046/T1018]
-  smoked: "沙箱实测@3c49879dd61b：nmap -sn -PE -PS8080 网段 → 8 台存活；-sT -p 8080 -oG → 172.29.0.2 8080/open；步骤 5 配方本轮修掉（原 `<(...)` 既是 bash-ism，`--slurpfile` 又吃不了非 JSON；改成 awk 落地 + `--rawfile`+split，产出 {\"discovered\":[\"172.29.0.2\"]}）"
+  smoked: "沙箱实测@81483611f0a0：nmap -sn -PE -PS8080 网段 → 8 台存活；-sT -p 8080 -oG → 172.29.0.2 8080/open；步骤 5 配方本轮修掉（原 `<(...)` 既是 bash-ism，`--slurpfile` 又吃不了非 JSON；改成 awk 落地 + `--rawfile`+split，产出 {\"discovered\":[\"172.29.0.2\"]}）"
 ---
 
 # 内网资产发现（internal-discovery）

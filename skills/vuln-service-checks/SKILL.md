@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [Nmap NSE 官方文档, OpenSSL s_client 文档, OWASP WSTG-CONF]
-  smoked: "沙箱实测@3c49879dd61b：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）。2026-10-06 补 3b「TLS 专项」并实测（fx-tls 自签靶）：testssl --protocols 给出 `TLS 1.2 offered (OK)` 与 1.0/1.1 not offered；sslscan 给出 `TLSv1.2 enabled`、1.0/1.1 disabled；sslyze 给出 Mozilla 合规判定 `FAILED - Not compliant` 并逐项列出（证书路径校验失败、弱套件、多余曲线）"
+  smoked: "沙箱实测@81483611f0a0：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）。2026-10-06 补 3b「TLS 专项」并实测（fx-tls 自签靶）：testssl --protocols 给出 `TLS 1.2 offered (OK)` 与 1.0/1.1 not offered；sslscan 给出 `TLSv1.2 enabled`、1.0/1.1 disabled；sslyze 给出 Mozilla 合规判定 `FAILED - Not compliant` 并逐项列出（证书路径校验失败、弱套件、多余曲线）"
 ---
 
 # 服务面候选漏洞核验（vuln-service-checks）

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, MITRE ATT&CK T1087.002 / T1069.002 / T1482 / T1201 / T1649, Microsoft AD 架构文档, Samba 官方文档]
-  smoked: "沙箱实测@3c49879dd61b：对实验室 Samba AD DC（域 LAB.LOCAL）逐块跑：①enum4linux-ng -A 通过（SMB 445/139 可达、Domain/NetBIOS 段、SMB1=false）②LDAP 根 DSE 通过（namingContexts=DC=lab,DC=local）③ldapdomaindump **必须加 -at SIMPLE**——默认 NTLM 绑定被服务端掐断（LDAPSessionTerminatedByServerError），加 -at SIMPLE 后 Bind OK + Domain dump finished ③b rpcclient 通过（6 用户带 RID、6 组）⑤SPN/DONT_REQ_PREAUTH/委派三条 LDAP 过滤通过（svc-web HTTP/…、svc-sql MSSQLSvc/…；UAC 查询显示 4260352）⑧kerbrute userenum 通过（17 名字、2 valid）⑨端口面通过（53/88/135/139/389/445/464/636/3268/3269 open）。未通过并已写入常见失败：④bloodhound-python 的 Kerberos 路径报 dc1.lab.local:88 名字解析失败（容器 DNS 不解析域内名字）、NTLM 路径被拒；⑥certipy find 与 ⑦adidnsdump 分别因 KRB_AP_ERR_INAPP_CKSUM 与「只支持 NTLM」未通。两条夹具限制已记入 docker/ad-dc 与 RUNBOOK"
+  smoked: "沙箱实测@81483611f0a0：对实验室 Samba AD DC（域 LAB.LOCAL）逐块跑：①enum4linux-ng -A 通过（SMB 445/139 可达、Domain/NetBIOS 段、SMB1=false）②LDAP 根 DSE 通过（namingContexts=DC=lab,DC=local）③ldapdomaindump **必须加 -at SIMPLE**——默认 NTLM 绑定被服务端掐断（LDAPSessionTerminatedByServerError），加 -at SIMPLE 后 Bind OK + Domain dump finished ③b rpcclient 通过（6 用户带 RID、6 组）⑤SPN/DONT_REQ_PREAUTH/委派三条 LDAP 过滤通过（svc-web HTTP/…、svc-sql MSSQLSvc/…；UAC 查询显示 4260352）⑧kerbrute userenum 通过（17 名字、2 valid）⑨端口面通过（53/88/135/139/389/445/464/636/3268/3269 open）。未通过并已写入常见失败：④bloodhound-python 的 Kerberos 路径报 dc1.lab.local:88 名字解析失败（容器 DNS 不解析域内名字）、NTLM 路径被拒；⑥certipy find 与 ⑦adidnsdump 分别因 KRB_AP_ERR_INAPP_CKSUM 与「只支持 NTLM」未通。两条夹具限制已记入 docker/ad-dc 与 RUNBOOK"
 ---
 
 # AD 域面清点（recon-ad-surface）

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [OWASP API Security Top 10 2023（API1/API3/API5/API6/API8）, OWASP WSTG-APIT, MITRE ATT&CK T1190, swagger/openapi 规范]
-  smoked: "沙箱实测@3c49879dd61b：对实验室 API 靶站（fx-api，见 docker/lab-api）逐块跑，9 块全部通过——①openapi.json=200 且 paths 列出 5 个端点、swagger.json=404、ffuf+api-endpoints.txt 命中 /graphql ②无凭据 GET 集合=200 且正文是业务数据（含 api_key 字段名）③BOLA：同一凭据取 users/1 与 users/2 都 200，own.id=1/role=user 与 other.id=2/role=admin 是不同主体 ④OPTIONS 的 Allow 声明 GET,HEAD,OPTIONS,POST,PUT,DELETE 而实际 GET=404、PUT=501（Allow 不能当实现证据）⑤Content-Type：json=201 / form=415 ⑥mass assignment：accepted_fields=[is_admin,name,role] ⑦introspection 返回 User(id,email,role) 与 Order(id,total,userId) ⑧403 的 detail 回显判定逻辑、/api/v1/debug=200 回显 cwd ⑨枚举（seq 1 50 | ffuf -w -）得 200/1、200/2、200/3，长度列区分对象大小。两处命令坑已写进文：管道喂 ffuf 漏 -w - 会打印帮助退出、缺 /tmp/api 目录会让 -o 失败"
+  smoked: "沙箱实测@81483611f0a0：对实验室 API 靶站（fx-api，见 docker/lab-api）逐块跑，9 块全部通过——①openapi.json=200 且 paths 列出 5 个端点、swagger.json=404、ffuf+api-endpoints.txt 命中 /graphql ②无凭据 GET 集合=200 且正文是业务数据（含 api_key 字段名）③BOLA：同一凭据取 users/1 与 users/2 都 200，own.id=1/role=user 与 other.id=2/role=admin 是不同主体 ④OPTIONS 的 Allow 声明 GET,HEAD,OPTIONS,POST,PUT,DELETE 而实际 GET=404、PUT=501（Allow 不能当实现证据）⑤Content-Type：json=201 / form=415 ⑥mass assignment：accepted_fields=[is_admin,name,role] ⑦introspection 返回 User(id,email,role) 与 Order(id,total,userId) ⑧403 的 detail 回显判定逻辑、/api/v1/debug=200 回显 cwd ⑨枚举（seq 1 50 | ffuf -w -）得 200/1、200/2、200/3，长度列区分对象大小。两处命令坑已写进文：管道喂 ffuf 漏 -w - 会打印帮助退出、缺 /tmp/api 目录会让 -o 失败"
 ---
 
 # API 面核验（vuln-api-checks）

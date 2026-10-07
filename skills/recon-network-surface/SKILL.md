@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@3c49879dd61b：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open。2026-10-06 补第 5/6 步并实测：arp-scan 扫 /24 得 9 台响应（含 MAC）、fping 打印 2 台存活、traceroute 1 跳直达目标、masscan -p8080 --rate 500 命中 172.29.0.2、nbtscan 在纯 Linux 网段无 NetBIOS 名字（负例形态）、tshark 边造流量边抓得 34 包含 `GET / HTTP/1.1`（抓与读写在同一条命令里）"
+  smoked: "沙箱实测@81483611f0a0：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open。2026-10-06 补第 5/6 步并实测：arp-scan 扫 /24 得 9 台响应（含 MAC）、fping 打印 2 台存活、traceroute 1 跳直达目标、masscan -p8080 --rate 500 命中 172.29.0.2、nbtscan 在纯 Linux 网段无 NetBIOS 名字（负例形态）、tshark 边造流量边抓得 34 包含 `GET / HTTP/1.1`（抓与读写在同一条命令里）"
 ---
 
 # 网络面清点（recon-network-surface）
