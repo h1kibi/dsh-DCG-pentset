@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP WSTG-INFO, MITRE ATT&CK T1016]
-  smoked: "沙箱实测@b9d9011f8331：jq 节点/边台账：ref 缺失点名为 MISSING、悬空引用与 GAP 计数；本轮抓到并修掉步骤 4 的孤立节点配方——原文 `$ids | index(.id)` 让 jq 报 `Cannot index array with string \"id\"` 且 exit 5，改成 `.id as $i | ($ids | index($i))` 后实测输出 x9"
+  smoked: "沙箱实测@3c49879dd61b：jq 节点/边台账：ref 缺失点名为 MISSING、悬空引用与 GAP 计数；本轮抓到并修掉步骤 4 的孤立节点配方——原文 `$ids | index(.id)` 让 jq 报 `Cannot index array with string \"id\"` 且 exit 5，改成 `.id as $i | ($ids | index($i))` 后实测输出 x9"
 ---
 
 # 资产图与信任边界（asset-graph）

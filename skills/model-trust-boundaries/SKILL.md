@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Threat Modeling, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@b9d9011f8331：7 块原文照跑通过（台账校验、入口/出口清单、待判定入口、一次只读核验（靶上 404 属未判定）、数据流登记、缺引用跨界流计数、自检计数 flows=3 with_evid=1）；本阶段工具面口径本轮对齐——原写的 http_read/http_get/tcp_connect/udp_probe 都是已删模板名，现改为 recon_http_probe 与 direct_command 两条现行路径"
+  smoked: "沙箱实测@3c49879dd61b：7 块原文照跑通过（台账校验、入口/出口清单、待判定入口、一次只读核验（靶上 404 属未判定）、数据流登记、缺引用跨界流计数、自检计数 flows=3 with_evid=1）；本阶段工具面口径本轮对齐——原写的 http_read/http_get/tcp_connect/udp_probe 都是已删模板名，现改为 recon_http_probe 与 direct_command 两条现行路径"
 ---
 
 # 信任边界与数据流（model-trust-boundaries）

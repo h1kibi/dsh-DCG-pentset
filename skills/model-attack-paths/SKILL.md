@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, MITRE ATT&CK Enterprise, OWASP WSTG]
-  smoked: "沙箱实测@b9d9011f8331：6 块原文照跑（候选边台账、缺前置条件检出、战术映射、影响×可行性排序（EVID 全在 ASSUMPTION 之前）、冻结假设、缺字段兜底）；impact 越界被 assert 挡下（exit=1）"
+  smoked: "沙箱实测@3c49879dd61b：6 块原文照跑（候选边台账、缺前置条件检出、战术映射、影响×可行性排序（EVID 全在 ASSUMPTION 之前）、冻结假设、缺字段兜底）；impact 越界被 assert 挡下（exit=1）"
 ---
 
 # 攻击路径与优先级（model-attack-paths）

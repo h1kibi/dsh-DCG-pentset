@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, 本插件状态机设计（回环与范围修订）, NIST SP 800-115]
-  smoked: "沙箱实测@b9d9011f8331：5 块原文照跑通过（jq -s 合并前两技能、新未知区域候选、判定信号计数 new_assets=1 unresolved=1、范围修订点、交接材料清单四类齐全）；缺 verdict 的条目对两块都不可见属已知盲区（需人读原始台账）"
+  smoked: "沙箱实测@3c49879dd61b：5 块原文照跑通过（jq -s 合并前两技能、新未知区域候选、判定信号计数 new_assets=1 unresolved=1、范围修订点、交接材料清单四类齐全）；缺 verdict 的条目对两块都不可见属已知盲区（需人读原始台账）"
 ---
 
 # 回环与交接（post-loop-handoff）

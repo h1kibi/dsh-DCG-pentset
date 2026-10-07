@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [MITRE ATT&CK T1090（Proxy）/ T1572（Protocol Tunneling）, chisel 官方文档, ligolo-ng 官方文档, socat 手册, proxychains-ng 手册, PTES Post-Exploitation]
-  smoked: "沙箱实测@b9d9011f8331：对实验室双网拓扑（沙箱在 pentest-lab-internal；内网段在 --internal 的 pentest-lab-deep；跳板主机 dual-homed）逐块跑：①直连内网 172.30.0.2:8080 超时（direct=000）②socat 在跳板上 TCP-LISTEN:9999,fork,reuseaddr → 经跳板 curl = 200 ③chisel 服务端**必须带 --socks5**——漏了时客户端日志显示 Connected 而 SOCKS 请求全部 Connection reset by peer（实测踩到并写入常见失败）④沙箱侧 chisel client … socks 后：curl --socks5-hostname=200（987 字节真内容）、proxychains4 curl=200、proxychains4 nmap -sT -Pn -p 8080 得 8080/tcp open ⑤配对证据落在同一文件（direct=000 与 via=200）⑥收尾 pkill -x chisel 后 after_teardown=000。另实测本沙箱**无 /dev/net/tun 且无 NET_ADMIN** ⇒ ligolo-proxy 不可用（已写进前提与常见失败）"
+  smoked: "沙箱实测@3c49879dd61b：对实验室双网拓扑（沙箱在 pentest-lab-internal；内网段在 --internal 的 pentest-lab-deep；跳板主机 dual-homed）逐块跑：①直连内网 172.30.0.2:8080 超时（direct=000）②socat 在跳板上 TCP-LISTEN:9999,fork,reuseaddr → 经跳板 curl = 200 ③chisel 服务端**必须带 --socks5**——漏了时客户端日志显示 Connected 而 SOCKS 请求全部 Connection reset by peer（实测踩到并写入常见失败）④沙箱侧 chisel client … socks 后：curl --socks5-hostname=200（987 字节真内容）、proxychains4 curl=200、proxychains4 nmap -sT -Pn -p 8080 得 8080/tcp open ⑤配对证据落在同一文件（direct=000 与 via=200）⑥收尾 pkill -x chisel 后 after_teardown=000。另实测本沙箱**无 /dev/net/tun 且无 NET_ADMIN** ⇒ ligolo-proxy 不可用（已写进前提与常见失败）"
 ---
 
 # 跳板与隧道（post-lateral-pivot）
