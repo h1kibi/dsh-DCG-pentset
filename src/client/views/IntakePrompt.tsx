@@ -36,7 +36,7 @@ import type { BehaviorProfile } from '../../contracts.ts';
 import type { ConsoleCallResult } from '../../console/client.ts';
 import type { ConsoleController } from '../controller.ts';
 import { approvalItemOf, approvalGateOf, formatBytes, type ApprovalItem } from './ApprovalQueue.tsx';
-import { actionClassLabel, formatDuration, formatTimestamp, mainStatusLabel, phaseLabel, renderInlineMarkdown } from '../format.ts';
+import { actionClassLabel, formatDuration, formatTimestamp, mainStatusLabel, phaseLabel, renderInlineMarkdown, stripInlineMarkdown } from '../format.ts';
 import { Badge, Button, Card, ErrorBar, Field, TextArea, TextInput } from '../ui.tsx';
 import { APPROVAL_MODES, BEHAVIOR_PROFILES, CUSTOM_GUIDANCE_MAX_CHARS } from '../../contracts.ts';
 import type { ApprovalMode } from '../../contracts.ts';
@@ -305,9 +305,17 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
                 : `超时 ${formatDuration(item.timeoutMs / 1000)} · 输出上限 ${formatBytes(item.maxOutputBytes)}`}
             </span>
             {item.riskSummary === null ? null : (
-              <p className="pentest-proposal__note">影响评估：{item.riskSummary}</p>
+              <p className="pentest-proposal__note">
+                {'影响评估：'}
+                {renderInlineMarkdown(stripInlineMarkdown(item.riskSummary))}
+              </p>
             )}
-            {item.purpose === null ? null : <p className="pentest-proposal__note">申请理由：{item.purpose}</p>}
+            {item.purpose === null ? null : (
+              <p className="pentest-proposal__note">
+                {'申请理由：'}
+                {renderInlineMarkdown(stripInlineMarkdown(item.purpose))}
+              </p>
+            )}
             <p className="pentest-proposal__note">
               {item.expiresAt === null
                 ? '到期时间：未声明，按已过期处理'

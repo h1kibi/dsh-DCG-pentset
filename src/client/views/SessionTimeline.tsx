@@ -32,6 +32,8 @@ import {
   formatTimestamp,
   phaseLabel,
   sessionStatusTone,
+  renderInlineMarkdown,
+  stripInlineMarkdown,
   truncate,
 } from '../format.ts';
 import { Badge, Button, Card, Empty, TextInput, toneClass } from '../ui.tsx';
@@ -189,8 +191,8 @@ function SessionRow(props: {
 
         {/* 便签：列表扫描的主要线索（§6.2.2） */}
         {session.statusNote === null || session.statusNote === '' ? null : (
-          <span className="pentest-timeline__note" title={session.statusNote}>
-            {truncate(session.statusNote, props.noteMaxChars)}
+          <span className="pentest-timeline__note" title={stripInlineMarkdown(session.statusNote)}>
+            {renderInlineMarkdown(truncate(stripInlineMarkdown(session.statusNote), props.noteMaxChars))}
             {session.statusNoteSource === 'derived' ? (
               <em className="pentest-timeline__note-source">自动摘要</em>
             ) : null}
