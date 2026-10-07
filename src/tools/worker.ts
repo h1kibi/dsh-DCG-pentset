@@ -641,7 +641,8 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '人类在控制台处理后，插件会把决定（连同他的补充）送回本会话。' +
       '沙箱事实：直连目标、不经代理、有 NET_RAW、容器内 root；' +
       '镜像里有 nmap/curl/wget/nc/dig/openssl/jq/whois/ping/ffuf/sqlmap 与 python3。' +
-      '**沙箱可出网**（可达范围与宿主一致，DNS 用宿主的解析器）：公网目标与在线资料都够得着，' +
+      '**能否出网由部署决定**（`internal` 网络 ⇒ 没有外网出口；非 internal ⇒ 可达范围与宿主一致，且出网是间歇的）：' +
+      '公网目标与在线资料够不够得着，先看启动日志里 `[dsh-pentest] 沙箱可达性` 那一行——别把超时当成目标不存在；' +
       '但**可达不等于授权**——只对已授权目标动作；连不上时先分清是防火墙/过滤还是服务没起来，' +
       '别把「无路由」当成目标端口状态的证据。',
     parameters: {
@@ -703,8 +704,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       'command 是你在沙箱内执行的整条命令原文（bash 语法，`bash -c` 执行——不是 dash）；' +
       '镜像里有 nmap / curl / wget / nc / dig / openssl / jq / whois / ping / ffuf / sqlmap ' +
       '与 python3（含 requests/dnspython/beautifulsoup4）、字典在 /usr/share/wordlists 下。' +
-      '沙箱直连目标（不经代理）、有 NET_RAW、容器内为 root；**可出网**（可达范围与宿主一致，' +
-      'DNS 用宿主解析器）——可达不等于授权，只对已授权目标动作。' +
+      '沙箱直连目标（不经代理）、有 NET_RAW、容器内为 root；**能否出网由部署决定**（`internal` 网络没有出口；' +
+      '非 internal ⇒ 与宿主同可达，且出网间歇；形状见启动日志的 `[dsh-pentest] 沙箱可达性` 一行）——' +
+      '可达不等于授权，只对已授权目标动作。' +
       'target_selector 声明这条命令打的是哪个已授权目标（只能来自选择器，不接受命令里的目标字面量）；' +
       'port 是它主要针对的端口，用于范围闸门记账。' +
       '放行取决于作业的审批模式：人工审批模式逐条人批；高权限模式对预设内的命令自行放行' +
