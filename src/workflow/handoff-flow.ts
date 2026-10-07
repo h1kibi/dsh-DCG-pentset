@@ -102,15 +102,24 @@ export class HandoffFlow {
     // 自动引用候选：本作业最近的记忆条目，新→旧。排除 `compaction_summary`——那是宿主做
     // 上下文压缩的产物，不是这一阶段的结论。条数由 `HANDOFF_AUTO_CONTEXT_REFS` 收口
     // （人类不再逐条编辑引用，因此这里取保守值）。
+    // 自动引用候选：**从活表 `memory_chunks` 取**（2026-10-07 修正）。
+    // 此前读 `memory_items` —— 那张表在生产里**没有写入方**（实测 0 行 vs 分块 183 行），
+    // 于是"自动带上引用"永远产出空数组，而空数组在下游被读成"没有信息"（这是最坏的一种错：
+    // 把"我没填"伪装成"确实没有"）。
+    // 引用形态用 `event:<uuid>`：`memory_read` **明确接受**这一形态（`memory:<uuid>` / `event:<uuid>`），
+    // 而分块天然带 `source_event_id` ⇒ 逐条可解析、可失败、可去重。
     const refRows =
       context === undefined
         ? []
         : (
-            await this.#core.deps.db.query<{ id: string; title: string }>(
-              `select id, coalesce(nullif(btrim(title), ''), kind) as title
-                 from pentest.memory_items
-                where engagement_id = $1::uuid and kind <> 'compaction_summary'
-                order by created_at desc
+            await this.#core.deps.db.query<{ event_id: string; title: string }>(
+              `select distinct on (mc.source_event_id)
+                      mc.source_event_id as event_id,
+                      coalesce(nullif(btrim(left(mc.content, 80)), ''), e.event_type) as title
+                 from pentest.memory_chunks mc
+                 join pentest.context_events e on e.event_id = mc.source_event_id
+                where e.engagement_id = $1::uuid
+                order by mc.source_event_id, mc.created_at desc
                 limit $2`,
               [context.engagement_id, HANDOFF_AUTO_CONTEXT_REFS],
             )
@@ -179,7 +188,7 @@ export class HandoffFlow {
       previousReport:
         reportRow === undefined ? null : { summary: reportRow.summary, reportId: reportRow.id },
       candidateRefs: refRows.map((row) => ({
-        memoryId: `memory:${row.id}`,
+        memoryId: `event:${row.event_id}`,
         reason: `上一阶段记忆：${row.title}`,
       })),
       ...(compressed !== null && compressed.ok
@@ -773,7 +782,12 @@ export function seedHandoffContent(input: {
     noteText === '' ? null : `（状态便签）\n${noteText.slice(0, DEFAULTS.statusNoteMaxChars)}`,
     reportText === '' || input.previousReport == null
       ? null
-      : `（报告要点 ${input.previousReport.reportId}）\n${reportText.slice(0, HANDOFF_REPORT_SUMMARY_MAX_CHARS)}`,
+      : `（报告要点）\n${reportText.slice(0, HANDOFF_REPORT_SUMMARY_MAX_CHARS)}${
+          reportText.length > HANDOFF_REPORT_SUMMARY_MAX_CHARS
+            ? `\n…（**已截断**：保留 ${String(HANDOFF_REPORT_SUMMARY_MAX_CHARS)}/${String(reportText.length)} 字符；` +
+              '完整正文用 memory_search 检索该阶段要点，或读上一阶段的报告记录）'
+            : ''
+        }`,
   ].filter((part): part is string => part !== null);
   const contextRefs = (input.candidateRefs ?? []).slice(0, HANDOFF_AUTO_CONTEXT_REFS);
   const sections = [

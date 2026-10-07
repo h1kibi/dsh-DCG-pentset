@@ -52,6 +52,7 @@ import type {
   ScopeVerdict,
   SessionLease,
 } from '../src/contracts.ts';
+import { PURPOSE_MAX_CHARS } from '../src/contracts.ts';
 import type { SessionBinding } from '../src/execution/service.ts';
 
 // ───────────────────────────── 夹具 ─────────────────────────────
@@ -274,13 +275,27 @@ describe('闸门可独立测试（每道闸门只依赖状态）', () => {
     assert.equal(outcome.kind === 'rejected' ? outcome.gateFailure : undefined, undefined, '参数校验不记闸门失败');
   });
 
-  test('purpose_present：空目的与超长目的都拒绝', async () => {
-    for (const bad of ['', '   ', 'x'.repeat(501)]) {
+  test('purpose_present：空目的拒绝；长度按 PURPOSE_MAX_CHARS 计，话术要给出实际字数', async () => {
+    for (const bad of ['', '   ']) {
       const st = await stateThroughParams({ intent: { purpose: bad } });
       const outcome = await purposeGate.check(st);
-      assert.equal(outcome.kind, 'rejected', `目的 ${JSON.stringify(bad.slice(0, 8))} 应被拒`);
+      assert.equal(outcome.kind, 'rejected', '空目的应被拒');
       assert.equal(outcome.kind === 'rejected' ? outcome.gateFailure?.rule : '', 'purpose_invalid');
+      assert.match(outcome.kind === 'rejected' ? outcome.error.message : '', /为空/, '话术要说清是"没写"');
     }
+    // 501 字符**现在合法**：上限提到 4000，因为 `exploit-approval-request` 要求五段（影响面四问 /
+    // 停止条件 / 预期证据 / 最小化自查），500 字符装不下——技能与闸门曾经互相打架（2026-10-07 实测）。
+    const withinCap = await stateThroughParams({ intent: { purpose: 'x'.repeat(501) } });
+    assert.equal((await purposeGate.check(withinCap)).kind, 'pass', '501 字符在上限内，应放行');
+    // 超限时报"过长 + 实际字数"，而不是含混的"缺少"
+    const tooLong = await stateThroughParams({ intent: { purpose: 'x'.repeat(PURPOSE_MAX_CHARS + 1) } });
+    const rejected = await purposeGate.check(tooLong);
+    assert.equal(rejected.kind, 'rejected');
+    assert.match(
+      rejected.kind === 'rejected' ? rejected.error.message : '',
+      new RegExp(`当前 ${String(PURPOSE_MAX_CHARS + 1)} 字符，上限 ${String(PURPOSE_MAX_CHARS)}`),
+      '超长必须给出实际字数（实测：写超了却被报"缺少"，第一反应是字段没传对）',
+    );
   });
 
   test('action_class_recomputed：策略判定与注册模板不一致即拒绝（不降级）', async () => {

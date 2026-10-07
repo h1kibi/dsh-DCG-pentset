@@ -83,8 +83,8 @@ export function resolveInRoots(
     throw new WorkdirError('no_roots', '本部署没有声明任何宿主目录挂载（sandbox.mounts 为空）：作业目录不可读写');
   }
   const input = rawPath.trim();
-  if (input.length === 0 || input.includes('\0')) {
-    throw new WorkdirError('bad_path', 'path 不能为空');
+  if (input.includes('\0')) {
+    throw new WorkdirError('bad_path', 'path 不能包含空字节');
   }
   let rel = input.replace(/\\/g, '/');
   let onlyRoot: WorkdirRoot | undefined;

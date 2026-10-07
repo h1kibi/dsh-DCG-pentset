@@ -76,7 +76,10 @@ test('越界一律拒绝：.. 跳出、绝对宿主路径、前缀同名目录',
   expectError(() => resolveInRoots([root], 'a/../../x.md'), 'outside_roots', '多级 .. 跳出根');
   expectError(() => resolveInRoots([root], 'C:/Windows/win.ini'), 'bad_path', '绝对宿主路径');
   expectError(() => resolveInRoots([root], '/etc/passwd'), 'bad_path', '/etc/passwd 之类绝对路径');
-  expectError(() => resolveInRoots([root], ''), 'bad_path', '空路径');
+  // 空路径 = **挂载根本身**（2026-10-07 修正：此前被拒，Agent 必须猜一个 `.` 才列得出根目录）
+  assert.equal(resolveInRoots([root], '').rel, '', '空路径就是根');
+  assert.equal(resolveInRoots([root], '.').rel, '', '`.` 规范化后就是根（rel 为空串）');
+  assert.equal(resolveInRoots([root], '/work').rel, '', '容器路径前缀指向根也合法');
   // `..` 只在根内抵消是**合法**的（不该被误伤）
   assert.equal(resolveInRoots([root], 'a/../b.md').rel, 'b.md');
 });
@@ -126,7 +129,7 @@ test('写入有上限，且拒绝把挂载根本身当文件写', () => {
     'too_large',
     '超过写入上限',
   );
-  expectError(() => writeWorkdir([root], '', 'x'), 'bad_path', '空路径');
+  expectError(() => writeWorkdir([root], '', 'x'), 'is_dir', '空路径指向挂载根本身，不是文件');
 });
 
 test('类型错误如实回报：目录用 read、文件用 list、不存在就用 not_found', () => {

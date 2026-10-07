@@ -592,7 +592,7 @@ test('上一阶段要点由**便签与报告**两个来源拼成（2026-10-07：
   });
   assert.match(seeded.prompt, /# 上一阶段要点/);
   assert.match(seeded.prompt, /（状态便签）/, '便签要标明来源');
-  assert.match(seeded.prompt, /（报告要点 report-77）/, '报告要点要标明来源与报告 id（可回溯）');
+  assert.match(seeded.prompt, /（报告要点）/, '报告要点要标明来源（**不再夹不可解析的 id** —— 2026-10-07 修正）');
   assert.match(seeded.prompt, /建议先验证越权读取/, '报告的处置建议必须带过去');
 
   // 只有报告、没有便签：这一节仍然要出现（不能因为便签为空就整节丢掉）

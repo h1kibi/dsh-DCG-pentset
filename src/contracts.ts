@@ -1838,6 +1838,9 @@ export const HANDOFF_MAX_CONTEXT_REFS = 50;
  */
 export const HANDOFF_AUTO_CONTEXT_REFS = 5;
 
+/** `resetWatermark` 之外，动作意图里「目的说明」的长度上限（字符）。 */
+export const PURPOSE_MAX_CHARS = 4000;
+
 /** 「上一阶段要点」里报告摘要的截断上限（便签另有 `DEFAULTS.statusNoteMaxChars`）。 */
 export const HANDOFF_REPORT_SUMMARY_MAX_CHARS = 1200;
 

@@ -39,7 +39,7 @@ import type {
 // 终态会话（closed / superseded / failed）不可执行任何动作。**用契约里的那一份**：
 // `workflow/core.ts` 的数据库对账读的是同一个集合，这里若再 filter 一份就会漂移，
 // 而漂移的后果是「某种终态会话仍能提交动作」这类静默越权。
-import { TERMINAL_SESSION_STATUSES, EXECUTION_MAIN_STATUSES } from '../contracts.ts';
+import { TERMINAL_SESSION_STATUSES, EXECUTION_MAIN_STATUSES, PURPOSE_MAX_CHARS } from '../contracts.ts';
 import { derivePlanHash } from './idempotency.ts';
 import { executionGateForAudit } from '../workflow/reconcile.ts';
 import {
@@ -409,17 +409,20 @@ export const purposeGate: AdmissionGate = {
   name: 'purpose_present',
   async check(state) {
     const purpose = state.intent.purpose.trim();
-    if (purpose.length === 0 || purpose.length > 500) {
+    if (purpose.length === 0 || purpose.length > PURPOSE_MAX_CHARS) {
+      // 话术要**区分**"没写"与"太长"并给出实际字数（2026-10-07 实测踩到：写超了却被报"缺少"，
+      // 第一反应是"字段没传对"）。上限从 500 提到 4000：`exploit-approval-request` 要求五段
+      // （影响面四问 / 停止条件 / 预期证据 / 最小化自查），500 字符装不下 —— 技能与闸门曾经互相打架。
+      const detail =
+        purpose.length === 0
+          ? '目的说明为空：请写清为什么执行这个动作'
+          : `目的说明过长：当前 ${String(purpose.length)} 字符，上限 ${String(PURPOSE_MAX_CHARS)}`;
       return reject(
-        blocked(
-          'classification_rejected',
-          '缺少有效的目的说明（1-500 字符）',
-          '在动作意图中填写目的后重试',
-        ),
+        blocked('classification_rejected', detail, '按提示改写目的说明后重试'),
         {
           eventType: 'classification.rejected',
           rule: 'purpose_invalid',
-          detail: '缺少有效的目的说明（1-500 字符）',
+          detail,
           normalized: null,
         },
       );
