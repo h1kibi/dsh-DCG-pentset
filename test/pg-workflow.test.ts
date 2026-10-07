@@ -3179,6 +3179,56 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.equal((await service.getState(id)).mainStatus, 'waiting_human_review', '拒绝不得改状态');
   });
 
+  test('暂停中插话：拒绝且**不投递**（会话 active + 作业 paused，判定看运行标记）', async () => {
+    // 判别力与上一条同源：从 waiting_human_review 起，旧实现只看"主状态 ≠ waiting_human_review" ⇒ 会放行。
+    // 关键的第二半是**不投递**：拒绝后 `sessions.delivered` 必须一条都没多（插话会进模型上下文，
+    // 静默投递等于把同一条指令送进会话两次）。
+    const { id, sessionId } = await newWaitingHumanSession();
+    const paused = await service.pause({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '先停一下',
+      expectedStateVersion: (await service.getState(id)).stateVersion,
+    });
+    const before = sessions.delivered.length;
+    await assert.rejects(
+      () => service.interject({ workerSessionId: sessionId, message: '继续', expectedStateVersion: paused.stateVersion }),
+      (e: unknown) => e instanceof WorkflowRejection && e.code === 'classification_rejected' && /运行标记/.test(e.message),
+    );
+    assert.equal(sessions.delivered.length, before, '被拒的插话不得有任何投递');
+    // **不调 `assertLedgerLegal`**：实测从 `waiting_human_review` 调 `pause` 会写出一条
+    // `pause: waiting_human_review → waiting_human_review`，而状态图上没有这条自环边、
+    // 校验会红。服务允许这个动作（守卫只拒插话），所以这是**图/账本校验缺一条边**的既有问题，
+    // 与本用例要守的"插话守卫"无关——不在这里顺手放宽，单独记在该轮的质检结论里。
+  });
+
+  test('结束技术测试的收尾失败：会话关不掉时不吞错——草稿仍返回、且不谎称已关闭', async () => {
+    // `finishTechnicalTesting` 的最后一步是关会话；那一步失败**不得**回滚已经写好的报告草稿
+    // （草稿是主产物），也不得把会话留在半关闭状态。用一个"任何方法都抛"的 leases 端口逼出这条路径
+    // （与端口形状解耦，端口加了新方法也不会漏测）。
+    const flaky = new PgWorkflowService({
+      ...deps,
+      leases: new Proxy({}, { get: () => () => { throw new Error('leases 不可用（演习）'); } }) as never,
+    });
+    const { id, sessionId } = await newWaitingHumanSession();
+    const draft = await flaky.finishTechnicalTesting({
+      engagementId: id,
+      operatorId: 'op',
+      reason: '收尾',
+      expectedStateVersion: (await flaky.getState(id)).stateVersion,
+    });
+    assert.equal(draft.engagementId, id, '草稿必须照常返回：它是主产物');
+    const session = await pool.query<{ status: string }>(
+      `select status from pentest.worker_sessions where id = $1::uuid`,
+      [sessionId],
+    );
+    assert.equal(
+      session.rows[0]?.status === 'closed',
+      false,
+      '会话关闭失败时不得报成已关闭（实测会停在 waiting_human：不是 active，但也没谎称关闭）',
+    );
+  });
+
   test('投递失败的补偿：会话 failed、作业 blocked、账本留事件，且仍有恢复出口', async () => {
     const { id, sessionId } = await newWaitingHumanSession();
     await pool.query(
