@@ -36,7 +36,7 @@ import type { BehaviorProfile } from '../../contracts.ts';
 import type { ConsoleCallResult } from '../../console/client.ts';
 import type { ConsoleController } from '../controller.ts';
 import { approvalItemOf, approvalGateOf, formatBytes, type ApprovalItem } from './ApprovalQueue.tsx';
-import { actionClassLabel, formatDuration, formatTimestamp, mainStatusLabel, phaseLabel, renderInlineMarkdown, stripInlineMarkdown } from '../format.ts';
+import { actionClassLabel, formatDuration, formatTimestamp, mainStatusLabel, phaseLabel, renderInlineMarkdown } from '../format.ts';
 import { Badge, Button, Card, ErrorBar, Field, TextArea, TextInput } from '../ui.tsx';
 import { APPROVAL_MODES, BEHAVIOR_PROFILES, CUSTOM_GUIDANCE_MAX_CHARS } from '../../contracts.ts';
 import type { ApprovalMode } from '../../contracts.ts';
@@ -307,13 +307,13 @@ export function PendingApprovals(props: PendingApprovalsProps): ReactNode {
             {item.riskSummary === null ? null : (
               <p className="pentest-proposal__note">
                 {'影响评估：'}
-                {renderInlineMarkdown(stripInlineMarkdown(item.riskSummary))}
+                {renderInlineMarkdown(item.riskSummary)}
               </p>
             )}
             {item.purpose === null ? null : (
               <p className="pentest-proposal__note">
                 {'申请理由：'}
-                {renderInlineMarkdown(stripInlineMarkdown(item.purpose))}
+                {renderInlineMarkdown(item.purpose)}
               </p>
             )}
             <p className="pentest-proposal__note">
@@ -549,7 +549,7 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
       {active === null || active.statusNote === null ? null : (
         <p className="pentest-proposal__note">
           {'最新状态便签：'}
-          {renderInlineMarkdown(stripInlineMarkdown(active.statusNote))}
+          {renderInlineMarkdown(active.statusNote)}
         </p>
       )}
       {/* 动作入口随**真实状态**变化，标签不说谎：

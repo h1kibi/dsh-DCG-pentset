@@ -378,9 +378,13 @@ test('运行总览：授权过期时显示告警色', () => {
 test('渲染输出不含字面 markdown（React 不会渲染 `**粗体**`，那会原样显示两个星号）', () => {
   // 这是实测踩到的：视图里写 `<span>**注意**</span>` 时浏览器显示的是两个星号。
   // 这类缺陷在纯逻辑测试里看不出来（字符串确实包含「注意」），只有看渲染输出才发现。
+  //
+  // 2026-10-07 评审的变异实验指出：**夹具不带标记时这条锁对"渲染器接线"永真**
+  // （把 renderInlineMarkdown 换回裸插值它照样绿）。现在夹具里放真标记，并同时断言
+  // 「有 <strong>」且「无 **」——两边一起钉。
   const outputs = [
-    renderToStaticMarkup(createElement(PhaseTrack, { sessions: [session({ id: 'a', statusNote: 'x' })] })),
-    renderToStaticMarkup(createElement(SessionTimeline, { sessions: [session({ id: 'a' })] })),
+    renderToStaticMarkup(createElement(PhaseTrack, { sessions: [session({ id: 'a', statusNote: '**A**' })] })),
+    renderToStaticMarkup(createElement(SessionTimeline, { sessions: [session({ id: 'b', statusNote: '**B**' })] })),
     renderToStaticMarkup(
       createElement(RunHeader, {
         engagementName: 'e',
@@ -393,6 +397,14 @@ test('渲染输出不含字面 markdown（React 不会渲染 `**粗体**`，那�
       }),
     ),
   ];
+  // 这两处是**截断站点**：写法是 strip → truncate → render，因此**没有加粗是对的**
+  // （星号不占字数、截断位置才正确）；真正必须成立的是"标记不泄漏"：title 无星号、输出无 `**`。
+  assert.ok(outputs[0]?.includes('title="A"'), 'title 属性只能是纯文本：strip 后不带星号');
+  assert.ok(outputs[1]?.includes('title="B"'), 'title 属性只能是纯文本：strip 后不带星号');
+  // 带标记的夹具让下面的扫荡**真的**能抓到"M16 回退"（把 renderInlineMarkdown/strip 换回裸插值
+  // 会让字面 `**A**` 出现在输出里 ⇒ 必红），而不是像原来那样永真。
+  assert.ok(outputs[0]?.includes('>A<'), '便签正文应只剩去掉标记后的可见文本');
+  assert.ok(outputs[1]?.includes('>B<'), '便签正文应只剩去掉标记后的可见文本');
   for (const html of outputs) {
     assert.equal(
       html.includes('**'),

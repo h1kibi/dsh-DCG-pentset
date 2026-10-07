@@ -63,7 +63,7 @@ function profileValue(text, key, fallback) {
   // 沙箱的网络与代理**必须从 profile 读**：它们与镜像摘要同处一段，是同一份部署事实。
   // 只看环境默认值会出「预检通过、运行期走另一条链路」的假绿灯（实测踩过：
   // 预检报 pentest-proxy/pentest-internal，而 profile 用的是 pentest-lab-proxy/pentest-lab-internal）。
-  const sandboxKeys = { internalNetwork: 'internalNetwork', allowEgress: 'allowEgress' };
+  const sandboxKeys = { internalNetwork: 'internalNetwork', allowEgress: 'allowEgress', proxyHost: 'proxyHost' };
   const field = sandboxKeys[key];
   if (field === undefined) return fallback;
   // profile 里的沙箱值写成 `!!js process.env.X ?? '默认值'`：先看环境变量，再看该行的
@@ -96,11 +96,15 @@ function configuredSandbox() {
     throw new Error(`profile 的工具镜像摘要无效（${digest || '缺失'}）。请设置 PENTEST_TOOL_DIGEST 为完整 sha256 摘要。`);
   }
   const internalNetwork = profileValue(text, 'internalNetwork', NETWORK);
+  // 代理名**必须来自 profile**（或环境变量兜底）：它只用于两件事——把该成员从"未声明目标"的
+  // **致命**判定里豁免、以及提示它接在哪。2026-10-07 一度只剩 env 一个来源，于是 profile 里
+  // 叫别的名字的部署（本机实验室就是 `pentest-lab-proxy`）会被当成未声明成员**拒绝启动**。
+  const proxy = profileValue(text, 'proxyHost', PROXY);
   // 「沙箱可达范围 = 宿主可达范围」是**操作者的决定**，必须显式声明才生效：
   // profile 写 `sandbox.allowEgress: true`，或用环境变量临时放开。
   const allowEgress =
     profileValue(text, 'allowEgress', 'false') === 'true' || process.env.PENTEST_ALLOW_SANDBOX_EGRESS === '1';
-  return { image, digest, internalNetwork, allowEgress };
+  return { image, digest, internalNetwork, allowEgress, proxy };
 }
 
 function checkNetwork(network, proxy, notes = [], allowEgress = false) {
@@ -352,7 +356,7 @@ function preflight() {
   // 代理**不在必备运行列表里**（2026-10-07）：它已不在出网路径上，缺了它不该拦住启动
   // （此前会让"按 RUNBOOK §0 四样东西搭起来的合法部署"直接拒绝启动——评审实测）。
   const network = sandbox?.internalNetwork ?? NETWORK;
-  const proxy = PROXY;
+  const proxy = sandbox?.proxy ?? PROXY;
   const registryResult = runningContainer(REGISTRY);
   if (!registryResult.ok) failures.push(registryResult.detail);
   const networkFailure = checkNetwork(network, proxy, notes, sandbox?.allowEgress ?? process.env.PENTEST_ALLOW_SANDBOX_EGRESS === '1');
@@ -458,7 +462,10 @@ if (sandbox && failures.length === 0) {
     await checkDatabaseRole(database);
     await checkDatabaseSchema(database);
     await applyPendingMigrations(database);
-    console.log(`前置检查通过：Docker、${network}、${proxy}、工具镜像摘要、个人数据库 ${database.name}`);
+    console.log(
+      `前置检查通过：Docker、${network}、工具镜像摘要、个人数据库 ${database.name}` +
+        '（代理不在出网路径上，未检查）',
+    );
     process.env.PENTEST_DATABASE_URL = database.url;
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));

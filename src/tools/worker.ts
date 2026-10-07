@@ -709,9 +709,10 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '可达不等于授权，只对已授权目标动作。' +
       'target_selector 声明这条命令打的是哪个已授权目标（只能来自选择器，不接受命令里的目标字面量）；' +
       'port 是它主要针对的端口，用于范围闸门记账。' +
-      '放行取决于作业的审批模式：人工审批模式逐条人批；高权限模式对预设内的命令自行放行' +
-      '（申请返回 selfApproved=true 即可直接执行）。**不要因为能自行放行就去扩大范围或提权**——' +
-      '超出预设、默认禁用类别（persistence/destructive/exfiltration）仍然会转给人类。',
+      '**自由命令免批**（2026-10-07 操作者裁定）：服务端按类别放行并记审计，**命令原文不再经人过目**；' +
+      '仍需转给人类的是**超出预设**的动作与默认禁用类别（persistence/destructive/exfiltration）。' +
+      '**免批不等于可以自作主张**——范围裁决（只打已裁决地址、端口记账）与沙箱加固照旧，' +
+      '不要因为免批就扩大范围或提权。',
     parameters: {
       command: { type: 'string', required: true, description: '在沙箱内执行的命令原文（shell 语法）' },
       port: { type: 'integer', required: true, description: '这条命令主要针对的端口（范围闸门据此记账）' },
@@ -763,7 +764,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '目标从选择器注入、地址由宿主的裁决结果固定（容器不做 DNS），' +
       '因此同一动作的审计与幂等键是可复现的，也不需要人类为每条扫描命令逐次放行：' +
       '侦察类动作按 `active_probing`/`passive_collection` 记账，由范围、租约、节奏（stealth 1rps / standard 5rps / deep 10rps）约束；' +
-      '需要人批的是 `exploit_validation` 类动作（用 pentest_exec）。' +
+      '需要人批的是**超出预设**的动作（会转给人类）与 `lateral_movement` 一类的逐次放行类别；自由命令模板 `direct_command`（走 pentest_exec）自 2026-10-07 起**免批**。' +
       '**DNS 类 technique（dns_enum/dns_brute）走 UDP**：范围条目要声明 udp，否则会被范围闸门拒绝。' +
       '先扫面（port_scan）再指纹（service_probe/tls_inspect/http_probe），最后才目录与爬取——顺序写进了 recon-network-surface/recon-web-surface 两份 skill。',
     parameters: {

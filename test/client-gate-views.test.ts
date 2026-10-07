@@ -170,7 +170,7 @@ function approval(over: Partial<ApprovalItem> = {}): ApprovalItem {
     timeoutMs: 30_000,
     maxOutputBytes: 262_144,
     purpose: PURPOSE,
-    riskSummary: 'exploit_validation：验证 CVE-2026-0001 的反序列化入口',
+    riskSummary: '**影响面**：验证 CVE-2026-0001 的反序列化入口',
     decision: 'pending',
     expiresAt: '2026-09-19T12:30:00Z',
     consumedAt: null,
@@ -864,6 +864,10 @@ test('界面文案不泄漏 Markdown 记号：加粗必须渲染成 strong，而
   assert.ok(queue.includes('<strong>即将执行的这条命令</strong>'));
   assert.ok(scope.includes('<strong>都不纳入</strong>'));
   assert.ok(scope.includes('<strong>默认不在授权范围内</strong>'));
+  // **模型写的字段**也必须过渲染边界（2026-10-07 评审：夹具不带标记时这条锁对渲染接线永真，
+  // 把 riskSummary 换回裸插值照样绿）。放行卡那处是**截断站点**（strip→truncate→render）⇒
+  // 正确表现是"只剩纯文本、没有星号"；带标记的夹具让下面的 `**` 扫荡真的能抓到 M16 式回退。
+  assert.ok(queue.includes('影响面：'), 'riskSummary 的标记应被剥掉，只剩可见文本');
   for (const html of [queue, scope]) {
     // 星号是 Markdown 的记号，浏览器不会解释它——人类只会看到多余的两个星号
     assert.equal(html.includes('**'), false, '渲染结果里不应出现字面的 Markdown 星号');

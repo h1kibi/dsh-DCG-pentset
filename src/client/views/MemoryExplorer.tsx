@@ -49,7 +49,7 @@ import type { Classification, LedgerVerificationView, Phase, TrustLevel } from '
 import type { ChunkKind } from '../../memory/chunks.ts';
 import type { RetrievalRoute } from '../../memory/retrieval.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatCount, formatTimestamp, phaseLabel, trustLabel, trustTone, truncate } from '../format.ts';
+import { formatCount, formatTimestamp, phaseLabel, renderInlineMarkdown, stripInlineMarkdown, trustLabel, trustTone, truncate } from '../format.ts';
 import { GateList } from './GateList.tsx';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextInput } from '../ui.tsx';
 
@@ -802,11 +802,13 @@ function MemoryHitRow(props: {
 
       {reasoning === null ? null : (
         <p className="pentest-memory-hit__reasoning" role="note">
-          {reasoning}
+          {renderInlineMarkdown(reasoning)}
         </p>
       )}
 
-      <p className="pentest-memory-hit__excerpt">{truncate(hit.excerpt, EXCERPT_DISPLAY_CHARS)}</p>
+      <p className="pentest-memory-hit__excerpt">
+        {renderInlineMarkdown(truncate(stripInlineMarkdown(hit.excerpt), EXCERPT_DISPLAY_CHARS))}
+      </p>
 
       <div className="pentest-memory-hit__meta">
         <Stat

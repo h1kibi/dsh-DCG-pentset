@@ -588,7 +588,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
               <code title={row.workerSessionId}>{truncate(row.workerSessionId, 12)}</code>
             )}
             <span className="pentest-approval__purpose">
-              {row.purpose === null ? MISSING : truncate(row.purpose, 120)}
+              {row.purpose === null ? MISSING : renderInlineMarkdown(truncate(stripInlineMarkdown(row.purpose), 120))}
             </span>
             {row.scopeVersion === null || row.policyEpoch === null ? (
               // 范围版本与 epoch 是凭证绑定的边界：缺了它们就说不清「批的是哪个范围的判断」，

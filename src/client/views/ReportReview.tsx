@@ -546,7 +546,7 @@ function FindingReviewRow(props: {
         ) : (
           <ol className="pentest-finding__steps">
             {finding.reproductionSteps.map((step, index) => (
-              <li key={`${String(index)}-${step}`}>{step}</li>
+              <li key={`${String(index)}-${step}`}>{renderInlineMarkdown(step)}</li>
             ))}
           </ol>
         )}
@@ -554,12 +554,12 @@ function FindingReviewRow(props: {
 
       {finding.impact === null ? null : (
         <Field label="影响">
-          <span className="pentest-finding__text">{finding.impact}</span>
+          <span className="pentest-finding__text">{renderInlineMarkdown(finding.impact)}</span>
         </Field>
       )}
       {finding.remediation === null ? null : (
         <Field label="修复建议">
-          <span className="pentest-finding__text">{finding.remediation}</span>
+          <span className="pentest-finding__text">{renderInlineMarkdown(finding.remediation)}</span>
         </Field>
       )}
 

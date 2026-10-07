@@ -260,7 +260,7 @@ export function formatCount(value: number | null | undefined): string {
  */
 export function renderInlineMarkdown(text: string): ReactNode {
   const parts: ReactNode[] = [];
-  const pattern = /\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g;
+  const pattern = INLINE_MARKDOWN;
   let last = 0;
   let key = 0;
   for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
@@ -281,7 +281,18 @@ export function renderInlineMarkdown(text: string): ReactNode {
  * **不要**拿它去洗给模型/交接的内容——那里标记是有用的。
  */
 export function stripInlineMarkdown(text: string): string {
-  return text.replace(/\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*/g, (_whole, bold, code, italic) =>
-    String(bold ?? code ?? italic ?? ''),
-  );
+  return text.replace(INLINE_MARKDOWN, (_whole, bold, code, italic) => String(bold ?? code ?? italic ?? ''));
 }
+
+/**
+ * 行内标记的**单源**模式串（渲染与 strip 共用一份，避免两边口径分叉）。
+ *
+ * 收紧的理由（2026-10-07 评审实测，都是**会改坏原文**的方向）：
+ *  - 首版 `\*([^*]+)\*` 只看"两个星号之间没有星号"，于是 `2 * 3 * 4` 被吃成斜体、
+ *    `rm -rf /tmp/* 与 /var/*` 的 glob 星号**凭空消失**（便签/影响评估恰恰最爱写命令与路径，
+ *    而 strip 还用在 `title=` 与截断前测量上 ⇒ 人类读到的命令会被改写）；
+ *  - 现在：内容不得跨行、不得以空白开头/结尾，定界符前后不得紧贴词字符或星号。
+ * 已知残留：**紧贴引号/点号的 glob 对**（`"*.log" 与 "*.conf"`）仍会配对（CommonMark 亦如此）；
+ * 遇到就把它当"命令文本不要用单星号斜体"的信号。
+ */
+const INLINE_MARKDOWN = /\*\*([^*\n]+)\*\*|`([^`\n]+)`|(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])/g;

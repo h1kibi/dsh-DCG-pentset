@@ -295,8 +295,23 @@ test('跨代码块依赖 /tmp 产物的 skill 必须写明「容器是一次性�
  * `lateral_movement` 那条真正逐条放行的策略都要用它），已失效的只是**命令通道**的措辞。
  */
 test('skill 正文不得再对命令通道声称"逐条人批"（免批裁定的防回流锁）', () => {
-  const BANNED = ['每条都要人类', '逐条人工放行', '每次都要人批', '人类逐条放行', '每条都要人类点一次'];
+  // 规则从"短语黑名单"改成**必答项**（2026-10-07 评审的变异实验：黑名单漏掉最典型的回流写法——
+  // `逐条人批` 这个词本身、被字词隔开的「每条命令经 pentest_exec 都要人类批准」、以及命中词前
+  // 蹭到的无关否定词；同时对"引用旧措辞并声明作废"误报）。
+  // 现在：**凡同一行里既提命令通道、又提审批语义的，必须出现显式免批事实**，否则红。
   const CHANNEL = ['pentest_exec', 'direct_command', '自由命令'];
+  const APPROVAL = /审批|放行|人批|批准|过目/;
+  const CLEARED = [
+    '免批',
+    '不再经人过目',
+    '不再逐条',
+    '不需要逐条',
+    '无需逐条',
+    '不需要人类放行',
+    '不消耗人类审批',
+    '服务端按类别放行',
+  ];
+  const HISTORY = /作废|历史|曾|此前|不再成立/; // 引用旧措辞并说明作废的行不算违规
 
   const files: string[] = readdirSync(SKILLS_DIR, { recursive: true })
     .map((entry) => join(SKILLS_DIR, String(entry)))
@@ -309,24 +324,19 @@ test('skill 正文不得再对命令通道声称"逐条人批"（免批裁定的
       .split('\n')
       .forEach((line, index) => {
         if (!CHANNEL.some((token) => line.includes(token))) return;
-        const hit = BANNED.find((phrase) => {
-          const at = line.indexOf(phrase);
-          if (at < 0) return false;
-          // 否定句不算违规：「**不需要**逐条人工放行」是在说结构化通道的**正确**性质
-          // （首版锁没做这一步，把 4 句真话判成了违规——锁误报比不锁更糟，会逼人改对的话）。
-          const before = line.slice(Math.max(0, at - 6), at);
-          return !/不需要|无需|不再|不必|没有/.test(before);
-        });
-        if (hit !== undefined) {
-          offenders.push(`${file.slice(SKILLS_DIR.length + 1)}:${String(index + 1)} —— 含「${hit}」`);
-        }
+        if (!APPROVAL.test(line)) return;
+        if (HISTORY.test(line)) return;
+        if (CLEARED.some((phrase) => line.includes(phrase))) return;
+        offenders.push(
+          `${file.slice(SKILLS_DIR.length + 1)}:${String(index + 1)} —— 提到命令通道与审批，却没说清"免批"：${line.trim().slice(0, 80)}`,
+        );
       });
   }
   assert.deepEqual(
     offenders,
     [],
-    '免批裁定后命令通道不再逐条人批，这些行会让模型每条命令白请一次批（或报告写成"已获人类逐条放行"）。' +
-      `要么改措辞，要么把该行改成描述真正仍逐条放行的类别（如 lateral_movement）：\n${offenders.join('\n')}`,
+    '免批裁定后命令通道不再逐条人批：这一行要么补上"免批（命令原文不再经人过目）"，' +
+      `要么改成描述真正仍逐条放行的类别（如 lateral_movement）：\n${offenders.join('\n')}`,
   );
 });
 

@@ -47,3 +47,20 @@ test('stripInlineMarkdown：只能是纯文本的出口（title、日志、导�
   // strip 之后再截断：星号不占字数、截断位置才正确（便签卡片就是这么用的）
   assert.equal(stripInlineMarkdown('**A组**完成').slice(0, 4), 'A组完成');
 });
+
+test('不吞正常内容：算式 / glob / 列表不能被当成斜体（2026-10-07 P1 回归锁）', () => {
+  // 首版正则 `\*([^*]+)\*` 只看"两个星号之间没有星号"，于是便签/影响评估里最常见的
+  // 命令与路径会被改写：`rm -rf /tmp/* 与 /var/*` 的星号**凭空消失**，`2 * 3 * 4` 被吃成斜体。
+  // strip 还用在 title= 与截断前测量上 ⇒ 人类读到的命令会被改写。这些是那次的回归锁。
+  assert.equal(html('2 * 3 * 4 = 8'), '2 * 3 * 4 = 8');
+  assert.equal(html('rm -rf /tmp/* 与 /var/*'), 'rm -rf /tmp/* 与 /var/*');
+  assert.equal(stripInlineMarkdown('rm -rf /tmp/* 与 /var/*'), 'rm -rf /tmp/* 与 /var/*');
+  assert.equal(stripInlineMarkdown('2 * 3 * 4'), '2 * 3 * 4');
+  assert.equal(html('glob *.php 与 *.jsp'), 'glob *.php 与 *.jsp');
+  // 跨行的两个 * 不得配成一对（会吞掉换行、把两个列表项并成一个）
+  assert.equal(html('* 发现一\n* 发现二'), '* 发现一\n* 发现二');
+  // 真正的斜体仍然渲染（收紧不能把功能一起收掉）
+  assert.equal(html('*未验证*'), '<em>未验证</em>');
+  // 加粗与代码段不受影响
+  assert.equal(html('**成立** 与 `x`'), '<strong>成立</strong> 与 <code>x</code>');
+});
