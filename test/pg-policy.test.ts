@@ -152,10 +152,13 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
     assert.deepEqual(second, first);
   });
 
-  it('出厂集 = 直连命令 + 两族结构化模板（侦察/核验）；只有直连命令落在逐次放行类别里', async () => {
+  it('出厂集 = 直连命令 + 两族结构化模板（侦察/核验）；**没有任何**出厂模板落在逐次放行类别里', async () => {
     // 2026-10-05 清理：五个示例模板删除（镜像里有真工具，Agent 直接写命令）。
     // 2026-10-06：新增 12 张 `recon_*`（类别 passive_collection/active_probing，不触发逐次放行）——
     // 这一族的意义就是「侦察不消耗人类审批预算，危险动作才消耗」。
+    // 2026-10-07 免批裁定：`direct_command` 的类别改为 `active_probing` ⇒ 出厂集里**一张都不剩**。
+    // 断言反转 = 反转那个决定；代价（放行卡不再对它显示命令原文、仅剩范围裁决与沙箱）写在
+    // 执行层那条锁旁边（test/execution.test.ts 的「直连命令模板」用例）。
     const ids = DEFAULT_TEMPLATES.map((s) => s.template.id);
     assert.equal(ids[0], 'direct_command');
     assert.equal(ids.length, 17, `实际：${ids.join('、')}`);
@@ -166,8 +169,8 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
     );
     assert.deepEqual(
       perAction.map((s) => s.template.id),
-      ['direct_command'],
-      '只有直连命令落在逐次放行类别里；侦察族落进来就等于没解决吞吐问题',
+      [],
+      '按 2026-10-07 裁定：没有任何出厂模板落在逐次放行类别里（改回只需把 direct_command 的类别改回 exploit_validation）',
     );
     const spec = DEFAULT_TEMPLATES[0]!;
     assert.equal(spec.allowFreeForm, true, '它就是要跑任意命令，黑名单由显式开关跳过');

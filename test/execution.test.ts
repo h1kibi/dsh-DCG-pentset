@@ -1170,8 +1170,9 @@ test('超出行为预设不再是拒绝理由：不在启用集合里的类别�
   // `not_enabled_by_policy`）——Agent 一越出预设就被弹回，只能反复试探或干脆放弃。
   // 现在它只表示「超出当前行为预设」，结论是**把人拉进回路**（needs_approval），不是拒绝。
   //
-  // 关键构造：把逐次放行集合清空，让 `exploit_validation` **只可能**因为「超出预设」
-  // 才被拦下——否则 `perActionApprovalClasses` 的契约下限会掩盖这条新语义（两者是「或」）。
+  // 关键构造：把逐次放行集合清空，并**从启用集合里去掉 `active_probing`** ——
+  // `direct_command` 自 2026-10-07 免批裁定起属于 `active_probing`（预设内），
+  // 若还把它列在启用集合里，本用例就不再是"超出预设"的场景（实测以 'pass' !== 'needs_approval' 报出）。
   const checked: Array<Record<string, unknown>> = [];
   const h = makeHarness(undefined, undefined, {
     record: async (input) => {
@@ -1180,10 +1181,10 @@ test('超出行为预设不再是拒绝理由：不在启用集合里的类别�
   });
   h.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_collection', 'active_probing'],
+    enabledActionClasses: ['passive_collection'],
   });
 
-  // `id` 的 base64：自由命令最直接地落在 exploit_validation 类。
+  // `id` 的 base64：自由命令的类别是 `active_probing`（2026-10-07 免批裁定之后）。
   const commandB64 = Buffer.from('id', 'utf8').toString('base64');
   const decision = await h.admit({
     templateId: 'direct_command',
@@ -1197,7 +1198,7 @@ test('超出行为预设不再是拒绝理由：不在启用集合里的类别�
   if (decision.kind !== 'needs_approval') return;
   assert.ok(decision.approvalId.length > 0, '超出预设必须拿到放行凭证');
   assert.equal(h.store.requests.length, 1);
-  assert.equal(h.store.requests[0]?.actionClass, 'exploit_validation');
+  assert.equal(h.store.requests[0]?.actionClass, 'active_probing');
   assert.equal(
     checked.some((p) => p['decision'] === 'needs_approval' && p['rule'] === 'beyond_behavior_preset'),
     true,
@@ -1217,7 +1218,9 @@ test('超出行为预设时审计写不进去：停止受理且不创建放行�
   });
   h.setPolicy({
     perActionApprovalClasses: [],
-    enabledActionClasses: ['passive_collection', 'active_probing'],
+    // 同 1168：`direct_command` 自 2026-10-07 起是 `active_probing`，要触发
+    // `beyond_behavior_preset` 就必须把它排除在启用集合外。
+    enabledActionClasses: ['passive_collection'],
   });
   const intent = {
     templateId: 'direct_command',
@@ -1234,13 +1237,16 @@ test('超出行为预设时审计写不进去：停止受理且不创建放行�
   }
   assert.equal(h.store.requests.length, 0, '审计写不进去时不得创建放行凭证');
 
-  // 对照组：同一夹具、审计正常时仍是 needs_approval。
+  // 对照组：同一夹具、审计正常时**照常受理**。注意自 2026-10-07 免批裁定后这里是 `admitted`
+  // 而不是 `needs_approval`：`active_probing` 在启用集合内且不属逐次放行 ⇒ 根本不需要人批
+  // （主用例要考的是「审计写不进去 ⇒ 连 needs_approval 都不给，直接停止受理」这条纪律，
+  //  与是否需要人批无关，所以对照组的形态变化不影响它）。
   const control = makeHarness();
   control.setPolicy({
     perActionApprovalClasses: [],
     enabledActionClasses: ['passive_collection', 'active_probing'],
   });
-  assert.equal((await control.admit(intent)).kind, 'needs_approval');
+  assert.equal((await control.admit(intent)).kind, 'admitted');
 });
 
 test('启用集合内的类别照常受理：超出预设机制不得误拦', async () => {
@@ -1724,13 +1730,17 @@ test('在途动作结束后不再计入终止范围', async () => {
  * 它用三条约束换自由：类别是 `exploit_validation`（本部署强制逐次人工放行）、仍然只跑在
  * 加固过的沙箱里、文本/超时/输出都有上限。下面四条断言就是这三条的机器表示。
  */
-test('直连命令模板：注册在册、可跑任意文本、但被逐次放行与其它约束圈住', () => {
+test('直连命令模板：注册在册、可跑任意文本，且**按 2026-10-07 裁定免批**（代价已写在此处）', () => {
   const spec = specOf('direct_command');
-  // ① 类别必须落在「逐次人工放行」的集合里——这是它唯一的内容闸门之外的控制。
+  // ① 断言**反转**：它不再属于「逐次人工放行」集合 —— 操作者裁定「任意命令免批」。
+  //    **代价（必须留在这条锁旁边）**：放行卡这条内容闸门对它失效，人类不再看命令原文；
+  //    仅剩的闸门是 admit 阶段的范围裁决（只打已裁决地址）与沙箱加固（容器隔离）。
+  //    反转这条锁 = 反转那个决定，不是修 bug；若要恢复逐条人批，把类别改回去即可。
   assert.ok(
-    (PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(spec.template.actionClass),
-    '自由命令必须属于逐次放行类别，否则机器可以自己批准任意命令',
+    !(PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(spec.template.actionClass),
+    '按裁定：自由命令**不在**逐次放行类别里（改回逐条人批只需把类别改回 exploit_validation）',
   );
+  assert.equal(spec.template.actionClass, 'active_probing', '免批成立的前提是它落在预设内的类别');
   assert.deepEqual(spec.template.parameters.map((p) => p.name), ['port', 'command_b64']);
   assert.equal(spec.allowFreeForm, true, '黑名单对它不生效是**显式**开关，不是默认');
 
@@ -1764,9 +1774,10 @@ function btoaish(text: string): string {
 test('高权限模式（approval_mode=auto）：预设内的动作由服务端自行放行；越界与人工档仍转人类', async () => {
   const h = makeHarness();
   const command = { templateId: 'direct_command', params: { port: 3002, command_b64: Buffer.from('id', 'utf8').toString('base64') } };
-  const basePolicy = { perActionApprovalClasses: ['exploit_validation', 'lateral_movement'] as const };
+  const basePolicy = { perActionApprovalClasses: ['active_probing', 'lateral_movement'] as const };
 
-  // ① 预设内（启用集合里有 exploit_validation）+ auto ⇒ 服务端自行放行，Agent 不必等。
+  // ① 预设内 + auto ⇒ 服务端自行放行（免批类别走的是 admitted 无凭证路径；
+  //    这里特意用**逐次放行类别**来考"自放行要留凭证"的机制本身）。
   h.setPolicy({ ...basePolicy, approvalMode: 'auto', enabledActionClasses: ['passive_collection', 'active_probing', 'exploit_validation'] });
   const selfApproved = await h.admit(command);
   assert.equal(selfApproved.kind, 'self_approved', '预设内的动作在 auto 档不应停在等待人类');
@@ -1775,11 +1786,15 @@ test('高权限模式（approval_mode=auto）：预设内的动作由服务端�
   const recorded = h.store.requests.at(-1);
   assert.equal(recorded?.selfApproval?.decidedBy, 'server:auto-approval', '审计必须写明是服务端自行放行，而不是人类');
 
-  // ② 命令类在 auto 档**即使不在预设启用集合里**也自行放行（本部署唯一的动手模板；
-  //    严格要求「预设内」会让 stealth/standard 下每条命令都要人批，高权限等于失效）。
+  // ② 命令类**不在预设启用集合里**时，auto 档**不再**自行放行（2026-10-07 免批裁定之后）。
+  //    此前它靠 `behavior-profile` 里一条**按类别名 `exploit_validation` 硬编码**的豁免自放行；
+  //    免批后类别是 `active_probing`，而那个名字被**所有**主动探测模板共用 ——
+  //    把豁免改挂到它上面，等于让"越界也自放行"扩散到整个主动探测族，属于未经裁定的放宽。
+  //    因此保持豁免只管旧类别，这里断言新行为：越界 ⇒ 拉人进回路（正常 profile 下它在预设内，
+  //    仍然是 auto 自放行，见 ①）。
   h.setPolicy({ ...basePolicy, approvalMode: 'auto', enabledActionClasses: ['passive_collection'] });
   const commandBeyondPreset = await h.admit(command);
-  assert.equal(commandBeyondPreset.kind, 'self_approved', '命令类在 auto 档自行放行');
+  assert.equal(commandBeyondPreset.kind, 'needs_approval', '命令类越出预设时 auto 档也应拉人进回路');
 
   // ③ 人工审批档：同样的动作必须等人。
   h.setPolicy({ ...basePolicy, approvalMode: 'human', enabledActionClasses: ['exploit_validation'] });
@@ -1800,7 +1815,14 @@ test('高权限自放行下的幂等：同一条命令重发得到同一键与�
     templateId: 'direct_command',
     params: { port: 3002, command_b64: Buffer.from('id', 'utf8').toString('base64') },
   };
-  h.setPolicy({ perActionApprovalClasses: ['exploit_validation'], approvalMode: 'auto' });
+  // 夹具必须显式启用该类别：自 2026-10-07 免批裁定后，`shouldSelfApprove` 里那条
+  // **按类别名 `exploit_validation` 硬编码**的豁免不再覆盖命令类 —— 它现在靠"落在预设内"
+  // 获得 auto 自放行（旧夹具没有 enabledActionClasses，靠的就是那条豁免）。
+  h.setPolicy({
+    perActionApprovalClasses: ['active_probing'],
+    approvalMode: 'auto',
+    enabledActionClasses: ['passive_collection', 'active_probing'],
+  });
 
   const first = await h.admit(command);
   const resent = await h.admit(command);
@@ -1813,7 +1835,7 @@ test('高权限自放行下的幂等：同一条命令重发得到同一键与�
     first.plan.idempotencyKey,
     deriveIdempotencyKey({
       workerSessionId: SESSION,
-      actionClass: 'exploit_validation',
+      actionClass: 'active_probing',
       normalizedTarget: first.plan.normalizedTarget,
       normalizedCommand: first.plan.normalizedCommand,
       approvalId: '',

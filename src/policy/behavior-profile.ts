@@ -400,10 +400,14 @@ function normalizeGuidance(raw: unknown, profile: BehaviorProfile): string | und
  *
  * 放行集合 = 「预设启用集合」∪ {`exploit_validation`}，再减去默认禁用类别。三条理由：
  *
- *   1. **本部署只有一张动手模板**（`direct_command`，类别 `exploit_validation`）。若严格要求
- *      「只在预设内」，那么 `stealth` / `standard`（按设计不含利用验证）下的**每一条命令**都是
- *      越界 ⇒ 高权限档退化成「每条都问人」——2026-10-05 实测就是这么退化的，人类报「AI 审批
- *      没有落实」。把命令类单独放进来，高权限才有意义：它放的是**流程**，不是范围。
+ *   1. **类别豁免（2026-10-07 起收窄）**。`exploit_validation` 这条豁免当初是为一件事设的：
+ *      `stealth` / `standard`（按设计不含利用验证）下**每一条命令**都越界 ⇒ 高权限档退化成
+ *      「每条都问人」（2026-10-05 实测），于是把命令类单独放进来。**2026-10-07 免批裁定后**，
+ *      `direct_command` 的类别是 `active_probing` —— 它在各预设的启用集合里（见本文件 `enabled`），
+ *      因此"命令在 auto 档能被自放行"这件事**已由预设本身保证**，不再需要这条豁免。
+ *      **刻意不把豁免改挂到 `active_probing`**：那个名字被整个主动探测族共用，改挂等于让
+ *      「越界也自放行」扩散到所有主动探测模板 —— 那是未经裁定的放宽。于是豁免保持只管旧类别，
+ *      对越界的命令类不再生效（越界 ⇒ 拉人进回路）。
  *   2. `lateral_movement` 与其它非预设类别**仍然转人工**：横向移动与「没被本预设允许的动作」
  *      不是同一种风险，它跨主机。
  *   3. `DEFAULT_DISABLED_CLASSES`（persistence / destructive / exfiltration）**永远**不放行——
