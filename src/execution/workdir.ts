@@ -22,7 +22,7 @@
  *
  * 本模块不接触任何目标、不产出计划、不需要放行：它只碰人类自己挂进来的宿主目录。
  */
-import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, existsSync, appendFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /** 一个挂载根（与 `sandbox.mounts` 同源，只是两个路径都必填）。 */
@@ -257,6 +257,158 @@ export interface WorkdirWriteResult {
   readonly path: string;
   readonly containerPath: string;
   readonly bytes: number;
+}
+
+/**
+ * 在挂载根内**递归检索**（2026-10-07 加）。
+ *
+ * 动因是实测：Agent 要在 200+ 份归档文档里考古（150KB+ 的正文），而 `read` 整文件返回会把上下文
+ * 烧光——四份报告里三份都提到"需要 search/offset"。`read` 的分页解决"读大文件"，这里解决"找位置"。
+ *
+ * 边界（与其余 op 同一套纪律，另加三条）：
+ *   - 只扫**文本**、只扫挂载根内（拒绝越界 ✓ 与 read 同一套解析 ✓）；
+ *   - 有硬上限：文件数 / 单文件读取量 / 总读取量 / 命中数（超了如实标注 `truncated` ✓）；
+ *   - 跳过明显的二进制（含 NUL 的前 8KiB ✓）与超大文件 ✓。
+ */
+export const WORKDIR_SEARCH_MAX_FILES = 500;
+export const WORKDIR_SEARCH_MAX_FILE_BYTES = 512 * 1024;
+export const WORKDIR_SEARCH_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+export const WORKDIR_SEARCH_MAX_MATCHES = 100;
+
+export interface WorkdirMatch {
+  readonly path: string;
+  readonly line: number;
+  readonly text: string;
+}
+
+export interface WorkdirSearchResult {
+  readonly path: string;
+  readonly pattern: string;
+  readonly matches: readonly WorkdirMatch[];
+  readonly filesScanned: number;
+  readonly truncated: boolean;
+  readonly skipped: readonly string[];
+}
+
+export function searchWorkdir(
+  roots: readonly WorkdirRoot[],
+  rawPath: string,
+  pattern: string,
+  options: { readonly maxMatches?: number } = {},
+): WorkdirSearchResult {
+  const target = resolveInRoots(roots, rawPath);
+  assertRealPathInside(target);
+  let stat;
+  try {
+    stat = statSync(target.abs);
+  } catch {
+    throw new WorkdirError('not_found', `路径不存在：${rawPath}`);
+  }
+  const maxMatches = options.maxMatches ?? WORKDIR_SEARCH_MAX_MATCHES;
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern, 'u');
+  } catch (error) {
+    throw new WorkdirError('bad_path', `正则无法编译：${error instanceof Error ? error.message : String(error)}`);
+  }
+  const files: string[] = [];
+  if (stat.isDirectory()) {
+    const walk = (dir: string, rel: string): void => {
+      if (files.length >= WORKDIR_SEARCH_MAX_FILES) return;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (files.length >= WORKDIR_SEARCH_MAX_FILES) return;
+        const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
+        if (entry.isDirectory()) walk(join(dir, entry.name), childRel);
+        else if (entry.isFile()) files.push(childRel);
+      }
+    };
+    walk(target.abs, target.rel === '' ? '' : target.rel);
+  } else {
+    files.push(target.rel);
+  }
+  const matches: WorkdirMatch[] = [];
+  const skipped: string[] = [];
+  let totalBytes = 0;
+  let filesScanned = 0;
+  let truncated = false;
+  for (const rel of files) {
+    if (matches.length >= maxMatches) {
+      truncated = true;
+      break;
+    }
+    const resolved = resolveInRoots(roots, target.root.containerPath.replace(/\/+$/, '') + '/' + rel);
+    let buf: Buffer;
+    try {
+      const st = statSync(resolved.abs);
+      if (!st.isFile() || st.size > WORKDIR_SEARCH_MAX_FILE_BYTES) {
+        skipped.push(rel);
+        continue;
+      }
+      if (totalBytes + st.size > WORKDIR_SEARCH_MAX_TOTAL_BYTES) {
+        truncated = true;
+        break;
+      }
+      buf = readFileSync(resolved.abs);
+    } catch {
+      skipped.push(rel);
+      continue;
+    }
+    filesScanned += 1;
+    totalBytes += buf.length;
+    if (buf.includes(0)) {
+      skipped.push(rel); // 二进制：不搜
+      continue;
+    }
+    const lines = buf.toString('utf8').split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
+      if (!regex.test(line)) continue;
+      matches.push({ path: rel, line: i + 1, text: line.length > 400 ? `${line.slice(0, 400)}…` : line });
+      if (matches.length >= maxMatches) {
+        truncated = true;
+        break;
+      }
+    }
+  }
+  return {
+    path: target.rel === '' ? '.' : target.rel,
+    pattern,
+    matches,
+    filesScanned,
+    truncated,
+    skipped: skipped.slice(0, 20),
+  };
+}
+
+/** 追加写（2026-10-07 加）：给已写的报告补一行不必整文件重发。父目录会自动创建。 */
+export function appendWorkdir(
+  roots: readonly WorkdirRoot[],
+  rawPath: string,
+  content: string,
+): WorkdirWriteResult {
+  const target = resolveInRoots(roots, rawPath);
+  if (target.root.readOnly === true) {
+    throw new WorkdirError('read_only', `挂载根是只读的（readOnly: true），不能写入：${target.root.containerPath}`);
+  }
+  if (target.rel === '') {
+    throw new WorkdirError('is_dir', 'path 指向挂载根本身：请给出文件名');
+  }
+  const existing = existsSync(target.abs) ? statSync(target.abs).size : 0;
+  const added = Buffer.byteLength(content, 'utf8');
+  if (existing + added > WORKDIR_WRITE_LIMIT_BYTES) {
+    throw new WorkdirError(
+      'too_large',
+      `追加后 ${String(existing + added)} 字节超过上限 ${String(WORKDIR_WRITE_LIMIT_BYTES)}：拆小或改用 op=write 重写`,
+    );
+  }
+  assertRealPathInside(target);
+  mkdirSync(dirname(target.abs), { recursive: true });
+  appendFileSync(target.abs, content, 'utf8');
+  return {
+    path: target.rel,
+    containerPath: `${target.root.containerPath.replace(/\/+$/, '')}/${target.rel}`,
+    bytes: existing + added,
+  };
 }
 
 export function writeWorkdir(

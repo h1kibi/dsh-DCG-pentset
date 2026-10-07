@@ -45,7 +45,7 @@ export {
 export type { ReconTechniqueSpec, StructuredFamily, ReconIntentInput, ReconIntentOutcome } from '../execution/techniques.ts';
 import { buildStructuredIntent } from '../execution/techniques.ts';
 import { WorkdirError, WORKDIR_READ_LIMIT_BYTES } from '../execution/workdir.ts';
-import type { WorkdirFile, WorkdirListing, WorkdirWriteResult } from '../execution/workdir.ts';
+import type { WorkdirFile, WorkdirListing, WorkdirSearchResult, WorkdirWriteResult } from '../execution/workdir.ts';
 
 /** 工具实现依赖的服务面（全部由宿主注入，便于测试）。 */
 export interface WorkerToolDeps {
@@ -158,6 +158,10 @@ export interface WorkerToolDeps {
     list(input: { readonly path: string }): Promise<WorkdirListing>;
     read(input: { readonly path: string }): Promise<WorkdirFile>;
     write(input: { readonly path: string; readonly content: string }): Promise<WorkdirWriteResult>;
+    /** 在挂载根内递归检索（正则）。200+ 份归档文档里考古靠它，避免整文件读烧上下文。 */
+    search(input: { readonly path: string; readonly pattern: string }): Promise<WorkdirSearchResult>;
+    /** 追加写：给已写的报告补一行不必整文件重发。 */
+    append(input: { readonly path: string; readonly content: string }): Promise<WorkdirWriteResult>;
   };
 }
 
@@ -999,26 +1003,29 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '**它不经过范围闸门**：空范围作业（范围版本 0）里 `pentest_exec` 会被 out_of_scope 拒绝，' +
       '而本工具照常可用——读作业资料（资产清单、既有报告、目标说明、人类放进去的任何文件）就该用它。' +
       `op：\`list\` 列目录、\`read\` 读文本（超 ${Math.round(WORKDIR_READ_LIMIT_BYTES / 1024)}KiB 会截断并标注）、` +
-      '`write` 写文本文件（会建父目录）。' +
-      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；也接受容器路径写法（`/work/...`）。' +
+      '`write` 写文本文件（会建父目录）、`search` 在目录内**递归检索正则**（返回文件/行号/该行，' +
+      '适合在大量归档文档里定位——比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
+      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；也接受容器路径写法（`/work/...`）；' +
+      '空路径或 `.` 就是挂载根本身。' +
       '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
       '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。',
     parameters: {
       op: { type: 'string', required: true, description: 'list | read | write' },
-      path: { type: 'string', required: true, description: '相对挂载根的路径（目录用 list；读/写给到文件）' },
-      content: { type: 'string', description: 'op=write 时的正文' },
+      path: { type: 'string', required: true, description: '相对挂载根的路径（空或 `.` 就是根；目录用于 list/search）' },
+      content: { type: 'string', description: 'op=write / op=append 时的正文' },
+      pattern: { type: 'string', description: 'op=search 时的正则（JS 语法，u 标志）' },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
     async execute(args, exec) {
       // 与其余 Worker 工具同口径：先确认调用方是本项目登记的会话（拿不到就报错）。
       await workerSessionIdOf(deps, exec);
       const op = args.op.trim().toLowerCase();
-      if (op !== 'list' && op !== 'read' && op !== 'write') {
+      if (op !== 'list' && op !== 'read' && op !== 'write' && op !== 'search' && op !== 'append') {
         return toJson(asError({
           status: 'blocked',
           code: 'classification_rejected',
-          message: `op 只能是 list / read / write（收到 ${JSON.stringify(args.op)}）`,
-          next_action: '改用 list 列目录、read 读文件、write 写文件',
+          message: `op 只能是 list / read / write / search / append（收到 ${JSON.stringify(args.op)}）`,
+          next_action: '用 list 列目录、read 读文件、search 正则检索、write/append 写文件',
         }));
       }
       const access = deps.workdir;
@@ -1033,14 +1040,26 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       try {
         if (op === 'list') return toJson(await access.list({ path: args.path }));
         if (op === 'read') return toJson(await access.read({ path: args.path }));
+        if (op === 'search') {
+          if (args.pattern === undefined) {
+            return toJson(asError({
+              status: 'blocked',
+              code: 'classification_rejected',
+              message: 'op=search 必须给出 pattern（正则）',
+              next_action: '补上 pattern 再调用；pattern 是 JS 正则，可在大量文档里定位文件与行号',
+            }));
+          }
+          return toJson(await access.search({ path: args.path, pattern: args.pattern }));
+        }
         if (args.content === undefined) {
           return toJson(asError({
             status: 'blocked',
             code: 'classification_rejected',
-            message: 'op=write 必须给出 content',
+            message: `op=${op} 必须给出 content`,
             next_action: '补上 content 再调用',
           }));
         }
+        if (op === 'append') return toJson(await access.append({ path: args.path, content: args.content }));
         return toJson(await access.write({ path: args.path, content: args.content }));
       } catch (error) {
         if (error instanceof WorkdirError) {

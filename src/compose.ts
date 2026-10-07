@@ -70,7 +70,7 @@ import { canonicalTargetString, derivePlanHash } from './execution/idempotency.t
 import { DockerSandbox } from './execution/docker-sandbox.ts';
 import type { DockerSandboxConfig, ProcessRunner } from './execution/docker-sandbox.ts';
 import { DEFAULT_MOUNT_CONTAINER_PATH } from './execution/docker-sandbox.ts';
-import { listWorkdir, readWorkdir, writeWorkdir } from './execution/workdir.ts';
+import { appendWorkdir, listWorkdir, readWorkdir, searchWorkdir, writeWorkdir } from './execution/workdir.ts';
 import type { WorkdirRoot } from './execution/workdir.ts';
 import { PgLeaseStore } from './workflow/pg-lease.ts';
 import { PgPolicyService, PgSessionDirectory, PgActionPolicySource } from './policy/pg-policy.ts';
@@ -1491,6 +1491,10 @@ function installWorkflow(input: {
             read: async (input: { readonly path: string }) => readWorkdir(workdirRoots, input.path),
             write: async (input: { readonly path: string; readonly content: string }) =>
               writeWorkdir(workdirRoots, input.path, input.content),
+            search: async (input: { readonly path: string; readonly pattern: string }) =>
+              searchWorkdir(workdirRoots, input.path, input.pattern),
+            append: async (input: { readonly path: string; readonly content: string }) =>
+              appendWorkdir(workdirRoots, input.path, input.content),
           },
         }),
   };

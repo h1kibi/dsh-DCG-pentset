@@ -15,13 +15,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  appendWorkdir,
   listWorkdir,
   readWorkdir,
+  searchWorkdir,
   writeWorkdir,
   resolveInRoots,
   WorkdirError,
-  WORKDIR_READ_LIMIT_BYTES,
   WORKDIR_WRITE_LIMIT_BYTES,
+  WORKDIR_READ_LIMIT_BYTES,
 } from '../src/execution/workdir.ts';
 import type { WorkdirRoot } from '../src/execution/workdir.ts';
 
@@ -120,6 +122,26 @@ test('读取截断与二进制如实标注（不假装读全了）', () => {
   const bin = readWorkdir([root], 'bin.dat');
   assert.equal(bin.binary, true);
   assert.equal(bin.text, '', '二进制不返回正文（避免半个字符与上下文污染）');
+});
+
+test('检索：递归正则 + 文件与行号；追加写不重发整份', () => {
+  const { root, dir } = roots();
+  mkdirSync(join(dir, '子目录'), { recursive: true });
+  writeFileSync(join(dir, 'a.md'), '第一行\n命中目标 TCP 443\n第三行');
+  writeFileSync(join(dir, '子目录', 'b.md'), '另一处命中目标\n');
+  const found = searchWorkdir([root], '.', '命中目标');
+  assert.equal(found.matches.length, 2, '两个文件各一处命中');
+  assert.deepEqual(
+    found.matches.map((m) => `${m.path}:${String(m.line)}`).sort(),
+    ['a.md:2', '子目录/b.md:1'],
+    '要给出文件与行号（Agent 靠它直接定位，而不是整文件读）',
+  );
+  assert.equal(found.truncated, false);
+  const appended = appendWorkdir([root], 'a.md', '\n补一行');
+  assert.equal(readWorkdir([root], 'a.md').text.endsWith('补一行'), true, '追加落到文件末尾');
+  assert.equal(appended.bytes, Buffer.byteLength('第一行\n命中目标 TCP 443\n第三行\n补一行', 'utf8'));
+  expectError(() => appendWorkdir([{ ...root, readOnly: true }], 'a.md', 'x'), 'read_only', '只读根');
+  expectError(() => searchWorkdir([root], '.', '('), 'bad_path', '非法正则');
 });
 
 test('写入有上限，且拒绝把挂载根本身当文件写', () => {
