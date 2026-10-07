@@ -547,7 +547,10 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
           : `本阶段的 Agent 在另一个会话里工作：${active.dshSessionId}。本会话不再承载对话。`}
       </p>
       {active === null || active.statusNote === null ? null : (
-        <p className="pentest-proposal__note">最新状态便签：{active.statusNote}</p>
+        <p className="pentest-proposal__note">
+          {'最新状态便签：'}
+          {renderInlineMarkdown(stripInlineMarkdown(active.statusNote))}
+        </p>
       )}
       {/* 动作入口随**真实状态**变化，标签不说谎：
           - Agent 已交报告（waiting_human_review）：给人「进入下一阶段」——它请求**交接草稿**
