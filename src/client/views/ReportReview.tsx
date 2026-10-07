@@ -46,7 +46,7 @@ import type {
 } from '../../contracts.ts';
 import { isConsoleMethod } from '../../console/method-names.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatConfidence, formatCount, formatTimestamp, truncate } from '../format.ts';
+import { formatConfidence, formatCount, formatTimestamp, renderInlineMarkdown, truncate } from '../format.ts';
 import type { Tone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextArea } from '../ui.tsx';
 
@@ -478,7 +478,7 @@ function FindingReviewRow(props: {
   return (
     <div className="pentest-finding" data-finding-id={finding.id}>
       <div className="pentest-finding__head">
-        <span className="pentest-finding__title">{finding.title}</span>
+        <span className="pentest-finding__title">{renderInlineMarkdown(finding.title)}</span>
         <Badge text={STATUS_LABELS[finding.status]} tone={statusTone(finding.status)} hint={finding.status} />
         <Badge
           text={severity === null ? '严重度待人工确认' : `${SEVERITY_LABELS[severity]} · ${severity}`}

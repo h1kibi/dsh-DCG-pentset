@@ -41,7 +41,7 @@ import type { ReactNode } from 'react';
 import { DEFAULT_DISABLED_CLASSES } from '../../contracts.ts';
 import type { ActionClass, ApprovalDecision, ApprovalDetail } from '../../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { actionClassLabel, formatCount, formatDuration, formatTimestamp, needsPerActionApproval, truncate } from '../format.ts';
+import { actionClassLabel, formatCount, formatDuration, formatTimestamp, needsPerActionApproval, renderInlineMarkdown, stripInlineMarkdown, truncate } from '../format.ts';
 import type { Tone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, Table, TextArea, TextInput } from '../ui.tsx';
 
@@ -574,7 +574,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
             ) : null}
             <span className="pentest-approval__risk-tier">{RISK_TIER_LABELS[row.actionClass]}</span>
             <span className="pentest-approval__impact">
-              {row.riskSummary === null ? MISSING : truncate(row.riskSummary, 120)}
+              {row.riskSummary === null ? MISSING : renderInlineMarkdown(truncate(stripInlineMarkdown(row.riskSummary), 120))}
             </span>
           </div>
         );
