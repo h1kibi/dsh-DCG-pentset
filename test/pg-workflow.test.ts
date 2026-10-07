@@ -1937,7 +1937,14 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     const inputs = {
       scopeEntryProfile: 'ip' as const,
       behaviorProfile: 'stealth' as const,
-      targets: [{ kind: 'ip' as const, value: '192.0.2.77', protocols: ['tcp' as const], ports: [{ from: 8000, to: 8000 }] }],
+      targets: [
+        { kind: 'ip' as const, value: '192.0.2.77', protocols: ['tcp' as const], ports: [{ from: 8000, to: 8000 }] },
+        // 投影规则：cidr / url / asset-label **不进**裁决集合（它们不是可拨号的字面地址）。
+        // 删掉 `egress-allowlist.test.ts` 之后这条语义一度没人锁（2026-10-07 评审指出的覆盖空洞）。
+        { kind: 'cidr' as const, value: '198.51.100.0/24', protocols: ['tcp' as const], ports: [{ from: 8000, to: 8000 }] },
+        { kind: 'url' as const, value: 'https://app.example/', protocols: ['tcp' as const], ports: [{ from: 443, to: 443 }] },
+        { kind: 'asset-label' as const, value: '核心资产', protocols: ['tcp' as const], ports: [{ from: 8000, to: 8000 }] },
+      ],
       exclusions: [],
       allowedActions: ['active_probing' as const],
       authorizationRef: 'LAB-SELF-1',
@@ -1956,6 +1963,13 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.equal(preview.behaviorProfile, 'stealth');
     // 地址裁决：IP 字面量自身即已裁决地址，预览必须显示同一个事实。
     assert.deepEqual(preview.resolvedAddresses['192.0.2.77'], ['192.0.2.77']);
+    // 投影规则的可证伪面：cidr / url / asset-label 不得出现在裁决集合里
+    // （它们在实现里被显式跳过；不带这类条目的夹具会让这条断言永真）。
+    assert.deepEqual(
+      Object.keys(preview.resolvedAddresses),
+      ['192.0.2.77'],
+      'cidr / url / asset-label 不进裁决集合——只有可拨号的字面地址才进',
+    );
     assert.deepEqual(preview.targets[0]?.protocols, ['tcp']);
     assert.ok(preview.pacing.rate > 0 && preview.pacing.concurrency >= 1, '预览必须给出展开后的节奏');
     // **人类勾选的「允许类别」不是「逐次放行类别」。**

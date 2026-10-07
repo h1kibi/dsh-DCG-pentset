@@ -431,3 +431,19 @@ test('渲染输出不含硬编码颜色（§6.2.3：颜色走官方设计令牌�
   assert.equal(/rgb\(|rgba\(|hsl\(/.test(html), false, '出现 rgb/hsl 色值');
   assert.equal(/style="[^"]*color/.test(html), false, '出现内联 color 样式');
 });
+
+test('截断站点的顺序契约：先 strip 再 truncate（反过来会把标记算进字数、截断点也错）', () => {
+  // 2026-10-07 评审的变异实验：把 PhaseTrack 换成 `stripInlineMarkdown(truncate(...))` 全绿——
+  // 顺序只是调用点约定、没有锁。两种写法的**可见结果不同**，这里把它变成可证伪的：
+  //   先 strip 再截断：'**A组**完成后续动作' → 'A组完成后续动作' → 4 字 → 'A组完成…'
+  //   先截断再 strip：'**A组**完成后续动作' → 4 字 '**A组' → 'A组'   ← 少了两字且断在标记里
+  const html = renderToStaticMarkup(
+    createElement(PhaseTrack, {
+      sessions: [session({ id: 'a', statusNote: '**A组**完成后续动作' })],
+      noteMaxChars: 4,
+    }),
+  );
+  assert.ok(html.includes('A组完成…'), `应先 strip 再截断（得到 A组完成…）：${html.slice(0, 200)}`);
+  assert.equal(html.includes('**'), false, '标记不得出现在可见文本里');
+  assert.ok(!html.includes('>A组<'), '若出现裸 A组，说明截断发生在 strip 之前（标记占了字数）');
+});
