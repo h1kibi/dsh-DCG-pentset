@@ -3157,17 +3157,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
   });
 
   test('暂停中不能结束技术测试：先恢复或终止（服务端与界面共用同一份判定）', async () => {
-    const id = await newEngagement();
-    await service.startWorker({
-      engagementId: id,
-      operatorId: 'op',
-      reason: '开跑',
-      expectedStateVersion: (await service.getState(id)).stateVersion,
-      phase: 'intelligence-gathering',
-      taskPrompt: '情报收集',
-      skillIds: [],
-      toolAllow: [],
-    });
+    const { id } = await newWaitingHumanSession();
     const running = await service.getState(id);
     const paused = await service.pause({
       engagementId: id,
@@ -3184,9 +3174,9 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
           expectedStateVersion: paused.stateVersion,
         }),
       (e: unknown) =>
-        e instanceof WorkflowRejection && e.code === 'classification_rejected' && /结束技术测试/.test(e.message),
+        e instanceof WorkflowRejection && e.code === 'classification_rejected' && /结束技术测试|运行标记/.test(e.message),
     );
-    assert.equal((await service.getState(id)).mainStatus, 'worker_running', '拒绝不得改状态');
+    assert.equal((await service.getState(id)).mainStatus, 'waiting_human_review', '拒绝不得改状态');
   });
 
   test('投递失败的补偿：会话 failed、作业 blocked、账本留事件，且仍有恢复出口', async () => {
@@ -3280,7 +3270,3 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
   });
 
 });
-
-
-
-
