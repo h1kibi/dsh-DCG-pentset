@@ -83,7 +83,7 @@ jq -r '.[] | select(.evidence_ref != null) | [.id, .asset, (.class // "unknown")
 column -t /tmp/plan.tsv 2>/dev/null || cat /tmp/plan.tsv
 ```
 **期望**：待验证候选的 `id / 目标 / 类别`。
-**判据**：**这一步只产出行**；每行必须再补三列——动作类别（`passive_read` / `active_discovery` / `authenticated_read` / `exploit_validation`）、是否需要人类逐次放行、预期证据形态。缺任一列的行**不得交出去**：没有类别就无法判断要不要放行，没有预期证据就无法判断「验完了」。
+**判据**：**这一步只产出行**；每行必须再补三列——动作类别（`passive_collection` / `active_probing` / `credentialed_access` / `exploit_validation`）、是否需要人类逐次放行、预期证据形态。缺任一列的行**不得交出去**：没有类别就无法判断要不要放行，没有预期证据就无法判断「验完了」。
 
 ### 5. 覆盖面核对：哪些声明范围还没被碰过
 ```bash

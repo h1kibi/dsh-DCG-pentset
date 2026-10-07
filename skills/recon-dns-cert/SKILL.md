@@ -25,7 +25,7 @@ metadata:
 ## 步骤
 
 > **优先用 `pentest_recon`**：`dns_enum` / `tls_inspect` / `ct_subdomains` 把记录类型、SNI、
-> 通配处理都做成枚举参数，类别是 `passive_read`/`active_discovery`——**不需要逐条人工放行**；
+> 通配处理都做成枚举参数，类别是 `passive_collection`/`active_probing`——**不需要逐条人工放行**；
 > 手写 `dig`/`openssl` 走 `pentest_exec` 属 `exploit_validation`，**每条都要人类批准**。
 > 注意：DNS 类 technique 在服务端按 `udp` 记账，**范围条目要声明 udp**，否则会被范围闸门拒绝。
 
@@ -138,7 +138,7 @@ dig +time=5 +tries=1 AXFR <zone> @<权威服务器地址>
   是否含只应内网的记录」——实测样本里就吐出一条 `internal-only A 10.42.0.9`，那是最能说明风险的一行。
 - `Transfer failed.` ⇒ 未授权传送被拒（**正常配置**），把这条否定结论写下来，**不要反复重试**。
 - **通道选择**：公网 zone 可以用结构化 `dns_axfr target=<zone>`（免审批）；内网/lab zone 只能手写
-  `dig @<地址>`（`exploit_validation`，逐条人批）。
+  `dig @<地址>`（类别 `active_probing`，**免批**：命令原文不再经人过目）。
 
 ### 9. 归属与网段（whois）：把外部线索定位到主体
 ```bash

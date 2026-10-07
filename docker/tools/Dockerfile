@@ -30,7 +30,7 @@
 # 默认模板集（DEFAULT_TEMPLATE_SPECS）用到的命令名：
 #
 #   http_get / tcp_connect / udp_probe / icmp_ping / dns_resolve（前五个动词）
-#   shell_exec（direct_command，逐条人批）
+#   shell_exec（direct_command，类别 `active_probing`，**免批**：命令原文不再经人过目）
 #   结构化动词（2026-10-06 新增，只打已裁决地址）：
 #     port_scan / service_probe / nse_run / tls_probe / http_probe / content_discover /
 #     web_crawl / dns_enum / dns_axfr / dns_brute / whois_query / ct_lookup

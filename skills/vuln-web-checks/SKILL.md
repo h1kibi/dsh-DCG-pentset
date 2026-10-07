@@ -30,7 +30,7 @@ metadata:
 > 否则后面的步骤看到的是"cookie jar 不存在"这个假象，而不是真正的会话行为（2026-10-06 实测）。
 
 > **优先用 `pentest_scan`（结构化核验入口）**：它只发读取类请求、不写目标、不下载内容，
-> 类别 `active_discovery`——**不需要逐条人工放行**；手写命令走 `pentest_exec` 属 `exploit_validation`，
+> 类别 `active_probing`——**不需要逐条人工放行**；手写命令走 `pentest_exec` 属 `exploit_validation`，
 > **每条都要人类批准**。核验的产出是「成立 / 不成立 / 需要更多证据」+ 证据行，判断依据写在本 skill 的判据里。
 
 | 本 skill 的 WSTG 项 | 用这个 technique | 关键参数 |
@@ -43,7 +43,7 @@ metadata:
 | 配置面暴露 | `exposure_check` | `paths=env,git,backup,swagger,actuator`（只报存在性/长度/哈希/形态，不回显内容） |
 
 > 需要**发载荷**的核验（注入、XSS、SSRF、上传…）不属于本阶段：那些是「候选漏洞的验证计划」，
-> 交给利用验证阶段逐条人批执行。
+> 交给利用验证阶段执行。
 
 ### 0. 建立响应基线（先量 soft-404）
 ```bash

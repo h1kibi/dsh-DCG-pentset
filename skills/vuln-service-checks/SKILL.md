@@ -27,7 +27,7 @@ metadata:
 
 > **优先用 `pentest_scan`**：`nse_handshake` 走只读 NSE 白名单（`smtp-commands`/`ftp-anon`/`ssh-auth-methods`/
 > `rdp-ntlm-info`/`ssl-enum-ciphers`/`smb-os-discovery`/`smb-security-mode`），`tls_weakness` 枚举协议与套件；
-> 类别 `active_discovery`，**不需要逐条人工放行**。手写 `nmap --script` 走 `pentest_exec` 是
+> 类别 `active_probing`，**不需要逐条人工放行**。手写 `nmap --script` 走 `pentest_exec` 是
 > `exploit_validation`——**每条都要人类批准**，且沙箱侧同样只放行白名单脚本。
 
 | 本 skill 的核验项 | 用这个 technique | 关键参数 |

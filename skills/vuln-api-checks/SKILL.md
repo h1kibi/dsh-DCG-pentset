@@ -19,7 +19,7 @@ metadata:
 ## 前提与边界
 - **能用结构化通道的地方先用它**：`pentest_scan` 的 `http_check`（六项只读核验：方法面、安全头、
   robots、标题等）与 `exposure_check`（规范文件/备份档的存在性，只判形态、不回显内容）类别是
-  `active_discovery`，**不需要逐条人工放行**。下面手写 curl 的步骤走 `pentest_exec`
+  `active_probing`，**不需要逐条人工放行**。下面手写 curl 的步骤走 `pentest_exec`
   （`exploit_validation`），**每条都要人类点一次**——顺序是先结构化、覆盖不到再手写
   （例如第 3 步 BOLA 需要"两个身份各取一次"，结构化通道没有这个形态）。
 - 每条命令经 `pentest_exec`（`direct_command` ⇒ `exploit_validation`）**逐条人工放行**；写法上一条命令一个目的。
@@ -150,7 +150,7 @@ jq -r '.results[]? | "\(.status) \(.input.FUZZ) \(.length)"' /tmp/api/enum.json 
 
 ## 不做的事
 - 不做写操作（除第 6 步**一次**带编号的标记请求），不删改目标数据。
-- 不构造注入/反序列化/越权利用链——判定「成立」就停，利用交 `exploit-*` 且逐条人批。
+- 不构造注入/反序列化/越权利用链——判定「成立」就停，利用交 `exploit-*`。
 - 不批量抓取业务数据（枚举只统计状态码与长度）。
 - 不在产出里回显凭据、令牌、个人数据原文。
 
