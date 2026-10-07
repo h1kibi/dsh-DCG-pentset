@@ -21,7 +21,7 @@ metadata:
 - 叶子必须是**本作业可执行的动作**：在范围内、动作类别在本次策略内可申请。
 - 动作类别取自固定枚举：`passive_collection`、`active_probing`、`credentialed_access`、`exploit_validation`、`lateral_movement`、`persistence`、`destructive`、`exfiltration`。
 - 默认需逐次人工放行的类别是 `exploit_validation`、`lateral_movement`；`persistence`/`destructive`/`exfiltration` 默认关闭，只能记为「本作业不可执行」。
-- 需要现场核验才能确认某叶子可达时，**至多一次只读**核验（`recon_http_probe`：`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`；或经人工逐条放行的裸 `curl`，只发 GET/HEAD），并写清为什么非现场不可；其余核验属于漏洞分析 / 利用阶段。
+- 需要现场核验才能确认某叶子可达时，**至多一次只读**核验（`recon_http_probe`：`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`；或裸 `curl`（类别 `active_probing`，**免批**），只发 GET/HEAD），并写清为什么非现场不可；其余核验属于漏洞分析 / 利用阶段。
 
 ## 步骤
 

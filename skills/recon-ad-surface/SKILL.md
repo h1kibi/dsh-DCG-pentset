@@ -20,10 +20,11 @@ metadata:
 
 ## 前提与边界
 - **本技能没有结构化通道**：`pentest_recon` 的 technique 是网络/Web 面，AD 面一个都没有。所以下面每条命令都经
-  `pentest_exec` 走 `direct_command` 模板，类别 `exploit_validation` —— **每条都要人类逐条放行**。
-  写法上因此要「一条命令一个目的」：把 8 步揉成一条长命令，人类在放行卡上看不懂，等于自己给自己制造风险。
-- 凭据来源必须记录：谁给的、什么权限、有没有过期时间。**不要在命令里写死口令**，用人类放行的那条命令里带
-  （或落到 `/tmp/cred.env` 再 `source`），并在产出里标注「凭据来自人类放行 #N」。
+  `pentest_exec` 走 `direct_command` 模板，类别 `active_probing` —— **免批**（2026-10-07 裁定：命令原文不再经人过目）。
+  写法上因此要「一条命令一个目的」：免批后**没有人再替你读命令原文**，一条命令承担 8 步，
+  出事时账本里只剩一行看不懂的记录——等于自己给自己制造风险。
+- 凭据来源必须记录：谁给的、什么权限、有没有过期时间。**不要在命令里写死口令**，用「凭据文件 + source」的方式注入
+  （或落到 `/tmp/cred.env` 再 `source`），并在产出里标注「凭据来自人类提供的第 N 份材料」（免批后不再有"放行 #N"这种东西）。
 - **Kerberos 对时钟敏感**：域控与容器相差 >5 分钟会以 `KRB_AP_ERR_SKEW` 失败；先对时（见「常见失败」），
   不要把它归因成「凭据错」。
 - 容器内的 DNS **不解析域内的名字**（解析器是宿主的）。Kerberos 相关工具一律用 `--dc-ip <已裁决地址>` /
@@ -95,7 +96,7 @@ ldapsearch -x -H ldap://<已裁决地址> -D '<域账号>@<域名>' -w '<口令>
 ```
 **期望**：SPN 账号清单、不要求预认证的账号（`DONT_REQ_PREAUTH`=4194304）、委派配置项。
 **判据**：三类都只产出**候选清单**——「有 SPN」只说明可尝试 Kerberoast，「不要求预认证」只说明可尝试 AS-REP，
-**都不等于已证实可利用**；证实在 `vuln-ad-checks`，利用要人类放行。
+**都不等于已证实可利用**；证实在 `vuln-ad-checks`，利用在 `exploit-*`（自由命令通道，免批）。
 
 ### 6. 已认证：ADCS（证书服务）是否存在与模板清单
 ```bash
@@ -118,7 +119,7 @@ kerbrute userenum -d <域名> --dc <已裁决地址> /usr/share/wordlists/top-us
 ```
 **期望**：逐行 `VALID USERNAME` / `invalid username`，末尾给计数。
 **判据**：**只枚举、不喷洒**。`kerbrute passwordspray` 属爆破类，本技能不使用；要试口令必须走
-`exploit-auth-testing` 的纪律（单账号 ≤5 次、间隔 ≥1s、人类逐条放行）。
+`exploit-auth-testing` 的纪律（单账号 ≤5 次、间隔 ≥1s；**免批后没人在逐条看命令**，速率纪律就是唯一约束）。
 
 ### 9. 服务面：域控与域成员对外的端口
 ```bash
@@ -142,7 +143,7 @@ nmap -Pn -p 53,88,135,139,389,445,464,593,636,3268,3269,5985,5986,3389 <已裁�
 | `LDAPSessionTerminatedByServerError` / `Strong(er) authentication required` | 目标拒绝**非 TLS 的简单绑定**，或拒绝 **NTLM** 的 LDAP 绑定 | 二选一：工具换认证方式（`ldapdomaindump -at SIMPLE`）、或走 LDAPS/签名；**这是目标策略事实，写进产出**，不要当成凭据错 |
 | `KRB_AP_ERR_INAPP_CKSUM` / `Kerberos SessionError` | Kerberos 校验和与某些 KDC 实现（含 Samba）互操作不合 | 换认证方式（LDAP 面用 SIMPLE、SMB 面用 NTLM/口令）；把「哪条路走通」写进产出，别把工具报错当目标结论 |
 | `Connection error (<域控主机名>.<域名>:88) Name or service not known` | 容器 DNS 是宿主的，不解析域内名字；而 Kerberos 必须用名字 | 容器内临时补 hosts 解析（见第 4 步）；不要改 `/etc/resolv.conf` |
-| `KRB_AP_ERR_SKEW` / `Clock skew too great` | 容器与域控时钟差 >5 分钟 | 先比对 `date -u` 与域控时间，把偏差记为环境事实；条件允许时以人类放行的一次校时解决 |
+| `KRB_AP_ERR_SKEW` / `Clock skew too great` | 容器与域控时钟差 >5 分钟 | 先比对 `date -u` 与域控时间，把偏差记为环境事实；容器内**不要**自行改系统时钟（免批不等于可以为所欲为），需要校时就说清并让人类在宿主侧处理 |
 | `ldap_sasl_bind(SIMPLE): Can't contact LDAP server` | 端口没开 / 目标不是 DC / 被过滤 | 回到第 9 步确认端口；不要换协议硬试 |
 | 工具的判读与 LDAP 实测**不一致** | 工具自己的解析/版本差异（实测：`userAccountControl` 查询显示 `4260352`（含 0x400000），而某工具仍报「未设 DONT_REQ_PREAUTH」） | **以 LDAP 原始查询为准**，把冲突作为未决线索写进产出，不要二选一了事 |
 

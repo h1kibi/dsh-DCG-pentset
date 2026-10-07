@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PROFILE_DEFAULTS } from '../src/policy/behavior-profile.ts';
@@ -278,3 +279,54 @@ test('跨代码块依赖 /tmp 产物的 skill 必须写明「容器是一次性�
     '这些 skill 有跨块的 /tmp 依赖：必须在「## 步骤」开头写明「容器是一次性的」+ 本技能的跨步路径 + 合并方式（cmd1 && cmd2）',
   );
 });
+
+/**
+ * 防回流锁（2026-10-07 评审建议）：命令通道的 skill 正文不得再出现**已失效的审批措辞**。
+ *
+ * 背景：免批裁定后 `direct_command`（类别 `active_probing`）在四个出厂预设里都免批，
+ * 而 12 份 skill 的正文早已写着"每条都要人类批准/逐条人工放行"，它们的冒烟戳还被刷新过
+ * —— 文件看起来是新的，语义却是旧的。措辞与裁定漂移是这套系统里最常见的缺陷形态
+ * （设计文档自己写着"改这一处必须与镜像里那些措辞同轮更新"），所以这里把它变成机器可判的：
+ *
+ *   **只要一行同时提到命令通道（`pentest_exec`/`direct_command`/自由命令）**
+ *   **又写着"要人类逐条批"的措辞 ⇒ 红。**
+ *
+ * 刻意不按"出现 `exploit_validation`"来判：那个类别名**仍然有效**（枚举、证据样例、
+ * `lateral_movement` 那条真正逐条放行的策略都要用它），已失效的只是**命令通道**的措辞。
+ */
+test('skill 正文不得再对命令通道声称"逐条人批"（免批裁定的防回流锁）', () => {
+  const BANNED = ['每条都要人类', '逐条人工放行', '每次都要人批', '人类逐条放行', '每条都要人类点一次'];
+  const CHANNEL = ['pentest_exec', 'direct_command', '自由命令'];
+
+  const files: string[] = readdirSync(SKILLS_DIR, { recursive: true })
+    .map((entry) => join(SKILLS_DIR, String(entry)))
+    .filter((full) => full.endsWith('SKILL.md'));
+  assert.ok(files.length >= 20, `skill 目录扫到的文件太少：${String(files.length)}`);
+
+  const offenders: string[] = [];
+  for (const file of files) {
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .forEach((line, index) => {
+        if (!CHANNEL.some((token) => line.includes(token))) return;
+        const hit = BANNED.find((phrase) => {
+          const at = line.indexOf(phrase);
+          if (at < 0) return false;
+          // 否定句不算违规：「**不需要**逐条人工放行」是在说结构化通道的**正确**性质
+          // （首版锁没做这一步，把 4 句真话判成了违规——锁误报比不锁更糟，会逼人改对的话）。
+          const before = line.slice(Math.max(0, at - 6), at);
+          return !/不需要|无需|不再|不必|没有/.test(before);
+        });
+        if (hit !== undefined) {
+          offenders.push(`${file.slice(SKILLS_DIR.length + 1)}:${String(index + 1)} —— 含「${hit}」`);
+        }
+      });
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    '免批裁定后命令通道不再逐条人批，这些行会让模型每条命令白请一次批（或报告写成"已获人类逐条放行"）。' +
+      `要么改措辞，要么把该行改成描述真正仍逐条放行的类别（如 lateral_movement）：\n${offenders.join('\n')}`,
+  );
+});
+
