@@ -73,9 +73,9 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     },
   },
   web_crawl: {
-    defaults: { port: 80, scheme: 'http', depth: 2, max_pages: 100 },
+    defaults: { port: 80, scheme: 'http', depth: 2, max_pages: 100, verify_tls: 'true' },
     required: [],
-    enums: { scheme: ['http', 'https'] },
+    enums: { scheme: ['http', 'https'], verify_tls: ['true', 'false'] },
   },
   dns_enum: {
     defaults: { record_types: 'A,AAAA,MX,NS,TXT', resolver: 'system' },

@@ -700,6 +700,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         { name: 'scheme', kind: 'enum', values: ['http', 'https'] },
         { name: 'depth', kind: 'integer', min: 1, max: 3 },
         { name: 'max_pages', kind: 'integer', min: 1, max: 500 },
+        { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 180_000,
@@ -709,11 +710,12 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
     portSource: { kind: 'param', param: 'port' },
     carries: {
       port: '目标 Web 端口',
-      scheme: 'http / https',
+      scheme: 'http / https（https 默认**校验**证书；自签/纯 IP 目标要显式 verify_tls=false）',
       depth: '爬取深度（1-3）',
       max_pages: '页数硬上限（1-500）；只跟同主机链接，单页最多读 512KiB',
+      verify_tls: VERIFY_TLS_CARRY,
     },
-    commandTemplate: 'web_crawl target={target} port={port} scheme={scheme} depth={depth} max_pages={max_pages}',
+    commandTemplate: 'web_crawl target={target} port={port} scheme={scheme} depth={depth} max_pages={max_pages} verify_tls={verify_tls}',
   },
   {
     template: {
