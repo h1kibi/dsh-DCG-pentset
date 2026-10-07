@@ -39,6 +39,7 @@ import type { ConsoleRpc } from './console/rpc.ts';
 import { lookup } from 'node:dns/promises';
 import { compose } from './compose.ts';
 import { inspectRls } from './compose.ts';
+import { probeReachability, renderReachabilityNote, spawnRunner } from './execution/docker-sandbox.ts';
 import { migrate } from './db/migrate.ts';
 import { DshSessionFactory } from './agents/dsh-session-factory.ts';
 import { assertGraph } from './workflow/phases.ts';
@@ -501,6 +502,19 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
     if (rls.refusals.length > 0) {
       throw new PentestBootError(`RLS 自检未通过：${rls.refusals.join('；')}`);
     }
+  }
+
+  // 沙箱可达性自检（2026-10-07）：与 RLS 自检并列——两者都是"启动时把部署事实说出来"。
+  // 放在这里而非 compose() 里，三个理由：① 走 log(ctx) 而不是 console.log；
+  // ② compose() 保持无副作用（此前每次 compose 都真 spawn 一个 docker inspect，单测里二十多次）；
+  // ③ 它在**启动路径**上，启动早退时不会漏印。**永不抛**：放开是操作者的决定，它只负责说清楚。
+  {
+    const sandbox = runtime.sandbox;
+    const note = await probeReachability(spawnRunner, sandbox.internalNetwork).then(
+      (fact) => renderReachabilityNote(fact),
+      (error: unknown) => `[dsh-pentest] 沙箱可达性自检未完成：${error instanceof Error ? error.message : String(error)}`,
+    );
+    log(ctx, 'info')(note);
   }
 
   // 模型路由：**优先跟随宿主声明的默认模型**。

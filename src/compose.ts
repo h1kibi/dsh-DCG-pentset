@@ -1248,17 +1248,7 @@ function installExecution(input: {
     config.sandbox,
     config.sandboxRunner === undefined ? {} : { runner: config.sandboxRunner },
   );
-  // 启动就把"出不出网"说清楚（2026-10-07）：这条自检覆盖**所有**启动路径，
-  // 因为绕过 start-personal.mjs 的部署没有任何网络检查（GitHub 反馈：装完沙箱不出网，
-  // 而用户看到的只是超时）。**刻意不阻塞启动、也永不抛**——它只负责把事实印出来。
-  void sandbox
-    .reachabilityNote()
-    .then((note) => {
-      console.log(note);
-    })
-    .catch((error: unknown) => {
-      console.log(`[dsh-pentest] 沙箱可达性自检未完成：${error instanceof Error ? error.message : String(error)}`);
-    });
+
   const store = new PgExecutionStore(readDb);
   const gateFailures = createGateFailureSink({ ledger, txDb, workflow: input.workflow });
   /**

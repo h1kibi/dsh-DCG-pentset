@@ -483,6 +483,61 @@ export function networkShape(raw: string): 'internal' | 'open' | 'unknown' {
   return 'unknown';
 }
 
+/** 探针得到的事实（**事实与渲染分开**：想知道"能不能出网"的调用方不该去解析散文）。 */
+export interface ReachabilityFact {
+  readonly shape: 'internal' | 'open' | 'unknown';
+  readonly network: string;
+  /** shape==='unknown' 时的原因（inspect 的 stderr/超时/不可识别输出），其余为空串。 */
+  readonly detail: string;
+}
+
+/**
+ * 探一次网络形状。**唯一**会跑 `docker network inspect` 的地方（除它之外没有第二个真相源）。
+ * 失败（docker 不在、网络名写错、超时）一律 'unknown'，绝不当成 open——危险方向必须最难命中。
+ */
+export async function probeReachability(runner: ProcessRunner, network: string): Promise<ReachabilityFact> {
+  const outcome = await runner.run([DOCKER_BIN, 'network', 'inspect', '-f', '{{.Internal}}', network], {
+    signal: new AbortController().signal,
+    timeoutMs: 10_000,
+  });
+  const failed = outcome.timedOut || outcome.code !== 0;
+  if (failed) {
+    return {
+      shape: 'unknown',
+      network,
+      detail: (outcome.stderr ?? '').trim().slice(0, 200) || '无输出',
+    };
+  }
+  const shape = networkShape(outcome.stdout);
+  return {
+    shape,
+    network,
+    detail: shape === 'unknown' ? `inspect 输出不可识别：${JSON.stringify(outcome.stdout.trim())}` : '',
+  };
+}
+
+/** 事实 → 启动日志那一行（前缀 `[dsh-pentest] 沙箱可达性` 是 RUNBOOK 排障表的检索锚点，别改）。 */
+export function renderReachabilityNote(fact: ReachabilityFact): string {
+  if (fact.shape === 'unknown') {
+    return (
+      `[dsh-pentest] 沙箱可达性：**未知** —— 读不到网络 ${fact.network} 的 Internal 属性` +
+      `（${fact.detail}）。` +
+      '先确认真实网络名（profile 的 runtime.sandbox.internalNetwork）与 docker 权限；在此之前不要假设沙箱有网。'
+    );
+  }
+  if (fact.shape === 'internal') {
+    return (
+      `[dsh-pentest] 沙箱可达性：网络 ${fact.network} 是 **internal** ⇒ 本沙箱**没有外网出口**，` +
+      '可达集合只有该网络成员；任何出网动作（crt.sh、公网 CVE 库、apt/pip……）都只会超时。' +
+      '要"宿主能访问的沙箱也能"：把该网络重建为**非 internal**，并在 profile 写 sandbox.allowEgress: true 后重启。'
+    );
+  }
+  return (
+    `[dsh-pentest] 沙箱可达性：网络 ${fact.network} **不是 internal** ⇒ 沙箱可达 = 宿主可达（网络层不是范围边界）。` +
+    '仅剩的闸门是 admit 阶段的范围裁决与审批模式；要恢复封闭可达集合：重建为 --internal 并去掉 allowEgress。'
+  );
+}
+
 export class DockerSandbox implements SandboxExecutor {
   private readonly config: DockerSandboxConfig;
   private readonly runner: ProcessRunner;
@@ -498,7 +553,7 @@ export class DockerSandbox implements SandboxExecutor {
   }
 
   /**
-   * 启动自检：把"这张网是哪一种部署形状"**说出来**。
+   * 启动自检的可读输出（薄壳：探针 + 渲染在模块级，便于启动层直接复用而不必建一个沙箱实例）。
    *
    * 为什么要它（2026-10-07，GitHub 反馈"装完插件沙箱不出网"）：`buildDockerArgs` 只透传
    * `--network <名>` 且**不注入任何代理变量**，于是"出不出网"完全是部署事实 ——
@@ -506,39 +561,11 @@ export class DockerSandbox implements SandboxExecutor {
    * 可达范围等于宿主。代码知道这件事，但**从不检查、也不说**：绕过 `start-personal.mjs`
    * 的启动路径上，用户看到的只是动作超时，看起来像工具坏了。
    *
-   * 这里不做拒绝（放开是操作者的决定，且 `allowEgress` 只存在于 profile/启动器一侧、
-   * 插件读不到），只做**每一次启动都吵一遍**：两种形状各自的后果与出路。
+   * 不做拒绝（放开是操作者的决定，且 `allowEgress` 只存在于 profile/启动器一侧、插件读不到），
+   * 只做**每一次启动都吵一遍**：两种形状各自的后果与出路。
    */
   async reachabilityNote(): Promise<string> {
-    const name = this.config.internalNetwork;
-    const outcome = await this.runner.run([DOCKER_BIN, 'network', 'inspect', '-f', '{{.Internal}}', name], {
-      signal: new AbortController().signal,
-      timeoutMs: 10_000,
-    });
-    const failed = outcome.timedOut || outcome.code !== 0;
-    const detail = failed
-      ? (outcome.stderr ?? '').trim().slice(0, 200) || '无输出'
-      : `inspect 输出不可识别：${JSON.stringify(outcome.stdout.trim())}`;
-    // 三分支**显式**：危险方向（把 internal 说成 open）必须精确命中 'false' 才成立（见 networkShape）。
-    const shape = failed ? 'unknown' : networkShape(outcome.stdout);
-    if (shape === 'unknown') {
-      return (
-        `[dsh-pentest] 沙箱可达性：**未知** —— 读不到网络 ${name} 的 Internal 属性` +
-        `（${detail}）。` +
-        '先确认真实网络名（profile 的 runtime.sandbox.internalNetwork）与 docker 权限；在此之前不要假设沙箱有网。'
-      );
-    }
-    if (shape === 'internal') {
-      return (
-        `[dsh-pentest] 沙箱可达性：网络 ${name} 是 **internal** ⇒ 本沙箱**没有外网出口**，` +
-        '可达集合只有该网络成员；任何出网动作（crt.sh、公网 CVE 库、apt/pip……）都只会超时。' +
-        '要"宿主能访问的沙箱也能"：把该网络重建为**非 internal**，并在 profile 写 sandbox.allowEgress: true 后重启。'
-      );
-    }
-    return (
-      `[dsh-pentest] 沙箱可达性：网络 ${name} **不是 internal** ⇒ 沙箱可达 = 宿主可达（网络层不是范围边界）。` +
-      '仅剩的闸门是 admit 阶段的范围裁决与审批模式；要恢复封闭可达集合：重建为 --internal 并去掉 allowEgress。'
-    );
+    return renderReachabilityNote(await probeReachability(this.runner, this.config.internalNetwork));
   }
 
   async run(request: SandboxRunRequest, signal: AbortSignal): Promise<ToolRunResult> {
