@@ -493,6 +493,44 @@ export class DockerSandbox implements SandboxExecutor {
     assertSandboxConfig(this.config);
   }
 
+  /**
+   * 启动自检：把"这张网是哪一种部署形状"**说出来**。
+   *
+   * 为什么要它（2026-10-07，GitHub 反馈"装完插件沙箱不出网"）：`buildDockerArgs` 只透传
+   * `--network <名>` 且**不注入任何代理变量**，于是"出不出网"完全是部署事实 ——
+   * 网络建成 `--internal` ⇒ 可达集合只有该网络成员（等于**完全不出网**）；非 internal ⇒
+   * 可达范围等于宿主。代码知道这件事，但**从不检查、也不说**：绕过 `start-personal.mjs`
+   * 的启动路径上，用户看到的只是动作超时，看起来像工具坏了。
+   *
+   * 这里不做拒绝（放开是操作者的决定，且 `allowEgress` 只存在于 profile/启动器一侧、
+   * 插件读不到），只做**每一次启动都吵一遍**：两种形状各自的后果与出路。
+   */
+  async reachabilityNote(): Promise<string> {
+    const name = this.config.internalNetwork;
+    const outcome = await this.runner.run([DOCKER_BIN, 'network', 'inspect', '-f', '{{.Internal}}', name], {
+      signal: new AbortController().signal,
+      timeoutMs: 10_000,
+    });
+    if (outcome.timedOut || outcome.code !== 0) {
+      return (
+        `[dsh-pentest] 沙箱可达性：**未知** —— 读不到网络 ${name} 的 Internal 属性` +
+        `（docker network inspect 失败：${(outcome.stderr ?? '').trim().slice(0, 200) || '无输出'}）。` +
+        '先确认真实网络名（profile 的 runtime.sandbox.internalNetwork）与 docker 权限；在此之前不要假设沙箱有网。'
+      );
+    }
+    if (outcome.stdout.trim() === 'true') {
+      return (
+        `[dsh-pentest] 沙箱可达性：网络 ${name} 是 **internal** ⇒ 本沙箱**没有外网出口**，` +
+        '可达集合只有该网络成员；任何出网动作（crt.sh、公网 CVE 库、apt/pip……）都只会超时。' +
+        '要"宿主能访问的沙箱也能"：把该网络重建为**非 internal**，并在 profile 写 sandbox.allowEgress: true 后重启。'
+      );
+    }
+    return (
+      `[dsh-pentest] 沙箱可达性：网络 ${name} **不是 internal** ⇒ 沙箱可达 = 宿主可达（网络层不是范围边界）。` +
+      '仅剩的闸门是 admit 阶段的范围裁决与审批模式；要恢复封闭可达集合：重建为 --internal 并去掉 allowEgress。'
+    );
+  }
+
   async run(request: SandboxRunRequest, signal: AbortSignal): Promise<ToolRunResult> {
     const { plan } = request;
 

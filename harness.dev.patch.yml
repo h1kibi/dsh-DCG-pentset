@@ -47,8 +47,12 @@
             allowedImages:
               - name: 127.0.0.1:5005/pentest-tools
                 digest: sha256:81483611f0a0cfe0b7119cdae86e82962bf5c9e1ae5df8a2a407327025a662c2
-            # internal=true 的网络：容器**没有**外网出口，只能打到同网容器。
-            # 出网必须经下面的代理——这正是 §10.4 第 2 层边界想守住的形状。
+            # 出网由**网络是否 internal** 决定：`buildDockerArgs` 只透传 `--network <名>`，
+            # **不注入任何代理变量**（2026-10-07 更正：上一版这里写着"出网必须经下面的代理"，
+            # 与实现矛盾——照它去搭代理会搭出一台没人使用的代理，然后得到"沙箱不出网"）。
+            #   internal=true ⇒ 容器只能打到同网容器（等于完全不出网）；
+            #   非 internal   ⇒ 可达范围 = 宿主可达范围（本机 dev 的选择：allowEgress: true）。
+            # proxyHost/proxyPort 仍在 profile 里，但**不在执行路径上**（见 DockerSandboxConfig 注释）。
             internalNetwork: pentest-internal
             # 双接（bridge + pentest-internal）的出口代理，由 scripts/egress-proxy.py 提供。
             # 起它：sh scripts/dev-sandbox-up.sh proxy

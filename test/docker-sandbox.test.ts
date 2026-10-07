@@ -526,3 +526,38 @@ test('挂载校验：路径不存在 / 不是目录 / 盘根 / 容器路径越�
   // 合法声明必须通过（否则上面的校验就成了「拒绝一切」）
   assertSandboxConfig(configWith([{ hostPath: dir }, { hostPath: dir, containerPath: '/mnt/case' }]));
 });
+
+/**
+ * 启动自检的回归锁（2026-10-07，来自一条真实反馈：「装完插件沙箱不出网」）。
+ *
+ * 背景：`buildDockerArgs` 只透传 `--network` 且**不注入任何代理变量** ⇒ "出不出网"完全是
+ * 部署事实。代码一直知道这件事，却从不检查、也不说；绕过 `start-personal.mjs` 的启动路径上，
+ * 用户看到的只是动作超时。这条锁保证：**三种形状都被明确说出来**，且自检本身永不抛。
+ */
+test('启动自检把"出不出网"说清楚：internal / 非 internal / 读不到', async () => {
+  const withRunner = (result: Record<string, unknown>) =>
+    new DockerSandbox(CONFIG, {
+      runner: {
+        async run() {
+          return { aborted: false, timedOut: false, code: 0, stdout: '', stderr: '', ...result };
+        },
+      },
+    });
+
+  // ① internal ⇒ 明确说"没有外网出口"，并给出出路（这才是那条反馈该看到的输出）
+  const closed = await withRunner({ code: 0, stdout: 'true\n' }).reachabilityNote();
+  assert.match(closed, /internal/);
+  assert.match(closed, /没有外网出口/);
+  assert.match(closed, /allowEgress/);
+
+  // ② 非 internal ⇒ 明确说"可达 = 宿主可达"，且网络层不再是范围边界
+  const open = await withRunner({ code: 0, stdout: 'false\n' }).reachabilityNote();
+  assert.match(open, /不是 internal/);
+  assert.match(open, /宿主可达/);
+  assert.match(open, /范围边界/);
+
+  // ③ 读不到（docker 不在 / 网络名写错）⇒ 说"未知"，绝不冒称有网
+  const unknown = await withRunner({ code: 1, stderr: 'No such network: pentest-sandbox' }).reachabilityNote();
+  assert.match(unknown, /未知/);
+  assert.match(unknown, /No such network: pentest-sandbox/);
+});
