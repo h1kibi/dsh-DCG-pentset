@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""沙箱边界上的**出口代理**：工具容器唯一的出网路径。
+"""**开发/排障用**的出口代理（不是插件的出网路径）。
 
-设计依据：docs/dsh-pentest-plugin-design.md §10.4 —— 工具容器只接入 `internal: true`
-的自建网络，其上唯一成员就是本代理；容器内客户端经 `HTTP_PROXY`/`HTTPS_PROXY`
-（由 `buildDockerArgs` 注入，`NO_PROXY` 被显式置空）把请求交给它。
-因此**代理在连接时刻的裁决**是沙箱的第 2 层边界：容器自己出不了网，能连到哪由这里决定。
+2026-10-07 更正：本脚本**已不在插件的出网路径上**。沙箱自 2026-10-05 起直连目标，
+`buildDockerArgs` 只透传 `--network`、**不注入任何 `HTTP_PROXY`/`HTTPS_PROXY`**
+（回归锁在 `test/docker-sandbox.test.ts`）。出网与否只由网络形状决定：`--internal` ⇒ 没有出口；
+非 internal ⇒ 可达范围等于宿主。本代理保留在仓里，供 `dev-sandbox-up.sh proxy|smoke`
+单独排障"经代理出网"这条**旧链路**用。
+
+设计依据（历史）：docs/dsh-pentest-plugin-design.md §10.4 —— 工具容器只接入 `internal: true`
+的自建网络、经代理出网，代理在连接时刻的裁决即第 2 层边界。**该形态已不成立**：网络非 internal
+时容器与宿主同可达，网络是 internal 时容器没有任何出口。若将来恢复该形态，接线点在
+`buildDockerArgs` 与 `assertAdjudicatedAddress`（见 pg-policy.ts 的注释）。
 
 本代理是**开发/测试用**的最小实现（Python 3 标准库，无第三方依赖，基础镜像用本机已有的
 python:3.10-slim-bookworm，不需要联网拉取）。它只做两件事：

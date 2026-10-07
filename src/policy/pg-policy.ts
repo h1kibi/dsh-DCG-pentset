@@ -673,11 +673,11 @@ export class PgPolicyService implements PolicyService {
    * 现状要说清楚，免得两处结论互相打架：
    * - 容器内的**内置工具**自己做到了固定拨号——`pentest-tool` 的 `adjudicated_addresses`
    *   /`fixed_address` 只拨裁决出的字面地址，并对每一跳重新取址；
-   * - 但**出口代理**（`scripts/egress-proxy.py`）只按 `EGRESS_ALLOW` 判定，并由它自己
-   *   解析域名（`create_connection((host, port))`）——经代理的域名目标因此仍有一个
-   *   重绑定窗口，而闭合它正是本方法存在的理由。
-   * 接线时要做的：代理在建立连接前调用本方法（或让策略服务定期产出地址集合给代理），
-   * 并把拒绝落审计（`scope_violation`）。
+   * - **出口代理已不在出网路径上**（2026-10-05 起沙箱直连目标，2026-10-07 起相关代码删净）：
+   *   它只按 `EGRESS_ALLOW` 判定、并由它自己解析域名的那条链路**当前不成立**。若将来恢复
+   *   "经代理出网"或任何在连接时刻做裁决的通道，代理侧的重绑定窗口会随之回来，届时在
+   *   建立连接前调用本方法（或让策略服务定期产出地址集合给它）即是对应的接线点，
+   *   并把拒绝落审计（`scope_violation`）。
    */
   assertAdjudicatedAddress(normalized: NormalizedTarget, dialedAddress: string): ScopeVerdict {
     return assertAdjudicatedAddress(normalized, dialedAddress);

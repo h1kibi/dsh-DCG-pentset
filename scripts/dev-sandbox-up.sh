@@ -140,8 +140,6 @@ cmd_up() {
   printf '    - name: %s\n' "${IMAGE_REPO}"
   printf '      digest: %s\n' "${DIGEST}"
   printf '  internalNetwork: %s\n' "${NETWORK}"
-  printf '  proxyHost: %s\n' "${PROXY_HOST}"
-  printf '  proxyPort: %s\n' "${PROXY_PORT}"
 }
 
 
@@ -152,7 +150,9 @@ case "${1:-up}" in
   proxy) cmd_proxy ;;
   digest) printf '%s\n' "${DIGEST}" ;;
   smoke)
-    # 与 buildDockerArgs 拼出的 argv 一致：internal 网络 + 代理 env 指向代理容器。
+    # **只用于 dev 排障**：与 `buildDockerArgs` 的参数**并不一致**——插件自 2026-10-05 起
+    # 不注入任何代理变量、也不注入执行令牌（见 docker-sandbox.ts 的回归锁）。这里仍注入，
+    # 是为了让"经代理出网"这条**旧链路**还能被单独排障。要复现产品 argv，请 `up` 后让插件实际执行。
     require_egress_allow
     require_smoke_target
     run_tool "${NETWORK}" \
