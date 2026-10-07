@@ -823,7 +823,12 @@ function makeWorkerExecute(execution: ExecutionService): WorkerToolDeps['execute
     }
 
     const result = await execution.execute(decision.plan, input.signal);
-    return { kind: 'executed', plan: decision.plan, result };
+    return {
+      kind: 'executed',
+      plan: decision.plan,
+      result,
+      ...(result.toolRunId === undefined ? {} : { toolRunId: result.toolRunId }),
+    };
   };
 }
 

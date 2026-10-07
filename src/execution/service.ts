@@ -1139,7 +1139,10 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
           ),
         };
       }
-      return existing.result;
+      // 重放同样带上运行标识（库里那次运行的 id，与首次返回的**同一个**）。
+      // 不带的话"第一次有 id、重放没有"——幂等用例当场抓到了这一点，而它正是审计要的形态：
+      // 同一个动作重发多少次，报告里引用的都该是同一行账本。
+      return { ...existing.result, toolRunId: existing.toolRunId };
     }
 
     // B. 执行前重新裁决（第二组闸门，plan 形态）：模板仍在注册表中、计划摘要未被改动、
@@ -1420,7 +1423,7 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
         },
       });
     }
-    return result;
+    return { ...result, toolRunId };
   }
 
   return {

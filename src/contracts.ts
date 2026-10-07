@@ -2660,6 +2660,14 @@ export interface ToolRunResult {
   readonly truncated?: boolean;
   readonly artifactIds?: readonly string[];
   readonly error?: ToolError;
+  /**
+   * 这次执行的运行标识（`pentest.tool_runs.id`）。
+   *
+   * 可选，**只为可审计**：账本里每次执行都有它，但在此之前模型拿不到 —— 于是"报告里引用的执行"
+   * 与"账本里的行"只能靠时间戳对（2026-10-07 报告：审计对不上）。执行侧在返回前填上
+   * （`service.ts` 的 `execute` 末尾），工具层原样透给模型。
+   */
+  readonly toolRunId?: string;
 }
 
 export interface ExecutionService {

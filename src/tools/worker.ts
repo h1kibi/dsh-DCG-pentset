@@ -175,6 +175,8 @@ type ExecuteOutcome =
       readonly kind: 'executed';
       readonly plan: ExecutionPlan;
       readonly result: unknown;
+      /** 这次执行的运行标识（账本 `pentest.tool_runs.id`）；工具层要把它回给模型（可审计）。 */
+      readonly toolRunId?: string;
     }
   | {
       readonly kind: 'blocked';
@@ -739,7 +741,15 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
       // 拒绝路径把契约错误直接交给模型（与 memory_read 的拒绝形状一致），
       // 不包在 {plan,result} 里——那会让「被拒绝」看起来像「执行完了」。
-      return toJson(outcome.kind === 'blocked' ? outcome.error : { plan: outcome.plan, result: outcome.result });
+      return toJson(
+        outcome.kind === 'blocked'
+          ? outcome.error
+          : {
+              plan: outcome.plan,
+              result: outcome.result,
+              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+            },
+      );
     },
   });
 
@@ -873,7 +883,15 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
       };
       const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
-      return toJson(outcome.kind === 'blocked' ? outcome.error : { plan: outcome.plan, result: outcome.result });
+      return toJson(
+        outcome.kind === 'blocked'
+          ? outcome.error
+          : {
+              plan: outcome.plan,
+              result: outcome.result,
+              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+            },
+      );
     },
   });
 
@@ -957,7 +975,15 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
       };
       const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
-      return toJson(outcome.kind === 'blocked' ? outcome.error : { plan: outcome.plan, result: outcome.result });
+      return toJson(
+        outcome.kind === 'blocked'
+          ? outcome.error
+          : {
+              plan: outcome.plan,
+              result: outcome.result,
+              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+            },
+      );
     },
   });
 
