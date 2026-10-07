@@ -802,7 +802,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         type: 'string',
         enum: ['true', 'false'],
         description:
-          'http_probe/http_get 是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）',
+          '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_probe / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
       },
       wordlist: { type: 'string', enum: ['common_dirs', 'raft_small', 'subdomains_5k'], description: '字典档位' },
       extensions: {
@@ -906,6 +906,12 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         type: 'string',
         description: 'exposure_check 要探测的暴露项（逗号分隔，≤10）：git,env,backup,swagger,openapi,actuator,server_status,phpinfo,web_config,dockerfile',
       },
+      verify_tls: {
+        type: 'string',
+        enum: ['true', 'false'],
+        description:
+          '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_check / exposure_check',
+      },
       sni: { type: 'string', description: 'tls_weakness 的 SNI；none 表示用目标名' },
       enumerate_protocols: { type: 'string', enum: ['on', 'off'], description: 'tls_weakness 必须为 on' },
       scripts: {
@@ -927,6 +933,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         ...(args.scheme === undefined ? {} : { scheme: args.scheme }),
         ...(args.check === undefined ? {} : { check: args.check }),
         ...(args.paths === undefined ? {} : { paths: args.paths }),
+        ...(args.verify_tls === undefined ? {} : { verify_tls: args.verify_tls }),
         ...(args.sni === undefined ? {} : { sni: args.sni }),
         ...(args.enumerate_protocols === undefined ? {} : { enumerateProtocols: args.enumerate_protocols }),
         ...(args.scripts === undefined ? {} : { scripts: args.scripts }),

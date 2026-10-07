@@ -92,6 +92,14 @@ interface ForbiddenPayloadRule {
  * §10.2.1「解释器与外部模板受限」：这些形态一律拒绝，不区分「看起来是否有害」。
  * 规则作用于 **string 类型参数**（enum / integer 由取值范围保证，不受此影响）。
  */
+/**
+ * `verify_tls` 的 carries 文案**单源**（四处模板共用：http_probe / http_check / exposure_check，
+ * 以及未来任何走 `ssl_context()` 的动词）。它同时是一句**承诺**：说"报告里会写明未校验"，
+ * 就必须真有那一行 —— 实现在 `pentest-tool` 的 `tls_verify_line()`（2026-10-07 首版曾写成假承诺）。
+ */
+const VERIFY_TLS_CARRY =
+  '**默认 true**（校验证书）。自签/IP 目标要连通必须显式 false —— 此后该次结果不再能证明"证书链可信"，报告里会写明未校验';
+
 const FORBIDDEN_PAYLOAD_RULES: readonly ForbiddenPayloadRule[] = Object.freeze([
   {
     id: 'free_form_shell_interpreter',
@@ -648,7 +656,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       scheme: 'auto 先试 https 再试 http',
       follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
       collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）',
-      verify_tls: '**默认 true**（校验证书）。自签/IP 目标要连通必须显式 false —— 此后该次结果不再能证明"证书链可信"，报告里会写明未校验',
+      verify_tls: VERIFY_TLS_CARRY,
     },
     commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls}',
   },
@@ -820,6 +828,7 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
           kind: 'enum',
           values: ['tech_stack', 'security_headers', 'cookies', 'cors_policy', 'http_verbs', 'error_disclosure'],
         },
+        { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 60_000,
@@ -834,8 +843,9 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
         'tech_stack=技术栈推断 / security_headers=六个安全响应头有无 / cookies=Set-Cookie 的属性（Secure/HttpOnly/SameSite）' +
         ' / cors_policy=只发 Origin 头看回显（不带凭证） / http_verbs=OPTIONS 与 TRACE（**不试 PUT/DELETE**）' +
         ' / error_disclosure=随机不存在路径的响应是否泄露堆栈与路径',
+      verify_tls: VERIFY_TLS_CARRY,
     },
-    commandTemplate: 'http_check target={target} port={port} scheme={scheme} check={check}',
+    commandTemplate: 'http_check target={target} port={port} scheme={scheme} check={check} verify_tls={verify_tls}',
   },
   {
     template: {
@@ -852,6 +862,7 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
             '^(git|env|backup|swagger|openapi|actuator|server_status|phpinfo|web_config|dockerfile)' +
             '(,(git|env|backup|swagger|openapi|actuator|server_status|phpinfo|web_config|dockerfile)){0,9}$',
         },
+        { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 120_000,
@@ -866,8 +877,9 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
         '要探测的配置面暴露项（逗号分隔，最多 10 个）：git=.git/HEAD / env=.env / backup=backup.zip / swagger=swagger.json' +
         ' / openapi=openapi.json / actuator=actuator/health / server_status=server-status / phpinfo=phpinfo.php' +
         ' / web_config=web.config / dockerfile=Dockerfile。**只报存在性、长度、哈希与形态，不回显内容**',
+      verify_tls: VERIFY_TLS_CARRY,
     },
-    commandTemplate: 'exposure_check target={target} port={port} scheme={scheme} paths={paths}',
+    commandTemplate: 'exposure_check target={target} port={port} scheme={scheme} paths={paths} verify_tls={verify_tls}',
   },
   {
     template: {
@@ -877,7 +889,10 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
         { name: 'sni', kind: 'string', pattern: '^(none|[A-Za-z0-9._-]{1,253})$' },
-        { name: 'enumerate_protocols', kind: 'enum', values: ['on', 'off'] },
+        // 取值域必须是 ['on']：核验**必须**枚举协议与套件——允许 off 等于允许一次"什么都没验证"的
+        // 核验。technique 侧早已收窄（techniques.ts:117-119），模板此前漏跟；2026-10-07 的对拍锁
+        // 就是为抓这一类漂移而加的（"提示词会被忽略，取值域不会"）。
+        { name: 'enumerate_protocols', kind: 'enum', values: ['on'] },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 60_000,

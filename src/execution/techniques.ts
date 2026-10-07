@@ -98,17 +98,18 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
  */
 export const VULN_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Object.freeze({
   http_check: {
-    defaults: { port: 80, scheme: 'auto', check: 'security_headers' },
+    defaults: { port: 80, scheme: 'auto', check: 'security_headers', verify_tls: 'true' },
     required: [],
     enums: {
       scheme: ['http', 'https', 'auto'],
       check: ['tech_stack', 'security_headers', 'cookies', 'cors_policy', 'http_verbs', 'error_disclosure'],
+      verify_tls: ['true', 'false'],
     },
   },
   exposure_check: {
-    defaults: { port: 80, scheme: 'http' },
+    defaults: { port: 80, scheme: 'http', verify_tls: 'true' },
     required: ['paths'],
-    enums: { scheme: ['http', 'https'] },
+    enums: { scheme: ['http', 'https'], verify_tls: ['true', 'false'] },
   },
   tls_weakness: {
     defaults: { port: 443, sni: 'none', enumerate_protocols: 'on' },

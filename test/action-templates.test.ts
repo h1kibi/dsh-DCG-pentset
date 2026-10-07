@@ -299,6 +299,48 @@ describe('能力边界：结构化工具只发给需要它的阶段；skill_load
 });
 
 /**
+ * 参数面对拍锁（2026-10-07 评审补）。
+ *
+ * `techniques.ts:23` 的文档原话是「测试断言两边不漂移」，但**此前没有任何测试这么做**：
+ * `buildStructuredIntent` 只拿自己的 `defaults ∪ required` 校验（techniques.ts:173），
+ * 从不调 `validateParams` ⇒ 模板加了参数而 techniques 忘了补时，全套测试仍绿，
+ * 只在**受理时**以"缺参数"把模型打回（2026-10-07 就是这样漏掉了 `verify_tls` 的透传）。
+ *
+ * 这条锁钉住的不变量：每个 technique 的 `defaults ∪ required` **恰好等于**它对应模板声明的参数名集合。
+ */
+describe('结构化 technique 与模板的参数面必须逐字对拍', () => {
+  for (const { family } of FAMILIES) {
+    const table = STRUCTURED_TECHNIQUES[family];
+    for (const [technique, spec] of Object.entries(table)) {
+      it(`${family}_${technique}：technique 与模板参数面一致`, () => {
+        const id = `${family}_${technique}`;
+        const template = templatesOf(family).find((entry) => entry.template.id === id);
+        assert.ok(template !== undefined, `technique ${technique} 没有对应模板 ${id}`);
+        const fromTechnique = [...Object.keys(spec.defaults), ...spec.required].sort();
+        const fromTemplate = template.template.parameters.map((p) => p.name).sort();
+        assert.deepEqual(
+          fromTechnique,
+          fromTemplate,
+          `${id} 参数面漂移：technique=[${fromTechnique.join('、')}] 模板=[${fromTemplate.join('、')}]。` +
+            '模板多出参数 ⇒ 必须同步 techniques.defaults/enums，且 worker.ts 的 schema 与 intent 透传要跟上；' +
+            'technique 多出参数 ⇒ 受理时会以"缺参数"被打回。',
+        );
+        // 枚举域也必须一致（technique.enums 是模板 kind:'enum' 的值集）。
+        for (const param of template.template.parameters) {
+          if (param.kind !== 'enum') continue;
+          const domain = spec.enums?.[param.name];
+          assert.deepEqual(
+            domain === undefined ? undefined : [...domain].sort(),
+            [...(param.values ?? [])].sort(),
+            `${id}.${param.name} 的枚举域不一致`,
+          );
+        }
+      });
+    }
+  }
+});
+
+/**
  * 用**运行期同一份**参数校验（`validateParams`）判定，不另写一份规则。
  * 校验入口与受理闸门（`admission.ts`）、策略判定（`pg-policy.ts`）是同一个函数。
  */
