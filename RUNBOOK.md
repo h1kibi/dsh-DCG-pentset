@@ -8,7 +8,7 @@
 
 ## 0. 一句话结论
 
-跑起来需要四样东西：**PostgreSQL**、**工具容器镜像 + 本地 registry**、**internal 网络 + 出口代理**、**模型凭据**。前两样有脚本，第三样一条命令，第四样用环境变量。
+跑起来需要四样东西：**PostgreSQL**、**工具容器镜像 + 本地 registry**、**一张 Docker 网络**、**模型凭据**。前两样有脚本，第四样用环境变量。第三样没有脚本可抄默认值：**这张网是否 `internal` 决定沙箱能不能出网** —— `internal=true` ⇒ 沙箱只能打到同网成员（等于完全不出网）；非 internal ⇒ 可达范围等于宿主。选定后写进 profile：`runtime.sandbox.internalNetwork`，若非 internal 还需 `sandbox.allowEgress: true`（启动器会要求它，并在每次启动重复一遍代价）。
 
 ---
 
@@ -87,9 +87,9 @@ EGRESS_ALLOW=172.28.0.10 \
 sh scripts/dev-sandbox-up.sh up
 ```
 
-这一步构建工具镜像、启动本地 registry、创建 `internal=true` 的沙箱网络、启动带显式出口白名单的代理，并打印真实镜像摘要。不要把 `example.com` 或任意公网地址作为第一轮目标。
+这一步构建工具镜像、启动本地 registry、创建 `internal=true` 的沙箱网络、启动带显式出口白名单的代理，并打印真实镜像摘要。**注意这张网是 `internal` ⇒ 沙箱没有外网出口**（出网动作只会超时）；要"宿主能访问的沙箱也能"，把网络建成非 internal 并写 `sandbox.allowEgress: true`（见 §0 第三样）。不要把 `example.com` 或任意公网地址作为第一轮目标。
 
-验证代理路径：
+验证出口代理这一步**只对 dev 脚本的场景有意义**（该脚本仍会起代理容器供排障用；**沙箱本身不经过它**——出网与否只看网络形状，见 §0 第三样与 §6.5.9）：
 
 ```bash
 TARGET=http://lab-web:8000/ \
@@ -98,9 +98,9 @@ EGRESS_ALLOW=172.28.0.10 \
 sh scripts/dev-sandbox-up.sh smoke
 ```
 
-启动器还会拒绝以下状态：网络不是 `internal=true`；internal 网络成员不是唯一代理；代理连接了除 `bridge` 与 internal 网络外的其它网络；代理缺少 `EGRESS_ALLOW`；工具镜像摘要与 profile 不一致。
+启动器会拒绝或提醒以下状态（2026-10-07 与代码对齐）：网络**不是** `internal=true` 而未显式写 `sandbox.allowEgress: true`（拒绝启动，并给两条路）；写了 `allowEgress` ⇒ 每次启动重复一遍"网络层不再是范围边界"的代价；网络成员不是人类用 `PENTEST_LAB_TARGETS` 显式声明的实验室目标；工具镜像摘要与 profile 不一致。（代理相关的检查已随代理退出执行路径一并删除，见 §6.5.9。）
 
-`direct` 只用于实验室目标的镜像/argv 诊断，不属于正常实战路径，因为它绕过代理。
+`direct` 只用于实验室目标的镜像/argv 诊断，不属于正常实战路径，因为它把 argv 直接跑在宿主上而不是沙箱里（与"经不经代理"无关——沙箱本来就不经代理）。
 
 ### 2.1 升级工具镜像（改 `docker/tools/` 之后**必读**）
 
@@ -519,7 +519,7 @@ POST /api/pentest/startWorker
 | `spawn run ENOENT` | argv 首元素不是 `docker` |
 | 每个工具都 `invalid input syntax for type uuid` | dsh 会话标识被当成 worker 会话标识用了，缺 `resolveWorkerSessionId` 解析 |
 | 「本会话不是渗透控制台创建的」 | 你在**聊天界面**（或 `dsh headless`）里开的会话里说话。那种会话没有、也**无法**事后补 engagement 绑定——绑定只由控制台 `startWorker` 创建。去侧栏「渗透作业」→ 选/建 engagement → 运行控制里「启动 Agent」 |
-| 工具容器连不上外网 | `pentest-proxy` 起没起；`tcp_connect` 之类不吃 `HTTP_PROXY`，在 internal 网络上只能打到网内容器 |
+| 工具容器连不上外网 | **先看启动日志里 `[dsh-pentest] 沙箱可达性` 那一行**：`internal` ⇒ 这张网根本没有出口（改网络，见 §0 第三样）；非 `internal` ⇒ 可达范围等于宿主，而出网本身是**间歇**的（§6.5.9，别把一次失败当工具坏了）。`tcp_connect` 之类不吃 `HTTP_PROXY`，这点与网络形状无关 |
 
 **「Agent 不动」怎么读会话事件**（插件日志里是一片空白，因为 dsh 的驱动错误被 `catch` 后只发 `agent/error` 事件）：
 
@@ -625,7 +625,7 @@ Agent 继续追问。范围确认本身**仍然**只能在控制台点，提问�
 
 ## 6.5.3 实战前必检（四条，都是实测踩过的）
 
-1. **出口白名单必须包含本次要打的已确认目标**：代理容器的 `EGRESS_ALLOW` 是**唯一**出网路径，
+1. ~~**出口白名单必须包含本次要打的已确认目标**：代理容器的 `EGRESS_ALLOW` 是**唯一**出网路径，~~ —— **本节已废弃（2026-10-07）**：沙箱自 2026-10-05 起**直连、不经代理**，`buildDockerArgs` 只透传 `--network`，`proxyHost`/`proxyPort` 与 `egress-allowlist` 那套**不在执行路径上**（本轮已从代码里删除）。出网与否只由 §6.5.9 的口径决定：网络 `internal` ⇒ 没有出口；非 internal ⇒ 与宿主同可达。下面几条关于 403/白名单的描述仅作历史背景保留：
    未列入的目标一律 `403 not in EGRESS_ALLOW`（现象像「工具坏了」——Agent 会把 403 读成
    「服务未识别」，而人类得翻到这里才知道发生了什么）。查看与修改：
 
