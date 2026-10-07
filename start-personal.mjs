@@ -63,7 +63,7 @@ function profileValue(text, key, fallback) {
   // 沙箱的网络与代理**必须从 profile 读**：它们与镜像摘要同处一段，是同一份部署事实。
   // 只看环境默认值会出「预检通过、运行期走另一条链路」的假绿灯（实测踩过：
   // 预检报 pentest-proxy/pentest-internal，而 profile 用的是 pentest-lab-proxy/pentest-lab-internal）。
-  const sandboxKeys = { internalNetwork: 'internalNetwork', proxyHost: 'proxyHost', proxyPort: 'proxyPort', allowEgress: 'allowEgress' };
+  const sandboxKeys = { internalNetwork: 'internalNetwork', allowEgress: 'allowEgress' };
   const field = sandboxKeys[key];
   if (field === undefined) return fallback;
   // profile 里的沙箱值写成 `!!js process.env.X ?? '默认值'`：先看环境变量，再看该行的
@@ -74,7 +74,7 @@ function profileValue(text, key, fallback) {
   if (sandboxEnvName !== undefined && process.env[sandboxEnvName]) return process.env[sandboxEnvName];
   const literals = [...line.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
   if (literals.length > 0) return literals[literals.length - 1];
-  // `proxyPort: !!js Number(process.env.X ?? 18080)` —— 端口是不带引号的数字。
+  // `allowEgress: true` —— 不带引号的布尔字面量（沙箱字段只剩 internalNetwork 与 allowEgress）。
   const numeric = /\?\?\s*(\d+)/.exec(line)?.[1];
   if (numeric !== undefined) return numeric;
   // `allowEgress: true` —— 不带引号的布尔字面量。
@@ -96,14 +96,11 @@ function configuredSandbox() {
     throw new Error(`profile 的工具镜像摘要无效（${digest || '缺失'}）。请设置 PENTEST_TOOL_DIGEST 为完整 sha256 摘要。`);
   }
   const internalNetwork = profileValue(text, 'internalNetwork', NETWORK);
-  const proxyHost = profileValue(text, 'proxyHost', PROXY);
-  const portFallback = process.env.PENTEST_PROXY_PORT ?? '8080';
-  const proxyPort = Number(profileValue(text, 'proxyPort', portFallback)) || Number(portFallback) || 8080;
   // 「沙箱可达范围 = 宿主可达范围」是**操作者的决定**，必须显式声明才生效：
   // profile 写 `sandbox.allowEgress: true`，或用环境变量临时放开。
   const allowEgress =
     profileValue(text, 'allowEgress', 'false') === 'true' || process.env.PENTEST_ALLOW_SANDBOX_EGRESS === '1';
-  return { image, digest, internalNetwork, proxyHost, proxyPort, allowEgress };
+  return { image, digest, internalNetwork, allowEgress };
 }
 
 function checkNetwork(network, proxy, notes = [], allowEgress = false) {
@@ -148,14 +145,15 @@ function checkNetwork(network, proxy, notes = [], allowEgress = false) {
     );
   }
 
+  // 代理**不是必备件**（2026-10-07）：沙箱直连目标、不经代理，出网只由网络形状决定
+  // ⇒ 代理不存在是**正常部署**，不再硬失败；只有它存在时才检查它接在哪，且一律只提示。
   const attached = inspectFormat(proxy, '{{json .NetworkSettings.Networks}}');
-  if (!attached.ok) return `无法读取 ${proxy} 的网络连接`;
+  if (!attached.ok) return null;
   let networks;
-  try { networks = JSON.parse(attached.stdout.trim()); } catch { return `${proxy} 的 Docker 网络信息无法解析`; }
+  try { networks = JSON.parse(attached.stdout.trim()); } catch { return null; }
   const names = Object.keys(networks);
   // 直连部署（2026-10-04 起）：沙箱不再经代理出网，代理**没有理由留在目标网上**——
   // 留在上面等于给沙箱多一个可攻击的邻居（沙箱有 NET_RAW，且同处一个二层域）。
-  // 因此这里不再要求代理接入该网络：接上了只点名警告（那是「经代理出网」的旧形态）。
   if (Object.hasOwn(networks, network)) {
     notes.push(
       `${proxy} 仍连接着 ${network}：直连部署不需要它，且沙箱（含 NET_RAW）与它同处二层域。` +
@@ -163,18 +161,11 @@ function checkNetwork(network, proxy, notes = [], allowEgress = false) {
     );
   }
   if (!Object.hasOwn(networks, 'bridge') || names.some((name) => name !== network && name !== 'bridge')) {
-    return `${proxy} 只能连接 bridge 与 ${network}，当前网络：${names.join(', ')}`;
+    notes.push(
+      `${proxy} 接在 ${names.join(', ')} 上（旧形态要求只接 bridge 与 ${network}）。` +
+        '它已不在出网路径上，这条只是提示，不影响启动。',
+    );
   }
-  return null;
-}
-
-function checkProxyAllowlist(proxy) {
-  const env = inspectFormat(proxy, '{{range .Config.Env}}{{println .}}{{end}}');
-  if (!env.ok) return `无法读取 ${proxy} 的环境变量`;
-  const line = env.stdout.split(/\r?\n/).find((entry) => entry.startsWith('EGRESS_ALLOW='));
-  const value = line?.slice('EGRESS_ALLOW='.length).trim() ?? '';
-  if (value === '') return `${proxy} 未设置 EGRESS_ALLOW；第一轮实战禁止使用全放行代理`;
-  if (value.includes('*')) return `${proxy} 的 EGRESS_ALLOW 不得包含通配符`;
   return null;
 }
 
@@ -358,18 +349,14 @@ function preflight() {
   try { sandbox = configuredSandbox(); } catch (error) { failures.push(error.message); }
   // 网络与代理**一律用 profile 的值**（与环境默认可能不同，实测踩过：
   // 预检报 pentest-proxy/pentest-internal，而运行期走 pentest-lab-proxy/pentest-lab-internal）。
+  // 代理**不在必备运行列表里**（2026-10-07）：它已不在出网路径上，缺了它不该拦住启动
+  // （此前会让"按 RUNBOOK §0 四样东西搭起来的合法部署"直接拒绝启动——评审实测）。
   const network = sandbox?.internalNetwork ?? NETWORK;
-  const proxy = sandbox?.proxyHost ?? PROXY;
-  for (const name of [REGISTRY, proxy]) {
-    const result = runningContainer(name);
-    if (!result.ok) failures.push(result.detail);
-  }
+  const proxy = PROXY;
+  const registryResult = runningContainer(REGISTRY);
+  if (!registryResult.ok) failures.push(registryResult.detail);
   const networkFailure = checkNetwork(network, proxy, notes, sandbox?.allowEgress ?? process.env.PENTEST_ALLOW_SANDBOX_EGRESS === '1');
   if (networkFailure) failures.push(networkFailure);
-  if (!networkFailure) {
-    const proxyAllowlistFailure = checkProxyAllowlist(proxy);
-    if (proxyAllowlistFailure) failures.push(proxyAllowlistFailure);
-  }
   const secretFailure = checkLedgerSecret();
   if (secretFailure) failures.push(secretFailure);
   if (sandbox) {

@@ -98,7 +98,7 @@ EGRESS_ALLOW=172.28.0.10 \
 sh scripts/dev-sandbox-up.sh smoke
 ```
 
-启动器会拒绝或提醒以下状态（2026-10-07 与代码对齐）：网络**不是** `internal=true` 而未显式写 `sandbox.allowEgress: true`（拒绝启动，并给两条路）；写了 `allowEgress` ⇒ 每次启动重复一遍"网络层不再是范围边界"的代价；网络成员不是人类用 `PENTEST_LAB_TARGETS` 显式声明的实验室目标；工具镜像摘要与 profile 不一致。（代理相关的预检检查与代码里的白名单同步**已列入待删**——它们早已不在执行路径上；删除链条见设计文档的待办行。）
+启动器会拒绝或提醒以下状态（2026-10-07 与代码对齐）：网络**不是** `internal=true` 而未显式写 `sandbox.allowEgress: true`（拒绝启动，并给两条路）；写了 `allowEgress` ⇒ 每次启动重复一遍"网络层不再是范围边界"的代价；网络成员不是人类用 `PENTEST_LAB_TARGETS` 显式声明的实验室目标；工具镜像摘要与 profile 不一致。（代理相关的**代码**（白名单同步）已于 `cba7fd1` 删净；启动器里那几条代理检查随后也被降级为**只提示不拦启动**——缺代理不再拒绝启动。）
 
 `direct` 只用于实验室目标的镜像/argv 诊断，不属于正常实战路径，因为它把 argv 直接跑在宿主上而不是沙箱里（与"经不经代理"无关——沙箱本来就不经代理）。
 
@@ -333,8 +333,6 @@ npm run build && npm run verify && npm test
               - name: 127.0.0.1:5005/pentest-tools   # 必须写全仓库名，裸名会去 Docker Hub 找
                 digest: sha256:<从 dev-sandbox-up.sh up 的输出里抄>
             internalNetwork: pentest-internal
-            proxyHost: pentest-proxy
-            proxyPort: 8080
           modelRoute:
             provider: deepseek-official   # 必须是宿主已注册的路由名
             model: deepseek-flash
@@ -625,7 +623,7 @@ Agent 继续追问。范围确认本身**仍然**只能在控制台点，提问�
 
 ## 6.5.3 实战前必检（四条，都是实测踩过的）
 
-1. ~~**出口白名单必须包含本次要打的已确认目标**：代理容器的 `EGRESS_ALLOW` 是**唯一**出网路径，~~ —— **本节已废弃（2026-10-07）**：沙箱自 2026-10-05 起**直连、不经代理**，`buildDockerArgs` 只透传 `--network`，`proxyHost`/`proxyPort` 与 `egress-allowlist` 那套**不在执行路径上**（**待删**：已列入待办，见设计文档——删除必须原子完成，半做会留断引用）。出网与否只由 §6.5.9 的口径决定：网络 `internal` ⇒ 没有出口；非 internal ⇒ 与宿主同可达。下面几条关于 403/白名单的描述仅作历史背景保留：
+1. ~~**出口白名单必须包含本次要打的已确认目标**：代理容器的 `EGRESS_ALLOW` 是**唯一**出网路径，~~ —— **本节已废弃（2026-10-07）**：沙箱自 2026-10-05 起**直连、不经代理**，`buildDockerArgs` 只透传 `--network`，`proxyHost`/`proxyPort` 与 `egress-allowlist` 那套**已从代码里删净**（`cba7fd1`；启动器里残留的代理检查已于其后降级为"只提示不拦启动"）。出网与否只由 §6.5.9 的口径决定：网络 `internal` ⇒ 没有出口；非 internal ⇒ 与宿主同可达。下面几条关于 403/白名单的描述仅作历史背景保留：
    未列入的目标一律 `403 not in EGRESS_ALLOW`（现象像「工具坏了」——Agent 会把 403 读成
    「服务未识别」，而人类得翻到这里才知道发生了什么）。查看与修改：
 
@@ -1086,7 +1084,7 @@ npm run typecheck && npm run lint && npm test && npm run verify
 - **沙箱不经代理，且可出网**（2026-10-05）：容器直连目标，`docker-sandbox` 的 argv 里没有代理变量（回归锁在 `test/docker-sandbox.test.ts`）。同日操作者决定「沙箱可达范围 = 宿主可达范围」：沙箱网络 `pentest-lab-internal` 改为**非 internal**（同网段 172.29.0.0/16、靶标 IP 不变），profile 写 `sandbox.allowEgress: true`（缺它预检直接拒绝启动）。**后果：网络层不再是范围边界**——仅剩 admit 的范围裁决（选择器解析 → 地址固定 → 范围快照比对）与逐次人工放行；残留代价：端口粒度不可强制、命令可达任意主机（公网、局域网、宿主已发布端口），外传通道客观存在（见 `skills/exploit-safety`）。**回退**：把网络重建为 `--internal` 并删掉 `allowEgress`。
   （历史：第一轮曾用透传代理做出口，空白名单按拒绝所有目标处理；该模式及其 `EGRESS_ALLOW` 变量已不在当前部署路径上。）
   进生产前仍必须换成在连接时刻做范围/地址/鉴权/审计裁决的通道。
-- **Docker 网络拓扑已由个人启动器做运行时检查**：必须 `internal=true`、internal 网络唯一成员为代理、代理只能连接 `bridge` 与 internal 网络。`DockerSandbox` 本身仍只接收配置，不在每个容器启动前执行 `docker inspect`；绕过个人启动器的部署必须自行实现同等 preflight。
+- **Docker 网络拓扑由个人启动器做运行时检查**（2026-10-07 与代码对齐）：网络必须存在；网络**非** `internal=true` 时必须显式 `sandbox.allowEgress: true`（否则拒绝启动，并给出两条路）；网络成员必须是 `PENTEST_LAB_TARGETS` 声明的实验室目标（代理豁免）。**代理已不在出网路径上**：它不存在**不拦启动**（此前会拦——按 §0 四样东西搭的合法部署因此被拒），存在时只提示它接在哪些网络上。`DockerSandbox` 本身只接收配置，不在每个容器启动前 `docker inspect`；它在启动时做一次**非阻塞**的可达性自检并印出实况。
 - **宿主侧输出缓冲有上限（8 MiB），超限丢弃尾部并在 stderr 标注**。这是独立于容器内 `PENTEST_MAX_OUTPUT_BYTES` 的兜底：后者只约束守规矩的 Reporter，前者防容器失控刷爆宿主内存。取消与超时都会杀**整个进程组**（POSIX `detached` + `kill(-pid)`），不再只杀直接子进程。
 - **记忆与证据的范围过滤依赖写入侧填资产归属**。`memory_chunks` / `memory_items` / `artifacts` 三张表的 `asset_ids` 是 §8.6 谓词的唯一输入；能确定目标却留空的写入必须被拒绝，否则「不标资产」就是绕过范围的路子。空数组仍然放行（思考链、人工决策、压缩摘要本就无归属）。
 - **控制台读取与 Worker 读取走同一份范围谓词，且都要求租约有效**。控制台按当前范围版本，Worker 按会话冻结的范围版本；`readMemory` 在无可见分块时拒绝，不回退返回原始 payload。
