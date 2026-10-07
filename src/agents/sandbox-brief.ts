@@ -107,7 +107,16 @@ export function renderSandboxBrief(
       : '因此需要留存的东西**当场落进记忆**（status_note / 报告 / 证据）；先落到上面那个挂载目录再整理也可以，但记忆里的状态才是交接的依据。',
     '',
     '**限额**（按这个规划命令，超限即失败或截断）：',
-    `- 墙钟：单条命令最长 ${String(wallClockMinutes)} 分钟；结构化动作另有更小的默认（端口扫描 5 分钟、nuclei/爬取 3 分钟、探针类 1 分钟）`,
+    `- 墙钟：**单条命令的上限由模板决定** —— 自由命令 \`pentest_exec\` 是 **5 分钟**，不是 ${String(wallClockMinutes)} 分钟；`,
+    '  结构化动作更小（端口扫描 5 分钟、nuclei/爬取 3 分钟、探针类 1 分钟）。',
+    `  ${String(wallClockMinutes)} 分钟是本沙箱的**上限**而非默认 ⇒ 规划长任务时按 5 分钟切段。`,
+    ...(mounts.length === 0
+      ? []
+      : [
+          '- **长任务把结果落盘到 /work 再分段跑**（`nmap -oX/-oG`、`> /work/out.json`）：超时那一刀会连同',
+          '  当时已拿到的输出一起砍掉（实测：12 个 /24 的抽样扫描 timed_out，中途命中的主机全丢）；',
+          '  而 /work 是唯一跨命令存在的地方，落了盘的重跑就能续上。',
+        ]),
     `- 资源：CPU ${DEFAULT_SANDBOX_LIMITS.cpus} 核 / 内存 ${DEFAULT_SANDBOX_LIMITS.memory} / 进程数 ${String(DEFAULT_SANDBOX_LIMITS.pidsLimit)}`,
     `- 临时空间：\`/tmp\` 上限 ${SANDBOX_TMPFS_SIZE}（大字典与中间结果要留意）`,
     `- 输出：单条命令 stdout 上限约 ${humanBytes(TYPICAL_OUTPUT_CAP)}（宿主侧另有 ${humanBytes(HOST_OUTPUT_BUFFER_LIMIT_BYTES)} 缓冲上限，超了尾部被丢弃）`,
