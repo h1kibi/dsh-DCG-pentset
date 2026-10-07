@@ -45,6 +45,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
+import { sanitizeJsonText } from './text-sanitize.ts';
 import type { ExecutionPlan, SandboxMount, ToolRunResult } from '../contracts.ts';
 import type { SandboxExecutor, SandboxRunRequest } from './service.ts';
 
@@ -441,7 +442,7 @@ export const spawnRunner: ProcessRunner = {
       const push = (target: 'stdout' | 'stderr', b: Buffer): void => {
         const current = target === 'stdout' ? stdout : stderr;
         const next = appendBounded(current, b.toString('utf8'), HOST_OUTPUT_BUFFER_LIMIT_BYTES);
-        if (target === 'stdout') stdout = next.text;
+        if (target === 'stdout') stdout = sanitizeJsonText(next.text);
         else stderr = next.text;
         if (next.overflowed) outputOverflowed = true;
       };
