@@ -468,6 +468,21 @@ interface DockerSandboxDeps {
   readonly containerName?: (plan: ExecutionPlan) => string;
 }
 
+/**
+ * `docker network inspect -f '{{.Internal}}'` 的原始输出 → 形状判定（**纯函数**，可穷举单测）。
+ *
+ * 判据收紧到**精确等于** `true` / `false`：其余一切（空输出、CLI 多写一行、读错字段）都判 `unknown`。
+ * 2026-10-07 评审的变异实验证明了为什么必须这样：把命令里的字段名误写成别的（例如 `{{.Name}}`）
+ * 时输出恒为网络名，原先"非 true 即非 internal"的默认分支会把**每个 internal 部署**印成
+ * "可达 = 宿主可达"——恰好把本自检要解决的故障模式（沙箱不出网）反向说了一遍，而当时的测试抓不住。
+ */
+export function networkShape(raw: string): 'internal' | 'open' | 'unknown' {
+  const value = raw.trim();
+  if (value === 'true') return 'internal';
+  if (value === 'false') return 'open';
+  return 'unknown';
+}
+
 export class DockerSandbox implements SandboxExecutor {
   private readonly config: DockerSandboxConfig;
   private readonly runner: ProcessRunner;
@@ -500,14 +515,20 @@ export class DockerSandbox implements SandboxExecutor {
       signal: new AbortController().signal,
       timeoutMs: 10_000,
     });
-    if (outcome.timedOut || outcome.code !== 0) {
+    const failed = outcome.timedOut || outcome.code !== 0;
+    const detail = failed
+      ? (outcome.stderr ?? '').trim().slice(0, 200) || '无输出'
+      : `inspect 输出不可识别：${JSON.stringify(outcome.stdout.trim())}`;
+    // 三分支**显式**：危险方向（把 internal 说成 open）必须精确命中 'false' 才成立（见 networkShape）。
+    const shape = failed ? 'unknown' : networkShape(outcome.stdout);
+    if (shape === 'unknown') {
       return (
         `[dsh-pentest] 沙箱可达性：**未知** —— 读不到网络 ${name} 的 Internal 属性` +
-        `（docker network inspect 失败：${(outcome.stderr ?? '').trim().slice(0, 200) || '无输出'}）。` +
+        `（${detail}）。` +
         '先确认真实网络名（profile 的 runtime.sandbox.internalNetwork）与 docker 权限；在此之前不要假设沙箱有网。'
       );
     }
-    if (outcome.stdout.trim() === 'true') {
+    if (shape === 'internal') {
       return (
         `[dsh-pentest] 沙箱可达性：网络 ${name} 是 **internal** ⇒ 本沙箱**没有外网出口**，` +
         '可达集合只有该网络成员；任何出网动作（crt.sh、公网 CVE 库、apt/pip……）都只会超时。' +

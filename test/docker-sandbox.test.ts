@@ -19,6 +19,7 @@ import {
   DOCKER_BIN,
   resolveImage,
   mapOutcome,
+  networkShape,
   assertSandboxConfig,
   appendBounded,
   spawnRunner,
@@ -532,10 +533,12 @@ test('挂载校验：路径不存在 / 不是目录 / 盘根 / 容器路径越�
  * 用户看到的只是动作超时。这条锁保证：**三种形状都被明确说出来**，且自检本身永不抛。
  */
 test('启动自检把"出不出网"说清楚：internal / 非 internal / 读不到', async () => {
+  const calls: string[][] = [];
   const withRunner = (result: Record<string, unknown>) =>
     new DockerSandbox(CONFIG, {
       runner: {
-        async run() {
+        async run(argv) {
+          calls.push([...argv]);
           return { aborted: false, timedOut: false, code: 0, stdout: '', stderr: '', ...result };
         },
       },
@@ -557,4 +560,22 @@ test('启动自检把"出不出网"说清楚：internal / 非 internal / 读不�
   const unknown = await withRunner({ code: 1, stderr: 'No such network: pentest-sandbox' }).reachabilityNote();
   assert.match(unknown, /未知/);
   assert.match(unknown, /No such network: pentest-sandbox/);
+
+  // ④ **读的必须是 `.Internal` 这个字段**（2026-10-07 评审的变异实验：改成 `{{.Name}}` 后原先全绿，
+  //    而 `{{.Name}}` 恒输出网络名 ⇒ 每个 internal 部署都会被印成"可达 = 宿主可达"）。
+  assert.deepEqual(calls[0]?.slice(0, 5), ['docker', 'network', 'inspect', '-f', '{{.Internal}}']);
+  assert.equal(calls[0]?.[5], 'pentest-sandbox', 'inspect 的目标必须是配置里的网络名');
+
+  // ⑤ 两种形状的话必须**互斥**：只说对的那一半（防"话变了、关键词还在"）
+  assert.doesNotMatch(closed, /宿主可达/);
+  assert.doesNotMatch(open, /没有外网出口/);
+  assert.notEqual(closed, open);
+
+  // ⑥ 形状判定的穷举表：只有精确 true/false 才算已知，其余一律 unknown（危险方向必须最难命中）
+  assert.equal(networkShape('true\n'), 'internal');
+  assert.equal(networkShape('false'), 'open');
+  assert.equal(networkShape(''), 'unknown');
+  assert.equal(networkShape('  '), 'unknown');
+  assert.equal(networkShape('pentest-sandbox'), 'unknown');
+  assert.equal(networkShape('true\nWARNING: something'), 'unknown');
 });
