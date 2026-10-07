@@ -57,6 +57,9 @@
             # 名字与**实际存在的网络**一致（此前这里写 `pentest-internal`，而实验室跑的是这张网：
             # 两套名字并存让排障多绕一步；plugin 用的是这个字段，务必与 `docker network ls` 对得上）。
             internalNetwork: pentest-lab-internal
+            # 本机选择"宿主能访问的沙箱也能"（非 internal 网络 + 显式声明）。启动器要求这一条才放行；
+            # 自检会拿它和实况互校（internal + true 会被点名矛盾；非 internal 而没声明会警示绕过启动器）。
+            allowEgress: true
             # 出口代理只对 dev 排障有意义（`scripts/egress-proxy.py`，沙箱本身不经它）。
             # 那两个键（proxyHost/proxyPort）已随死重量删除：出网只由网络形状决定。
             # ── 写进沙箱的宿主目录（§10.4）──

@@ -578,4 +578,32 @@ test('启动自检把"出不出网"说清楚：internal / 非 internal / 读不�
   assert.equal(networkShape('  '), 'unknown');
   assert.equal(networkShape('pentest-sandbox'), 'unknown');
   assert.equal(networkShape('true\nWARNING: something'), 'unknown');
+
+  // ⑦ 声明 ↔ 实况对照：两种矛盾组合都要说出来（仓里的立场：配置对不上必须显式告警）
+  const withDeclared = (allowEgress: boolean, stdout: string) =>
+    new DockerSandbox(
+      { ...CONFIG, allowEgress },
+      {
+        runner: {
+          async run() {
+            return { aborted: false, timedOut: false, code: 0, stdout, stderr: '' };
+          },
+        },
+      },
+    );
+  assert.match(
+    await withDeclared(true, 'true\n').reachabilityNote(),
+    /声明与实况矛盾/,
+    'internal 网络 + allowEgress: true 必须点名矛盾',
+  );
+  assert.match(
+    await withDeclared(false, 'false\n').reachabilityNote(),
+    /绕过了个人启动器/,
+    '非 internal 而没声明 allowEgress 必须警示',
+  );
+  assert.doesNotMatch(
+    await withDeclared(true, 'false\n').reachabilityNote(),
+    /绕过了个人启动器/,
+    '声明正确时不得多嘴',
+  );
 });

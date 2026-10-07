@@ -514,7 +514,7 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
   // **永不抛**：放开是操作者的决定，探针失败只降级为一行说明。
   {
     const sandbox = runtime.sandbox;
-    const note = await probeReachability(spawnRunner, sandbox.internalNetwork).then(
+    const note = await probeReachability(spawnRunner, sandbox.internalNetwork, sandbox.allowEgress).then(
       (fact) => renderReachabilityNote(fact),
       (error: unknown) => `[dsh-pentest] 沙箱可达性自检未完成：${error instanceof Error ? error.message : String(error)}`,
     );

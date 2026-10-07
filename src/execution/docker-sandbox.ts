@@ -78,6 +78,15 @@ export interface DockerSandboxConfig {
    * 无论哪种，**不要把非授权容器接进这张网**（与沙箱同处一个二层域）。
    */
   readonly internalNetwork: string;
+  /**
+   * 操作者的**声明意图**：非 internal 网络是否被明确允许（`profile` 的 `sandbox.allowEgress`）。
+   *
+   * **不进 argv**（`buildDockerArgs` 不看它）——只有个人启动器据此拒绝/提醒。声明在这里是
+   * 为了让启动自检能把**声明与实况对照**（`internal` 网络 + `allowEgress: true` 是矛盾组合；
+   * 非 internal 而没声明 ⇒ 很可能绕过了启动器）。本仓对"配置写了但插件读不到"的既有立场是
+   * **必须显式告警**（见 `runtime.recovery` 的先例），这条字段就是把那个立场落下来。
+   */
+  readonly allowEgress?: boolean;
   readonly limits?: Partial<SandboxLimits>;
   /** 容器内的工作目录（docker `-w`）。注意：模板入口在 `/tmp` 下执行命令，实测 `pwd` 是 `/tmp`。 */
   readonly workdir?: string;
@@ -489,13 +498,19 @@ export interface ReachabilityFact {
   readonly network: string;
   /** shape==='unknown' 时的原因（inspect 的 stderr/超时/不可识别输出），其余为空串。 */
   readonly detail: string;
+  /** 操作者的声明（profile 的 `sandbox.allowEgress`），用于和实况互校。 */
+  readonly allowEgress: boolean | undefined;
 }
 
 /**
  * 探一次网络形状。**唯一**会跑 `docker network inspect` 的地方（除它之外没有第二个真相源）。
  * 失败（docker 不在、网络名写错、超时）一律 'unknown'，绝不当成 open——危险方向必须最难命中。
  */
-export async function probeReachability(runner: ProcessRunner, network: string): Promise<ReachabilityFact> {
+export async function probeReachability(
+  runner: ProcessRunner,
+  network: string,
+  allowEgress: boolean | undefined,
+): Promise<ReachabilityFact> {
   const outcome = await runner.run([DOCKER_BIN, 'network', 'inspect', '-f', '{{.Internal}}', network], {
     signal: new AbortController().signal,
     timeoutMs: 10_000,
@@ -506,6 +521,7 @@ export async function probeReachability(runner: ProcessRunner, network: string):
       shape: 'unknown',
       network,
       detail: (outcome.stderr ?? '').trim().slice(0, 200) || '无输出',
+      allowEgress,
     };
   }
   const shape = networkShape(outcome.stdout);
@@ -513,11 +529,19 @@ export async function probeReachability(runner: ProcessRunner, network: string):
     shape,
     network,
     detail: shape === 'unknown' ? `inspect 输出不可识别：${JSON.stringify(outcome.stdout.trim())}` : '',
+    allowEgress,
   };
 }
 
 /** 事实 → 启动日志那一行（前缀 `[dsh-pentest] 沙箱可达性` 是 RUNBOOK 排障表的检索锚点，别改）。 */
 export function renderReachabilityNote(fact: ReachabilityFact): string {
+  // 声明 ↔ 实况对照（仓里既有立场：配置写了但读不到/对不上，必须显式告警而不是静默）。
+  const contradiction =
+    fact.shape === 'internal' && fact.allowEgress === true
+      ? '\n⚠ 声明与实况矛盾：网络是 internal，profile 里的 sandbox.allowEgress 无意义（删掉它，或把网络改成非 internal）。'
+      : fact.shape === 'open' && fact.allowEgress !== true
+        ? '\n⚠ 网络非 internal 但未声明 sandbox.allowEgress：本进程很可能**绕过了个人启动器**（只有它会强制这条声明），请知情。'
+        : '';
   if (fact.shape === 'unknown') {
     return (
       `[dsh-pentest] 沙箱可达性：**未知** —— 读不到网络 ${fact.network} 的 Internal 属性` +
@@ -529,12 +553,14 @@ export function renderReachabilityNote(fact: ReachabilityFact): string {
     return (
       `[dsh-pentest] 沙箱可达性：网络 ${fact.network} 是 **internal** ⇒ 本沙箱**没有外网出口**，` +
       '可达集合只有该网络成员；任何出网动作（crt.sh、公网 CVE 库、apt/pip……）都只会超时。' +
-      '要"宿主能访问的沙箱也能"：把该网络重建为**非 internal**，并在 profile 写 sandbox.allowEgress: true 后重启。'
+      '要"宿主能访问的沙箱也能"：把该网络重建为**非 internal**，并在 profile 写 sandbox.allowEgress: true 后重启。' +
+      contradiction
     );
   }
   return (
     `[dsh-pentest] 沙箱可达性：网络 ${fact.network} **不是 internal** ⇒ 沙箱可达 = 宿主可达（网络层不是范围边界）。` +
-    '仅剩的闸门是 admit 阶段的范围裁决与审批模式；要恢复封闭可达集合：重建为 --internal 并去掉 allowEgress。'
+    '仅剩的闸门是 admit 阶段的范围裁决与审批模式；要恢复封闭可达集合：重建为 --internal 并去掉 allowEgress。' +
+    contradiction
   );
 }
 
@@ -565,7 +591,9 @@ export class DockerSandbox implements SandboxExecutor {
    * 只做**每一次启动都吵一遍**：两种形状各自的后果与出路。
    */
   async reachabilityNote(): Promise<string> {
-    return renderReachabilityNote(await probeReachability(this.runner, this.config.internalNetwork));
+    return renderReachabilityNote(
+      await probeReachability(this.runner, this.config.internalNetwork, this.config.allowEgress),
+    );
   }
 
   async run(request: SandboxRunRequest, signal: AbortSignal): Promise<ToolRunResult> {
