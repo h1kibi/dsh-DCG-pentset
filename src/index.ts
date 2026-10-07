@@ -505,16 +505,20 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
   }
 
   // 沙箱可达性自检（2026-10-07）：与 RLS 自检并列——两者都是"启动时把部署事实说出来"。
-  // 放在这里而非 compose() 里，三个理由：① 走 log(ctx) 而不是 console.log；
+  // 放在这里而非 compose() 里，三个理由：① 它在**启动路径**上，启动早退时不会漏印；
   // ② compose() 保持无副作用（此前每次 compose 都真 spawn 一个 docker inspect，单测里二十多次）；
-  // ③ 它在**启动路径**上，启动早退时不会漏印。**永不抛**：放开是操作者的决定，它只负责说清楚。
+  // ③ 出口统一到启动类日志的可见通道。
+  // **注意出口**：这里用 console 而不是 `log(ctx, 'info')`——cordis 的 logger 默认只写内存
+  // 环形缓冲、不接 console（本仓在 `onInternalError` 处踩过同一个坑并把结论写在注释里），
+  // 用 log(ctx) 会让这条"唯一说清出不出网"的话**根本看不见**（实测：线上日志里那行消失）。
+  // **永不抛**：放开是操作者的决定，探针失败只降级为一行说明。
   {
     const sandbox = runtime.sandbox;
     const note = await probeReachability(spawnRunner, sandbox.internalNetwork).then(
       (fact) => renderReachabilityNote(fact),
       (error: unknown) => `[dsh-pentest] 沙箱可达性自检未完成：${error instanceof Error ? error.message : String(error)}`,
     );
-    log(ctx, 'info')(note);
+    console.log(note);
   }
 
   // 模型路由：**优先跟随宿主声明的默认模型**。
