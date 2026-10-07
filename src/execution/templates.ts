@@ -476,7 +476,12 @@ export function createRegistry(specs: readonly ActionTemplateSpec[]): TemplateRe
 const DIRECT_COMMAND_SPEC: ActionTemplateSpec = {
   template: {
     id: 'direct_command',
-    actionClass: 'exploit_validation',
+    // **免批（2026-10-07 操作者裁定：直接"任意命令免批"）**：类别由 `exploit_validation` 改为
+    // `active_discovery`（预设内且不在 `PER_ACTION_APPROVAL_CLASSES` 里 ⇒ 不再逐条人批）。
+    // 代价已登记在设计文档：这一档从此**不再有人看命令原文**，审批卡对它的闸门失效；
+    // 范围裁决与沙箱加固仍在（只打已裁决地址、容器隔离不变）。改这一处必须与镜像里那些
+    // "逐条人批"的措辞同轮更新，否则会再生产一处"信息面↔执行面不一致"。
+    actionClass: 'active_probing',
     tool: 'shell_exec',
     parameters: [
       { name: 'port', kind: 'integer', min: 1, max: 65535 },

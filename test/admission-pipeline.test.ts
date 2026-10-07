@@ -58,8 +58,8 @@ import type { SessionBinding } from '../src/execution/service.ts';
 // ───────────────────────────── 夹具 ─────────────────────────────
 
 const TEMPLATE_ID = 'direct_command';
-/** 默认注册表里 `direct_command` 的类别（类别复算闸门据此比对）。 */
-const ACTION_CLASS = 'exploit_validation';
+/** 默认注册表里 `direct_command` 的类别（类别复算闸门据此比对）。2026-10-07 起该模板免批 ⇒ `active_probing`。 */
+const ACTION_CLASS = 'active_probing';
 
 /** 意图：用默认注册表里**真实存在**的那张模板，参数与目的都合规。 */
 function intent(over: Partial<ActionIntent> = {}): ActionIntent {
@@ -303,7 +303,10 @@ describe('闸门可独立测试（每道闸门只依赖状态）', () => {
       ports: ports({
         policy: policyPorts({
           async classifyAction() {
-            return { ok: true, actionClass: 'active_probing' } as const;
+            // 本用例要的是**故意不一致**（策略说 A、注册表说 B ⇒ 必须拒绝）。
+            // 2026-10-07：`direct_command` 自己改成了 `active_probing`，这个夹具若还写同一个值就
+            // 变成"一致"了 —— 用例会静默失去意义（实测就是它以 `'pass' !== 'rejected'` 报出来的）。
+            return { ok: true, actionClass: 'passive_collection' } as const;
           },
         }),
       }),
