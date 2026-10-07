@@ -1957,3 +1957,23 @@ test('结算回写持续失败：有限重试后返回带运行 id 的结构化 
   assert.match(result.error?.message ?? '', /已执行/, '必须说清动作已执行，避免被误当成「没跑」');
   assert.match(result.error?.message ?? '', /run-1/, '必须带上运行 id 供人工核查');
 });
+
+test('免批裁定的行为锁：默认 human 档下裸命令直接 admitted，且不生成放行凭证', async () => {
+  // 2026-10-07 免批裁定的**行为面**回归锁（评审指出：把"直连命令模板"那条断言反转之后，
+  // 裁定引入的新事实在行为层没有任何用例——"机器可以自己批准任意命令"这类回归抓不住）。
+  //
+  // 机制：requiresApproval = beyondPreset || perActionApprovalClasses.includes(actionClass)
+  // （service.ts:837），而 `active_probing` 在四个出厂预设的启用集合内、且不在逐次放行集合里
+  // ⇒ 该分支**不读 approvalMode** ⇒ 人审档下裸命令也不再产生放行卡（不是"仅高权限档免批"）。
+  // 这条锁与简报里那句"命令原文不再经人过目"是同一件事实的两端：改一边必须改另一边。
+  const h = makeHarness();
+  h.setPolicy({ perActionApprovalClasses: [], enabledActionClasses: ['passive_collection', 'active_probing'] });
+  const decision = await h.admit({
+    templateId: 'direct_command',
+    targetSelector: `https://${HOST}/`,
+    params: { port: 443, command_b64: Buffer.from('id', 'utf8').toString('base64') },
+    purpose: '免批裁定的行为锁：人审档下也应直接受理，不留放行凭证',
+  });
+  assert.equal(decision.kind, 'admitted', '免批类别在人审档下不应停在等待人类');
+  assert.equal(h.store.requests.length, 0, '免批 ⇒ 不生成放行凭证（账本里只有 policy_allow 与执行记录）');
+});
