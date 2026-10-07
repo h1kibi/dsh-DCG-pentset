@@ -634,7 +634,27 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
 
     const indexWatermark = await this.#indexWatermark(session.engagement_id);
     await this.#auditQuery(session, input, fused);
-    return { hits, indexWatermark };
+    // 零命中时**必须解释原因**（2026-10-07 加；3/6 份实测报告撞到）：此前静默返回 `[]` + `indexWatermark: 0`，
+    // Agent 据此判断"这是空作业"，转而手工读了 150KB+ 归档 markdown。空结果有两种截然不同的含义 ——
+    // **索引里没有这个作业的内容** vs **有内容但这次查询没命中** —— 不区分开，猜错的代价是整轮上下文。
+    let note: string | undefined;
+    if (hits.length === 0) {
+      const counted = await this.#db.query<{ n: number }>(
+        `select count(*)::int as n
+           from pentest.memory_chunks mc
+           join pentest.context_events e on e.event_id = mc.source_event_id
+          where e.engagement_id = $1::uuid`,
+        [session.engagement_id],
+      );
+      const chunks = counted.rows[0]?.n ?? 0;
+      note =
+        chunks === 0
+          ? '本作业记忆索引为空（0 个分块）：这不是"没找到"，是"库里还没有可检索的内容"。' +
+            '作业资料请用 pentest_workdir 读 —— 它读的是人类挂进来的作业目录，不经过索引'
+          : `本作业索引有 ${String(chunks)} 个分块，但本次查询没有命中：换线索再试` +
+            '（实体名、路径、端口、版本号、错误原文、时间窗），或先用 pentest_workdir 列出作业目录';
+    }
+    return { hits, indexWatermark, ...(note === undefined ? {} : { note }) };
   }
 
   /** 工具入参 → 检索层入参（§8.7 的字段名）。越界取值一律拒绝，不做静默忽略（§10.2.1）。 */
