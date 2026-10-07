@@ -132,6 +132,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       smbclient smbmap samba-common-bin ldap-utils snmp \
       # 隧道与转发
       socat proxychains4 sshpass openssh-client \
+      # 数据库客户端（2026-10-07 加：④ 报告实测"容器里没有 psql/redis-cli，只能手搓协议"）
+      postgresql-client redis-tools \
       # 字典生成与流量取证（2026-10-06 加）
       crunch cewl tshark \
       # 基础运行时与数据处理

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [PTES 漏洞分析, OWASP Risk Rating, CVSS v4 概念]
-  smoked: "沙箱实测@8aba5d58ad5b：6 块原文照跑通过（去重 6→5 且保留 dupes 计数、无任何观察证据的条目落退回列、评级 python（缺依据不得进验证计划）、验证计划行、覆盖面核对 declared=3 covered=2）；只有 signal 没 evidence_ref 的条目不被误退"
+  smoked: "沙箱实测@b9d9011f8331：6 块原文照跑通过（去重 6→5 且保留 dupes 计数、无任何观察证据的条目落退回列、评级 python（缺依据不得进验证计划）、验证计划行、覆盖面核对 declared=3 covered=2）；只有 signal 没 evidence_ref 的条目不被误退"
 ---
 
 # 候选去重、评级与验证计划（vuln-triage）

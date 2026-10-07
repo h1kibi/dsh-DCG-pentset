@@ -351,6 +351,18 @@ export interface SandboxToolGroup {
 
 export const SANDBOX_TOOL_GROUPS: readonly SandboxToolGroup[] = [
   {
+    group: '数据库客户端',
+    usage:
+      '命令行直连（脚本化/批量取证比手搓协议稳）。**只有客户端、没有服务端**：连的是目标，不是本机。' +
+      '`psql role=…`（连接串走 `PGPASSWORD`/`PGSSLMODE` 环境变量，别把口令写进命令行——它会进报告）；' +
+      '`redis-cli -h … -p …`（`--scan --pattern "*"` 只看键名，`GET` 之前先想清楚要不要动目标数据）。' +
+      'mongosh 未预置（要另配 mongodb 仓库与 keyring，与"构建可复现"冲突）；Oracle Instant Client 因许可**不进镜像**。',
+    tools: [
+      { name: 'psql', from: 'postgresql-client' },
+      { name: 'redis-cli', from: 'redis-tools' },
+    ],
+  },
+  {
     group: '侦察与资产测绘',
     usage:
       '先端口与服务、再指纹与 DNS/子域：结构化通道（pentest_recon）能覆盖的就别手写命令。' +

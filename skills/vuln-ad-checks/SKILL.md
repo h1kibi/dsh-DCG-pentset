@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [MITRE ATT&CK T1558.003 / T1558.004 / T1649 / T1557, Microsoft AD 安全最佳实践, certipy 与 Impacket 官方文档, PTES 漏洞分析]
-  smoked: "沙箱实测@8aba5d58ad5b：对实验室 Samba AD DC（域 LAB.LOCAL）逐块跑：①口令策略通过（lockoutThreshold=0、minPwdLength=7、pwdProperties=0）④委派判定通过（无约束 524288 命中 1 条、约束委派与 RBCD 各 0 条）⑥SMB 签名通过（Message signing enabled and required ⇒ 中继面不成立）⑦共享清单通过（smbmap 与 smbclient -L 都列出 sysvol/netlogon/IPC$）⑧rpcclient 通过（enumdomusers/enumdomgroups/netshareenumall 逐行带 RID）⑨LAPS 查询通过（0 条 ⇒ 只说明读不到，不是「未部署」）。未通过（原因逐条写进常见失败）：②Kerberoast 与 ⑤certipy 报 KRB_AP_ERR_INAPP_CKSUM（Samba KDC 互操作）；③AS-REP 报未设 UF_DONT_REQUIRE_PREAUTH，而 LDAP 实测 userAccountControl=4260352 含 0x400000——已在文中写「以 LDAP 为准」"
+  smoked: "沙箱实测@b9d9011f8331：对实验室 Samba AD DC（域 LAB.LOCAL）逐块跑：①口令策略通过（lockoutThreshold=0、minPwdLength=7、pwdProperties=0）④委派判定通过（无约束 524288 命中 1 条、约束委派与 RBCD 各 0 条）⑥SMB 签名通过（Message signing enabled and required ⇒ 中继面不成立）⑦共享清单通过（smbmap 与 smbclient -L 都列出 sysvol/netlogon/IPC$）⑧rpcclient 通过（enumdomusers/enumdomgroups/netshareenumall 逐行带 RID）⑨LAPS 查询通过（0 条 ⇒ 只说明读不到，不是「未部署」）。未通过（原因逐条写进常见失败）：②Kerberoast 与 ⑤certipy 报 KRB_AP_ERR_INAPP_CKSUM（Samba KDC 互操作）；③AS-REP 报未设 UF_DONT_REQUIRE_PREAUTH，而 LDAP 实测 userAccountControl=4260352 含 0x400000——已在文中写「以 LDAP 为准」"
 ---
 
 # AD 线索核验（vuln-ad-checks）

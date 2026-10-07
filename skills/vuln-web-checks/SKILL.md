@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [OWASP WSTG, OWASP Top 10 2021, PayloadsAllTheThings, HackTricks]
-  smoked: "沙箱实测@8aba5d58ad5b：8 块原文照跑，5 块通过、3 块为靶站无该现象（POST 501、无 Set-Cookie、IDOR/反射/安全头全 404 或缺失，静态站预期）；soft-404 基线三行一致 404/469；ffuf -ac + jq 范式 20s 命中 1；OPTIONS → 501 判读"
+  smoked: "沙箱实测@b9d9011f8331：8 块原文照跑，5 块通过、3 块为靶站无该现象（POST 501、无 Set-Cookie、IDOR/反射/安全头全 404 或缺失，静态站预期）；soft-404 基线三行一致 404/469；ffuf -ac + jq 范式 20s 命中 1；OPTIONS → 501 判读"
 ---
 
 # Web 面候选漏洞核验（vuln-web-checks）

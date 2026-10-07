@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@8aba5d58ad5b：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）。2026-10-06 补工具取舍并实测：dirb 命中 `/.env`、`/.git`、`/.git/HEAD`；katana `-d 2` 抓到 `/` 与 `/page2.html`；wfuzz 跑通（过滤 2561 请求；其 `-f` 输出语法本次未验成，故只写进取舍说明、没写进步骤）"
+  smoked: "沙箱实测@b9d9011f8331：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）。2026-10-06 补工具取舍并实测：dirb 命中 `/.env`、`/.git`、`/.git/HEAD`；katana `-d 2` 抓到 `/` 与 `/page2.html`；wfuzz 跑通（过滤 2561 请求；其 `-f` 输出语法本次未验成，故只写进取舍说明、没写进步骤）"
 ---
 
 # Web 面清点（recon-web-surface）

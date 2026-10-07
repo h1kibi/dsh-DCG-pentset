@@ -635,6 +635,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         { name: 'scheme', kind: 'enum', values: ['http', 'https', 'auto'] },
         { name: 'follow_redirects', kind: 'integer', min: 0, max: 3 },
         { name: 'collect', kind: 'enum', values: ['headers', 'security_headers', 'robots', 'sitemap', 'tech'] },
+        { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 60_000,
@@ -647,8 +648,9 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       scheme: 'auto 先试 https 再试 http',
       follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
       collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）',
+      verify_tls: '**默认 true**（校验证书）。自签/IP 目标要连通必须显式 false —— 此后该次结果不再能证明"证书链可信"，报告里会写明未校验',
     },
-    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect}',
+    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls}',
   },
   {
     template: {

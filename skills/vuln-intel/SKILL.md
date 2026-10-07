@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [NVD CVE API 2.0, CISA KEV, OSV, GitHub Advisory Database, MITRE CVE]
-  smoked: "沙箱实测@8aba5d58ad5b：线索正则抽出 CVE-2021-44228 与「lodash 4.17.15」；同一天两次实测外网结论相反（nvd/osv=200 ↔ nvd 超时 4201ms、cisa/osv 解析失败）→ 离线退化分支按常态路径对待，不要当异常"
+  smoked: "沙箱实测@b9d9011f8331：线索正则抽出 CVE-2021-44228 与「lodash 4.17.15」；同一天两次实测外网结论相反（nvd/osv=200 ↔ nvd 超时 4201ms、cisa/osv 解析失败）→ 离线退化分支按常态路径对待，不要当异常"
 ---
 
 # 漏洞情报查证（vuln-intel）

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [Schneier 攻击树方法论, PTES 威胁建模, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@8aba5d58ad5b：6 块原文照跑，4 块通过；步骤 1 的输入契约本轮修掉——原配方只造 root，而步骤 3/4/5 读 .leaves[]，在它自己产出的文件上三块全部 Cannot iterate over null (exit=5)，补 leaves:[] 后三块 exit=0（AND/OR 枚举与缺 op 检测本就有效）"
+  smoked: "沙箱实测@b9d9011f8331：6 块原文照跑，4 块通过；步骤 1 的输入契约本轮修掉——原配方只造 root，而步骤 3/4/5 读 .leaves[]，在它自己产出的文件上三块全部 Cannot iterate over null (exit=5)，补 leaves:[] 后三块 exit=0（AND/OR 枚举与缺 op 检测本就有效）"
 ---
 
 # 攻击树与验证计划（model-attack-trees）
