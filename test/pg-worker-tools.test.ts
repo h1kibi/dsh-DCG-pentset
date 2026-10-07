@@ -501,8 +501,6 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
       sandbox: {
         allowedImages: [{ name: 'registry.example/test', digest: `sha256:${'a'.repeat(64)}` }],
         internalNetwork: 'pentest-sandbox',
-        proxyHost: 'pentest-egress-proxy',
-        proxyPort: 3128,
       },
       rlsContext: { tenantId: 'test' },
     });

@@ -55,8 +55,6 @@ const APPROVAL_TEMPLATE: ActionTemplateSpec = {
 const SANDBOX = {
   allowedImages: [IMAGE],
   internalNetwork: 'pentest-sandbox',
-  proxyHost: 'pentest-egress-proxy',
-  proxyPort: 3128,
 };
 
 /** 用管理员连接终止指定后端（模拟 PG 重启/网络闪断对单条连接的效果）。 */

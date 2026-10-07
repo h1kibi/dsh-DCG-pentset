@@ -52,12 +52,11 @@
             # 与实现矛盾——照它去搭代理会搭出一台没人使用的代理，然后得到"沙箱不出网"）。
             #   internal=true ⇒ 容器只能打到同网容器（等于完全不出网）；
             #   非 internal   ⇒ 可达范围 = 宿主可达范围（本机 dev 的选择：allowEgress: true）。
-            # proxyHost/proxyPort 仍在 profile 里，但**不在执行路径上**（见 DockerSandboxConfig 注释）。
+            # 「出网只由网络是否 internal 决定」这一条在这里只留结论：proxyHost/proxyPort
+            # 两个键已随死重量从代码与 profile 里删除（2026-10-07），保留它们只会继续误导。
             internalNetwork: pentest-internal
-            # 双接（bridge + pentest-internal）的出口代理，由 scripts/egress-proxy.py 提供。
-            # 起它：sh scripts/dev-sandbox-up.sh proxy
-            proxyHost: pentest-proxy
-            proxyPort: 8080
+            # 出口代理只对 dev 排障有意义（`scripts/egress-proxy.py`，沙箱本身不经它）。
+            # 那两个键（proxyHost/proxyPort）已随死重量删除：出网只由网络形状决定。
             # ── 写进沙箱的宿主目录（§10.4）──
             # 这里是**注释掉的示例**，因为挂载值天然是本机绝对路径（写死会让这份补丁无法共享）。
             # 要用就取消注释并改成你自己的 engagement 目录：下面那个路径必须**存在且是目录**，

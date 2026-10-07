@@ -78,15 +78,6 @@ export interface DockerSandboxConfig {
    * 无论哪种，**不要把非授权容器接进这张网**（与沙箱同处一个二层域）。
    */
   readonly internalNetwork: string;
-  /**
-   * 出口代理容器名与端口。
-   *
-   * **沙箱已不再经过它**（直连内网目标）：保留这两个字段是因为部署侧仍在用它们
-   * （`start-personal.mjs` 的前置检查、profile 的 `sandbox` 段契约）。要恢复代理路径，
-   * 改动点就在 `buildDockerArgs` 里。
-   */
-  readonly proxyHost: string;
-  readonly proxyPort: number;
   readonly limits?: Partial<SandboxLimits>;
   /** 容器内的工作目录（docker `-w`）。注意：模板入口在 `/tmp` 下执行命令，实测 `pwd` 是 `/tmp`。 */
   readonly workdir?: string;
@@ -166,9 +157,7 @@ export function assertSandboxConfig(config: DockerSandboxConfig): void {
   if (config.internalNetwork.trim().length === 0) {
     throw new SandboxConfigError('internalNetwork 不能为空');
   }
-  if (config.proxyPort <= 0 || config.proxyPort > 65535) {
-    throw new SandboxConfigError(`proxyPort 越界：${config.proxyPort}`);
-  }
+
   const limits = { ...DEFAULT_SANDBOX_LIMITS, ...config.limits };
   if (limits.pidsLimit <= 0 || limits.maxWallClockMs <= 0) {
     throw new SandboxConfigError('资源限额必须为正数：pidsLimit / maxWallClockMs');

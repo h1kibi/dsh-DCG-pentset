@@ -36,8 +36,6 @@ const IMAGE: AllowedImage = {
 const CONFIG: DockerSandboxConfig = {
   allowedImages: [IMAGE],
   internalNetwork: 'pentest-sandbox',
-  proxyHost: 'pentest-egress-proxy',
-  proxyPort: 3128,
 };
 
 function plan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
@@ -87,7 +85,6 @@ test('配置自检：digest 必须是 sha256 形式，不接受标签', () => {
 test('配置自检：空镜像清单、空网络名、越界端口都拒绝', () => {
   assert.throws(() => assertSandboxConfig({ ...CONFIG, allowedImages: [] }), SandboxConfigError);
   assert.throws(() => assertSandboxConfig({ ...CONFIG, internalNetwork: '  ' }), SandboxConfigError);
-  assert.throws(() => assertSandboxConfig({ ...CONFIG, proxyPort: 0 }), SandboxConfigError);
 });
 
 test('配置自检：合法配置通过', () => {

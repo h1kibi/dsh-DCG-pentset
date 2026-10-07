@@ -30,5 +30,3 @@
           - name: !!js process.env.PENTEST_TOOL_IMAGE ?? 'kali-tools'
             digest: !!js process.env.PENTEST_TOOL_DIGEST ?? 'sha256:0000000000000000000000000000000000000000000000000000000000000001'
         internalNetwork: !!js process.env.PENTEST_INTERNAL_NETWORK ?? 'pentest-internal'
-        proxyHost: !!js process.env.PENTEST_PROXY_HOST ?? 'pentest-proxy'
-        proxyPort: !!js Number(process.env.PENTEST_PROXY_PORT ?? 8080)

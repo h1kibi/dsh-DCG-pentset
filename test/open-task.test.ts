@@ -33,8 +33,6 @@ const DATABASE_URL = process.env['PENTEST_DATABASE_URL'];
 const SANDBOX = {
   allowedImages: [{ name: 'registry.example/pentest-toolbox', digest: `sha256:${'a'.repeat(64)}` }],
   internalNetwork: 'pentest-sandbox',
-  proxyHost: 'pentest-egress-proxy',
-  proxyPort: 3128,
 };
 
 /**

@@ -53,14 +53,6 @@ import type { EmbeddingProvider } from './memory/embedding.ts';
 import { EmbeddingRevisionRegistry, RemoteEmbeddingProvider } from './memory/embedding.ts';
 import { projectCjkBigrams, projectCjkQuery } from './memory/text-projection.ts';
 import { PgExecutionStore } from './execution/pg-store.ts';
-import { spawnRunner } from './execution/docker-sandbox.ts';
-import {
-  egressHostsForScope,
-  syncEgressAllowlist,
-  unrepresentableEgressEntries,
-  withEgressSync,
-  type EgressScopeTarget,
-} from './execution/egress-allowlist.ts';
 import { createExecutionService } from './execution/service.ts';
 import type { AuditProbe } from './execution/service.ts';
 import { createGateFailureSink, type GateFailureLedger, type SystemPausePort } from './execution/gate-failures.ts';
@@ -103,7 +95,6 @@ import type {
 import { SessionFactoryError } from './workflow/session-port.ts';
 import type {
   ApprovalPlanValidator,
-  HumanWorkflowService,
   ValidatedApprovalPlan,
 } from './contracts.ts';
 import type { ExecutionService, PolicyService, ToolError } from './contracts.ts';
@@ -1668,55 +1659,8 @@ function installConsole(input: {
     );
   }
 
-  /**
-   * 范围一确认/修订，就把出口白名单**自动**对齐到新范围。
-   *
-   * 为什么在这里做而不是让人类手工敲 docker：白名单是「已确认范围」的机械投影，
-   * 而范围的人类确认就是唯一授权动作（§13.1）。手工同步的实机代价见
-   * `egress-allowlist.ts` 头注释：一次忘记同步 = 全部探针 403，而 Agent 会把它读成
-   * 「服务未识别」——人类得去翻 RUNBOOK 才知道发生了什么。
-   *
-   * 失败**不阻断确认**：确认是主行为（写库），同步是基础设施动作（docker）。
-   * 同步失败只记日志——但要说清后果（探针会 403），而不是静默。
-   */
-  function withEgressSyncFor(inner: HumanWorkflowService): HumanWorkflowService {
-    const sync = async (targets: readonly EgressScopeTarget[], exclusions: readonly EgressScopeTarget[]): Promise<void> => {
-      const required = egressHostsForScope(targets, exclusions);
-      // 网段（cidr）在代理上没有表达方式：写进去是**死条目**（永远不匹配）。显式说出来，
-      // 别让人类等到「指向网段的探针全部 403」才发现。
-      const unrepresentable = unrepresentableEgressEntries(targets);
-      if (unrepresentable.length > 0) {
-        console.warn(
-          `[dsh-pentest] 出口白名单表达不了这些范围条目：${unrepresentable.join(', ')}` +
-            '（代理按主机字符串比对，没有网段运算）。指向网段内具体地址的探针会被 403 拒绝；' +
-            '需要放行时请把**具体地址**逐条加入范围。',
-        );
-      }
-      if (config.sandbox.proxyHost.trim().length === 0) return;
-      const result = await syncEgressAllowlist(
-        {
-          runner: config.sandboxRunner ?? spawnRunner,
-          proxyContainer: config.sandbox.proxyHost,
-          internalNetwork: config.sandbox.internalNetwork,
-          log: (message) => { console.log(`[dsh-pentest]${message.replace(/^\[egress\]/, ' [egress]')}`); },
-        },
-        required,
-      ).catch((cause: unknown) => ({ ok: false as const, detail: `出口白名单同步异常：${cause instanceof Error ? cause.message : String(cause)}` }));
-      if (!result.ok) {
-        console.warn(
-          `[dsh-pentest] 出口白名单未能自动同步（${result.detail}）。` +
-            `后果：指向 ${required.join(',') || '（无）'} 的探针会被代理 403 拒绝。` +
-            '按 RUNBOOK §6.5.3 第 1 条手工恢复后再重试。',
-        );
-      }
-    };
-    // 包装用 Proxy（保住原型方法与私有字段）——理由与自审抓到的那次错位写在
-    // `withEgressSync` 的注释里，并有测试锁住「其余方法仍然可用」。
-    return withEgressSync(inner, sync);
-  }
-
   const consoleServices: ConsoleServices = {
-    workflow: withEgressSyncFor(workflow),
+    workflow,
     report: reportFace,
     memory: memoryFace,
     skills: skillFace,
