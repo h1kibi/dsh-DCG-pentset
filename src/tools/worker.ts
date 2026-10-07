@@ -852,6 +852,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         ...(args.wildcard_check === undefined ? {} : { wildcardCheck: args.wildcard_check }),
         ...(args.kind === undefined ? {} : { kind: args.kind }),
         ...(args.include_wildcards === undefined ? {} : { includeWildcards: args.include_wildcards }),
+        ...(args.verify_tls === undefined ? {} : { verify_tls: args.verify_tls }),
       });
       if (!planned.ok) {
         return toJson(

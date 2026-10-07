@@ -127,7 +127,10 @@ describe('沙箱环境声明 ↔ 提示词：渲染出来的东西必须真的�
     assert.ok(brief.includes('pentest_scan'), '简报必须点名结构化核验入口');
     assert.ok(brief.includes('pentest_exec'), '简报必须点名自由命令通道');
     assert.match(brief, /不消耗人类审批/, '必须说明结构化通道不需要逐条人批（这是选它的理由）');
-    assert.match(brief, /逐条人类放行/, '必须说明自由命令要逐条放行');
+    // 2026-10-07 免批裁定：这条锁改成钉**当前事实**（自由命令不再逐条人批）；
+    // 它反过来防的是"有人偷偷改回逐条人批却不改简报"这类口径漂移。
+    assert.match(brief, /自由命令[^\n]*免批/, '必须说明自由命令已免批（裁定：任意命令免批）');
+    assert.match(brief, /不再有人逐条过目/, '必须说明命令原文不再经人过目（这是免批的代价，要写在简报里）');
     for (const technique of Object.keys(RECON_TECHNIQUES)) {
       assert.ok(brief.includes(technique), `简报缺侦察 technique ${technique}`);
     }

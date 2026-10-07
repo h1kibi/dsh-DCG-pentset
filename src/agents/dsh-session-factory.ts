@@ -694,8 +694,8 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
     input.sessionKind === 'intake'
       ? ''
       : (input.toolAllow.includes('pentest_recon') || input.toolAllow.includes('pentest_scan')
-          ? '**跑命令的主通道**：第 1 条是结构化动作（`pentest_recon` / `pentest_scan`，不消耗审批），第 2 条是 `pentest_exec`（逐条人批）。'
-          : '**跑命令的主通道**：本会话**没有结构化动作入口**（能力面创建时冻结）——目标动作一律走 `pentest_exec`（逐条人批）。') +
+          ? '**跑命令的主通道**：第 1 条是结构化动作（`pentest_recon` / `pentest_scan`，不消耗审批），第 2 条是 `pentest_exec`（**已免批**：服务端按类别放行并记审计）。'
+          : '**跑命令的主通道**：本会话**没有结构化动作入口**（能力面创建时冻结）——目标动作一律走 `pentest_exec`（**已免批**：服务端按类别放行并记审计）。') +
         '服务端会把 `pentest_exec` 的命令原文绑到唯一那张直连命令模板上（命令转 `*_b64`），你**不需要**、也**不能**自己指定模板。',
     input.sessionKind === 'intake'
       ? ''
