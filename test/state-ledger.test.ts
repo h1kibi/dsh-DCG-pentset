@@ -45,7 +45,17 @@ function sourceFiles(dir: string): readonly string[] {
  * `update ... set a = 1, state_version = $2 where id = ...` 这种单行 SQL 静默漏掉，
  * 而漏掉一个赋值点等于棘轮上有个洞。因此本文件末尾有一条**针对检测器自身**的用例。
  */
-const WRITE = /(?<!\b(?:and|where|or)\s)state_version\s*=\s*(?!=)/;
+const WRITE_SAME = /(?<!\b(?:and|where|or)\s)["']?state_version["']?[ \t]*=[ \t]*(?!=)/i;
+const WRITE_OPEN = /(?<!\b(?:and|where|or)\s)["']?state_version["']?[ \t]*$/i;
+/**
+ * 赋值可能被格式化成两行（`state_version` 与 `=` 分行）——检测窗口看到下一行。
+ *
+ * **不能**用 `\s*` 跨行匹配（首版这么写，`\s` 吃掉换行 ⇒ 同一处赋值在**上一行**也被命中，
+ * 14 处里有一半是重复计数）。这里显式区分"同行有等号"与"本行以列名结尾 + 下一行以等号开头"。
+ */
+export function isVersionWrite(text: string, nextLine = ''): boolean {
+  return WRITE_SAME.test(text) || (WRITE_OPEN.test(text) && /^[ \t]*=[ \t]*(?!=)/.test(nextLine));
+}
 /** 允许的两种 tag：转移内推进，或登记表里的非转移推进。 */
 const TAG = /version-bump-(sanctioned|registered):([a-z-]+)/;
 /** tag 必须出现在赋值点上方这几行内（注释 + 多行 SQL 模板，实测最长 9 行）。 */
@@ -70,7 +80,9 @@ function collectWrites(): { readonly writes: readonly WriteSite[]; readonly tags
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
     const relative = path.relative(path.join(HERE, '..'), file).split(path.sep).join('/');
     lines.forEach((text, index) => {
-      if (WRITE.test(text)) writes.push({ file: relative, line: index + 1, text: text.trim() });
+      if (isVersionWrite(text, lines[index + 1] ?? '')) {
+        writes.push({ file: relative, line: index + 1, text: text.trim() });
+      }
     });
     // tag 单独扫一遍（登记项声明的文件里必须真的能找到它）。
     for (const text of lines) {
@@ -140,7 +152,7 @@ describe('检测器自身：赋值与比较必须能分开（棘轮不能有洞�
       'set a = 1, state_version = $3, updated_at = now() where id = $1::uuid', // 单行 SQL：旧写法会漏
       'state_version = 0',
     ]) {
-      assert.equal(WRITE.test(line), true, `应识别为赋值：${line}`);
+      assert.equal(WRITE_SAME.test(line), true, `应识别为赋值：${line}`);
     }
   });
 
@@ -154,7 +166,7 @@ describe('检测器自身：赋值与比较必须能分开（棘轮不能有洞�
       "  'stale_state_version',",
       ") === row.state_version",
     ]) {
-      assert.equal(WRITE.test(line), false, `不该识别为赋值：${line}`);
+      assert.equal(WRITE_SAME.test(line), false, `不该识别为赋值：${line}`);
     }
   });
 
@@ -164,5 +176,31 @@ describe('检测器自身：赋值与比较必须能分开（棘轮不能有洞�
     // intake 暂存 1、范围确认 1、resume 1。数字变了就要在这里解释——防止检测器
     // 因为一次正则改动而「什么都扫不到」还保持全绿。
     assert.equal(writes.length, 7, `实际扫到 ${writes.length} 处：${writes.map((w) => `${w.file}:${w.line}`).join('、')}`);
+  });
+});
+
+describe('棘轮检测器自身的锁（评审用脚本实证的三种绕过）', () => {
+  // 2026-10-07 评审：旧检测器**大小写敏感、逐行、不许引号**，于是下面三种写法都能静默绕过棘轮。
+  // 它们是「漏记一次版本推进」的最省事写法，所以检测器必须自己先被锁住。
+  it('大小写不敏感：大写常量名也算赋值点', () => {
+    assert.equal(isVersionWrite('      STATE_VERSION = STATE_VERSION + 1;'), true);
+    assert.equal(isVersionWrite('      State_Version = 3;'), true);
+  });
+
+  it('引号包裹的列名也算（SQL 里合法且常见）', () => {
+    assert.equal(isVersionWrite('      "state_version" = $2'), true);
+    assert.equal(isVersionWrite("      'state_version' = $2"), true);
+  });
+
+  it('赋值的 `=` 落到下一行也算', () => {
+    assert.equal(isVersionWrite('        state_version', '          = $2'),
+      true);
+  });
+
+  it('比较式与读取式仍然不算（负向后顾与"必须有等号"两条不能丢）', () => {
+    assert.equal(isVersionWrite('  where id = $1 and state_version = $2'), false);
+    assert.equal(isVersionWrite('  select state_version from pentest.engagements'), false);
+    assert.equal(isVersionWrite('  if (state_version !== expected) {'), false);
+    assert.equal(isVersionWrite('  set state_version', '  , updated_at = now()'), false);
   });
 });
