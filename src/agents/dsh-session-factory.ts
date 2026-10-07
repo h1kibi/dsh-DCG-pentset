@@ -689,13 +689,17 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
     `可用工具（工具面之外的工具对本会话根本不可见）：${input.toolAllow.length === 0 ? '（无）' : input.toolAllow.join('、')}`,
     `需要逐次人工放行的动作类别：${approval}`,
     '',
-    renderSandboxBrief(input.sessionKind, mounts),
+    renderSandboxBrief(input.sessionKind, mounts, input.toolAllow),
     '',
     input.sessionKind === 'intake'
       ? ''
-      : '**跑命令的主通道**：第 1 条是结构化动作（`pentest_recon` / `pentest_scan`，不消耗审批），第 2 条是 `pentest_exec`（逐条人批）。' +
+      : (input.toolAllow.includes('pentest_recon') || input.toolAllow.includes('pentest_scan')
+          ? '**跑命令的主通道**：第 1 条是结构化动作（`pentest_recon` / `pentest_scan`，不消耗审批），第 2 条是 `pentest_exec`（逐条人批）。'
+          : '**跑命令的主通道**：本会话**没有结构化动作入口**（能力面创建时冻结）——目标动作一律走 `pentest_exec`（逐条人批）。') +
         '服务端会把 `pentest_exec` 的命令原文绑到唯一那张直连命令模板上（命令转 `*_b64`），你**不需要**、也**不能**自己指定模板。',
-    input.sessionKind === 'intake' ? '' : '唯一注册的动作模板（决定放行的动作类别与参数形状；无需你在调用里给出）：',
+    input.sessionKind === 'intake'
+      ? ''
+      : `本部署注册的动作模板（共 ${String(input.actionTemplates.length)} 张；决定放行的动作类别与参数形状，无需你在调用里给出）：`,
     ...templates,
     '',
     '能力边界由人类在创建会话时确认：只能收窄，不会因为后台配置变动而放宽。需要更大的能力、或者要做',

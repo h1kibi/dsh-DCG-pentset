@@ -45,6 +45,8 @@ const TYPICAL_OUTPUT_CAP = 256 * 1024;
 export function renderSandboxBrief(
   sessionKind: SessionKind,
   mounts: readonly SandboxMount[] = [],
+  /** 本会话的工具面。用来**只宣传真实存在的通道**（默认全给，便于单独渲染与测试）。 */
+  toolAllow: readonly string[] = ['pentest_recon', 'pentest_scan', 'pentest_exec'],
 ): string {
   if (sessionKind === 'intake') {
     return [
@@ -54,6 +56,15 @@ export function renderSandboxBrief(
   }
   const reconTechniques = Object.keys(RECON_TECHNIQUES).join('、');
   const vulnTechniques = Object.keys(VULN_TECHNIQUES).join('、');
+  // 只宣传**本会话真的有**的通道（见下方"命令通道"那一段的说明）。
+  const hasRecon = toolAllow.includes('pentest_recon');
+  const hasScan = toolAllow.includes('pentest_scan');
+  const structuredChannels = [
+    hasRecon ? `\`pentest_recon\`（technique：${reconTechniques}）` : null,
+    hasScan ? `\`pentest_scan\`（technique：${vulnTechniques}）` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join('、');
   const toolGroups = SANDBOX_TOOL_GROUPS.map(
     (group) => `  - ${group.group}：${group.tools.map((t) => t.name).join(' ')}\n    用法：${group.usage}`,
   );
@@ -103,13 +114,24 @@ export function renderSandboxBrief(
     '- 单条命令正文 ≤ 8192 字符（`pentest_exec`）；速率按行为预设限速（stealth 1 请求/秒、standard 5、deep 10）',
     '**长输出先落盘再筛**：`<命令> > /tmp/out.json 2>/tmp/err` 然后用 `jq`/`grep`/`head` 取字段——直接把上万行倒进输出等于自截断。',
     '',
-    '**两条命令通道（按这个顺序选）**：',
-    `1. **结构化动作（首选，不消耗人类审批）**：\`pentest_recon\`（technique：${reconTechniques}）、` +
-      `\`pentest_scan\`（technique：${vulnTechniques}）。`,
-    '   服务端固定命令形态、参数只有枚举与整数、只打**已裁决地址**，因此审计与幂等可复现，也不需要逐条批。',
-    '   它们覆盖不到的选项才考虑第 2 条。',
-    '2. **自由命令 `pentest_exec`（逐条人类放行）**：`command` 写命令原文（人类在放行卡上读到的就是它）、`port` 填主要端口、`purpose` 写清目的。',
-    '   凡是能触及目标的命令，人审模式下**每一条都要人类点一次**——所以能用第 1 条就别用这条。',
+    // ── 通道宣传必须与**本会话的工具面**一致（2026-10-07）──
+    // 四份实测报告都撞到同一处：提示词无条件写"首选结构化动作"，而威胁建模/利用/后渗透三个阶段的
+    // 工具面里**两个结构化工具都不存在** ⇒ Agent 照着提示词去调 `pentest_recon`，得到 unknown tool，
+    // 只能退回逐条人批的自由命令；更糟的是它会**先试一条不存在的路**（连解包这种准备工作都被拖成人批）。
+    ...(hasRecon || hasScan
+      ? [
+          '**命令通道（按这个顺序选）**：',
+          `1. **结构化动作（首选，不消耗人类审批）**：${structuredChannels}。`,
+          '   服务端固定命令形态、参数只有枚举与整数、只打**已裁决地址**，因此审计与幂等可复现，也不需要逐条批。',
+          '   它们覆盖不到的选项才考虑自由命令。',
+        ]
+      : [
+          '**命令通道**：本会话的工具面里**没有结构化动作入口** —— 端口指纹、DNS 查询这类只能走下面的',
+          '   自由命令（逐条人批）。这是会话创建时冻结的能力面决定的，**不是临时故障**：',
+          '   不要去找 `pentest_recon` / `pentest_scan`（本会话没有它们），直接走自由命令。',
+        ]),
+    '**自由命令 `pentest_exec`（逐条人类放行）**：`command` 写命令原文（人类在放行卡上读到的就是它）、`port` 填主要端口、`purpose` 写清目的。',
+    '   凡是能触及目标的命令，人审模式下**每一条都要人类点一次**。',
     '',
     '**镜像里装了什么**（按用途分组；`which <name>` 可自查）：',
     ...toolGroups,
