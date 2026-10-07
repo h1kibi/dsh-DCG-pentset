@@ -62,13 +62,14 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     },
   },
   content_discover: {
-    defaults: { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5 },
+    defaults: { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5, verify_tls: 'true' },
     required: [],
     enums: {
       // 注意：这里**没有** `auto`——内容发现必须先知道协议，猜协议会让整轮结果失真。
       scheme: ['http', 'https'],
       wordlist: ['common_dirs', 'raft_small'],
       extensions: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'],
+      verify_tls: ['true', 'false'],
     },
   },
   web_crawl: {

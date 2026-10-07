@@ -802,7 +802,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         type: 'string',
         enum: ['true', 'false'],
         description:
-          '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_probe / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
+          '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_probe / content_discover / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
       },
       wordlist: { type: 'string', enum: ['common_dirs', 'raft_small', 'subdomains_5k'], description: '字典档位' },
       extensions: {

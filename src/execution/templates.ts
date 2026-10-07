@@ -671,6 +671,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         { name: 'wordlist', kind: 'enum', values: ['common_dirs', 'raft_small'] },
         { name: 'extensions', kind: 'enum', values: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'] },
         { name: 'rate', kind: 'integer', min: 1, max: 20 },
+        { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 300_000,
@@ -680,13 +681,14 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
     portSource: { kind: 'param', param: 'port' },
     carries: {
       port: '目标 Web 端口',
-      scheme: 'http / https（https 时容器内跳过证书校验，用 Host 头对齐虚拟主机）',
+      scheme: 'http / https（https 默认**校验**证书；自签/纯 IP 目标要显式 verify_tls=false，那次结果不证明证书链可信）',
       wordlist: '字典档位（镜像内固定三份：common_dirs / raft_small / subdomains_5k 中的目录类两份）',
       extensions: '追加的扩展名集合；multi = 常见的 7 种',
       rate: '每秒请求数上限（1-20）；并发被钉在 min(10, rate)',
+      verify_tls: VERIFY_TLS_CARRY,
     },
     commandTemplate:
-      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate}',
+      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate} verify_tls={verify_tls}',
   },
   {
     template: {
