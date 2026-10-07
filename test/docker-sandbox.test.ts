@@ -82,7 +82,7 @@ test('配置自检：digest 必须是 sha256 形式，不接受标签', () => {
   );
 });
 
-test('配置自检：空镜像清单、空网络名、越界端口都拒绝', () => {
+test('配置自检：空镜像清单、空网络名都拒绝', () => {
   assert.throws(() => assertSandboxConfig({ ...CONFIG, allowedImages: [] }), SandboxConfigError);
   assert.throws(() => assertSandboxConfig({ ...CONFIG, internalNetwork: '  ' }), SandboxConfigError);
 });
