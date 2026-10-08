@@ -556,6 +556,14 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
   const runtimeBudget = runtime.dshBudget ?? budgetPortOf(ctx);
   const composed = compose({
     ...runtime,
+    // 按会话区分工作目录（2026-10-08）：优先用**宿主的会话头 cwd**（"我在哪个目录开会话"），
+    // 取不到再退回 profile 的 `runtime.sessionCwd`（会话工厂本来就按这个优先级用 cwd ✓）。
+    sessionCwdOf: (dshSessionId: string) => {
+      // `ctx.sessions.get` 要的是品牌类型 `SessionId`，而这里的入参是普通字符串（它来自
+      // 会话头与工具上下文）。这一处是**唯一**的边界，集中在这里转换而不是让上游到处带品牌。
+      const session = ctx.sessions.get(dshSessionId as Parameters<typeof ctx.sessions.get>[0]);
+      return session?.header.cwd ?? runtime.sessionCwd;
+    },
     ...(runtimeBudget === undefined ? {} : { dshBudget: runtimeBudget }),
     ...(runtime.modelRoute === undefined ? { modelRoute: hostModel } : { modelRoute: runtime.modelRoute }),
     sessions: runtime.sessions ?? new DshSessionFactory(ctx, {

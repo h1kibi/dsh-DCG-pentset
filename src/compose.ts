@@ -185,6 +185,13 @@ export interface ComposeConfig {
   /** 批次签名密钥，由 Host 从 KMS 取。 */
   readonly ledgerSecret: LedgerSecret;
   readonly sandbox: DockerSandboxConfig;
+  /**
+   * 按会话区分工作目录（2026-10-08）：`dshSessionId` → 该会话的 cwd（宿主的会话头里带 ✓）。
+   *
+   * **由装配层（`index.ts`）注入**：只有它持有 cordis `Context` 才能 `ctx.sessions.get(id).header.cwd`
+   * （组合层刻意不持有 `ctx`，见本文件另一处注释 ✓）。返回 `undefined` ⇒ 该会话用配置里的 `mounts`。
+   */
+  readonly sessionCwdOf?: (dshSessionId: string) => string | undefined;
   /** 受信动作模板集。省略即用服务端默认集（仅被动读取与主动发现）。 */
   readonly templates?: readonly ActionTemplateSpec[];
   /**
@@ -1246,9 +1253,12 @@ function installExecution(input: {
   // ── 执行服务 ──
   const sandbox = new DockerSandbox(
     config.sandbox,
-    config.sandboxRunner === undefined ? {} : { runner: config.sandboxRunner },
+    {
+      ...(config.sandboxRunner === undefined ? {} : { runner: config.sandboxRunner }),
+      // 按会话区分工作目录（2026-10-08）：有该会话的 cwd 就用它挂 `/work`；没有则回退配置里的 mounts。
+      mountRootFor: (plan) => sessionCwdByWorker.get(plan.workerSessionId),
+    },
   );
-
   const store = new PgExecutionStore(readDb);
   const gateFailures = createGateFailureSink({ ledger, txDb, workflow: input.workflow });
   /**
@@ -1466,7 +1476,16 @@ function installWorkflow(input: {
         ...(input.name === undefined ? {} : { name: input.name }),
       });
     },
-    resolveWorkerSessionId: pgTools.resolveWorkerSessionId.bind(pgTools),
+    resolveWorkerSessionId: async (dshSessionId: string) => {
+      const workerSessionId = await pgTools.resolveWorkerSessionId(dshSessionId);
+      // 顺手记下「worker 会话 → 该 DSH 会话的 cwd」（宿主会话头里带的那个）：沙箱与证据落盘
+      // 都按会话取目录，而它们只在同步上下文里能拿到 workerSessionId。
+      if (workerSessionId !== null && config.sessionCwdOf !== undefined) {
+        const cwd = config.sessionCwdOf(dshSessionId);
+        if (cwd !== undefined) sessionCwdByWorker.set(workerSessionId, cwd);
+      }
+      return workerSessionId;
+    },
     loadSkill: pgTools.loadSkill.bind(pgTools),
     // 证据落盘根：优先挑挂在 `/work` 的那个挂载（会话的工作目录），否则用第一个。
     // 没有挂载就整块省略：`save_stdout_as_evidence` 会如实回一句"未挂载"，而不是静默失败。
@@ -1950,6 +1969,16 @@ function installBudget(input: {
 }
 
 /** 装配全部服务。 */
+/**
+ * worker 会话 → 该 DSH 会话的 cwd（宿主会话头里带的那个）。
+ *
+ * 放**模块级**是因为它有两个消费者、分处两个安装函数：沙箱的挂载解析（同步 ✓）与工具面的
+ * 证据落盘（同步 ✓），而填充点在 `resolveWorkerSessionId` 的包装里（异步 ✓）。本进程一个插件
+ * 实例（既有代码同样按这个前提写，例如 RLS 的"一个进程一个作业"注释），因此不需要隔离多实例。
+ * 用 `Map` 而非 `Record`：运行期持续插入的动态表，不是静态字面表。进程重启即清，无需淘汰。
+ */
+const sessionCwdByWorker = new Map<string, string>();
+
 export function compose(config: ComposeConfig): ComposedPlugin {
   // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——
   // 公开常量即有效密钥，知道它的人可以在库被篡改后重签批次）。

@@ -607,3 +607,40 @@ test('启动自检把"出不出网"说清楚：internal / 非 internal / 读不�
     '声明正确时不得多嘴',
   );
 });
+
+test('按会话区分工作目录：会话 cwd 优先；目录不存在即拒绝且不启动容器、不回退', async () => {
+  const calls: string[][] = [];
+  const mk = (rootFor?: () => string | undefined) =>
+    new DockerSandbox(CONFIG, {
+      runner: {
+        async run(argv) {
+          calls.push([...argv]);
+          return { aborted: false, timedOut: false, code: 0, stdout: '', stderr: '' };
+        },
+      },
+      ...(rootFor === undefined ? {} : { mountRootFor: () => rootFor() }),
+    });
+
+  // ① 注入会话 cwd ⇒ argv 挂的是它
+  const dir = mkdtempSync(join(tmpdir(), 'sandbox-cwd-'));
+  await mk(() => dir).run({ plan: plan() }, new AbortController().signal);
+  const argv = calls.at(-1) ?? [];
+  // `-v` 的值是 `host:container` **一个字符串**（不是两个 argv 元素）
+  assert.equal(
+    argv.some((entry) => entry.startsWith(`${dir.replace(/\\/g, '/')}:`)),
+    true,
+    `argv 应挂会话目录（作为 -v 的 host:container）${dir.replace(/\\/g, '/')}：${argv.join(' ').slice(0, 200)}`,
+  );
+  assert.equal(argv.join(' ').includes('/work'), true, '仍落在 /work');
+
+  // ② 目录不存在 ⇒ 拒绝这次运行，且**不启动容器**（不回退到配置里的挂载）
+  const before = calls.length;
+  const blocked = await mk(() => '/no/such/session-dir-xyz').run({ plan: plan() }, new AbortController().signal);
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.error?.code, 'sandbox_unavailable');
+  assert.equal(calls.length, before, '被拒的运行不得启动容器（也不得回退到别的目录）');
+
+  // ③ 没有 resolver ⇒ 用配置里的 mounts（这里是零挂载）= 与今天一致的回退路径
+  await mk(undefined).run({ plan: plan() }, new AbortController().signal);
+  assert.equal((calls.at(-1) ?? []).includes('-v'), false, '无 resolver 时不得凭空多出挂载');
+});

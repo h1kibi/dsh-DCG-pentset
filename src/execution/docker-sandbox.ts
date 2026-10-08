@@ -217,6 +217,8 @@ function assertMounts(mounts: readonly SandboxMount[]): void {
  * 多一个 cap 就多一分容器逃逸面），而它不依赖 Docker 是否可用。
  */
 export function buildDockerArgs(input: {
+  /** 本次运行的挂载（按会话区分目录时由调用方给出）；缺省用配置里的。 */
+  readonly mounts?: readonly SandboxMount[];
   readonly image: AllowedImage;
   readonly plan: ExecutionPlan;
   readonly config: DockerSandboxConfig;
@@ -225,7 +227,7 @@ export function buildDockerArgs(input: {
   const { image, plan, config, containerName } = input;
   const limits = { ...DEFAULT_SANDBOX_LIMITS, ...config.limits };
   const timeoutMs = Math.min(plan.timeoutMs, limits.maxWallClockMs);
-  const mounts = config.mounts ?? [];
+  const mounts = input.mounts ?? config.mounts ?? [];
   const firstMount = mounts[0];
   // 命令默认落在「人类的工作目录」里：显式 workdir 优先，否则取第一个挂载点。
   const workdir =
@@ -475,6 +477,14 @@ interface DockerSandboxDeps {
   readonly runner?: ProcessRunner;
   /** 生成容器名的函数（便于测试注入固定值）。 */
   readonly containerName?: (plan: ExecutionPlan) => string;
+  /**
+   * **本次运行的挂载根**（宿主路径）——按会话区分目录的接入口（2026-10-08）。
+   *
+   * 返回 `undefined` ⇒ 用配置里的 `mounts`（行为与今天完全一致，回退路径）；返回一个路径 ⇒
+   * 本次运行只挂它（落在 `/work`），且**必须在运行前校验通过**：目录不存在就**拒绝这次运行**，
+   * 绝不静默回退到配置里的目录（静默回退会把证据写进人类没预期的项目资料里——那正是要修的毛病）。
+   */
+  readonly mountRootFor?: (plan: ExecutionPlan) => string | undefined;
 }
 
 /**
@@ -568,6 +578,7 @@ export class DockerSandbox implements SandboxExecutor {
   private readonly config: DockerSandboxConfig;
   private readonly runner: ProcessRunner;
   private readonly containerName: (plan: ExecutionPlan) => string;
+  private readonly mountRootFor: ((plan: ExecutionPlan) => string | undefined) | undefined;
 
   constructor(config: DockerSandboxConfig, deps: DockerSandboxDeps = {}) {
     // 显式赋值而非构造函数参数属性：erasableSyntaxOnly 禁止后者
@@ -575,6 +586,7 @@ export class DockerSandbox implements SandboxExecutor {
     this.config = config;
     this.runner = deps.runner ?? spawnRunner;
     this.containerName = deps.containerName ?? ((plan) => `pentest-${plan.idempotencyKey.slice(0, 24)}`);
+    this.mountRootFor = deps.mountRootFor;
     assertSandboxConfig(this.config);
   }
 
@@ -615,11 +627,33 @@ export class DockerSandbox implements SandboxExecutor {
 
     const timeoutMs = Math.min(plan.timeoutMs, { ...DEFAULT_SANDBOX_LIMITS, ...this.config.limits }.maxWallClockMs);
     const containerName = this.containerName(plan);
+    // 按会话区分工作目录（2026-10-08）：本次运行的挂载根可来自**会话的 cwd**。
+    // 它必须**在运行前校验通过**：目录不存在就拒绝这次运行——**绝不静默回退**到配置里的目录
+    // （静默回退会把证据写进人类没预期的项目资料里，那正是要被修掉的毛病）。
+    let runMounts: readonly SandboxMount[] | undefined;
+    const overrideRoot = this.mountRootFor?.(plan);
+    if (overrideRoot !== undefined) {
+      runMounts = [{ hostPath: overrideRoot, containerPath: DEFAULT_MOUNT_CONTAINER_PATH }];
+      try {
+        assertMounts(runMounts);
+      } catch (error) {
+        return {
+          status: 'blocked',
+          error: {
+            status: 'blocked',
+            code: 'sandbox_unavailable',
+            message: `会话工作目录不可用：${error instanceof Error ? error.message : String(error)}`,
+            next_action: '在宿主上确认该会话目录存在（会话的 cwd 取自宿主会话头），再重发本条动作',
+          },
+        };
+      }
+    }
     const argv = buildDockerArgs({
       image,
       plan,
       config: this.config,
       containerName,
+      ...(runMounts === undefined ? {} : { mounts: runMounts }),
     });
 
     const outcome = await this.runner.run(argv, { signal, timeoutMs });
