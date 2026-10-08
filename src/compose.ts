@@ -58,6 +58,7 @@ import type { AuditProbe } from './execution/service.ts';
 import { createGateFailureSink, type GateFailureLedger, type SystemPausePort } from './execution/gate-failures.ts';
 import type { ActionTemplateSpec, ParamBag } from './execution/templates.ts';
 import { buildNormalizedCommand, createRegistry, portForScope, validateParams } from './execution/templates.ts';
+import { normalizeCidr, rangeAddressesOf } from './policy/scope.ts';
 import { canonicalTargetString, derivePlanHash } from './execution/idempotency.ts';
 import { DockerSandbox } from './execution/docker-sandbox.ts';
 import type { DockerSandboxConfig, ProcessRunner } from './execution/docker-sandbox.ts';
@@ -901,16 +902,42 @@ function approvalPlanValidatorFor(
       ) return undefined;
 
       const port = portForScope(spec, params as ParamBag);
-      const scope = await policy.evaluateScope({
-        engagementId: context.engagementId,
-        scopeVersion: context.scopeVersion,
-        target: targetSelector,
-        protocol: spec.protocol,
-        ...(port === undefined ? {} : { port }),
+      // **范围批次**（`allowTargetRange`）：与受理闸门**同一口径**的逐地址裁决。
+      // 少了这一支，"人类修改后放行"这条路径对网段选择器过不去（`evaluateScope` 只吃单个目标），
+      // 而两条路径必须同强度——否则改一条命令就能绕过一处判定。
+      let normalizedCommand: string;
+      let normalizedTarget: string;
+      if (spec.allowTargetRange === true && targetSelector.includes('/')) {
+        const cidr = normalizeCidr(targetSelector);
+        if (!cidr.ok) return undefined;
+        const expanded = rangeAddressesOf(cidr.value);
+        if (!expanded.ok) return undefined;
+        const scoped = {
+          engagementId: context.engagementId,
+          scopeVersion: context.scopeVersion,
+          protocol: spec.protocol,
+          ...(port === undefined ? {} : { port }),
+        };
+        for (const address of expanded.value) {
+          const one = await policy.evaluateScope({ ...scoped, target: address });
+          if (!one.ok) return undefined;
+        }
+        normalizedTarget = targetSelector;
+        // 命令里的 `{target}` 用**网段本身**（容器按形状识别、交给 nmap 原生处理）——
+        // 与受理闸门侧写入 `state.scope` 的口径一致。
+        normalizedCommand = buildNormalizedCommand(spec, { kind: 'ip', host: targetSelector }, params as ParamBag);
+      } else {
+        const scope = await policy.evaluateScope({
+          engagementId: context.engagementId,
+          scopeVersion: context.scopeVersion,
+          target: targetSelector,
+          protocol: spec.protocol,
+          ...(port === undefined ? {} : { port }),
       });
-      if (!scope.ok) return undefined;
-      const normalizedTarget = canonicalTargetString(scope.normalized);
-      const normalizedCommand = buildNormalizedCommand(spec, scope.normalized, params as ParamBag);
+        if (!scope.ok) return undefined;
+        normalizedTarget = canonicalTargetString(scope.normalized);
+        normalizedCommand = buildNormalizedCommand(spec, scope.normalized, params as ParamBag);
+      }
       // 与 `admit` 取**同一个**策略源：`policyVersion` 与展开后的 `pacing` 都必须
       // 进入摘要，否则这里算出的 planHash 与 Agent 重新受理时算出的必然不等，
       // 「人类修改后放行」的凭证就永远无法消费（而那正是人工收窄动作的通道）。

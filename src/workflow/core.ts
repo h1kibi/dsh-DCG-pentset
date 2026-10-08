@@ -644,6 +644,7 @@ export class WorkflowCore {
    */
   async scopeEntriesOf(
     engagementId: string,
+    version?: number,
   ): Promise<{ readonly targets: readonly ScopeTarget[]; readonly exclusions: readonly ScopeTarget[] }> {
     const toTargets = (value: unknown): readonly ScopeTarget[] =>
       Array.isArray(value)
@@ -658,9 +659,10 @@ export class WorkflowCore {
     const r = await this.deps.db.query<{ targets: unknown; exclusions: unknown }>(
       `select targets, exclusions from pentest.scope_versions
         where engagement_id = $1::uuid
+          and ($2::int is null or version = $2::int)
         order by version desc
         limit 1`,
-      [engagementId],
+      [engagementId, version ?? null],
     );
     const row = r.rows[0];
     if (row === undefined) return { targets: [], exclusions: [] };

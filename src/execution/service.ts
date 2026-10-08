@@ -1274,6 +1274,32 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     }
 
     // E. 沙箱执行；在途动作登记后，策略 epoch 前进时可被终止。
+    //
+    // **批次时长预检必须在登记之前**（独立复核 P1）：它是一次"注定不会执行"的拒绝，
+    // 若放在登记之后提前 return，就会漏掉 `inFlight.delete` 与运行行收尾 ⇒ 该运行行永停
+    // `running`、同键重试被误导性拒绝。放在这里则与上面的 `preSandboxError` 分支**同形**
+    // （收尾 + 返回），不留悬挂状态。
+    const pacing = plan.pacing ?? null;
+    const batchSize = Math.max(1, plan.resolvedAddresses.length);
+    // 折算后要等 `batchSize / rate` 秒才启动（等价于"每台按该档位速率打"）。4096 台 ÷
+    // standard 5/s ≈ 13 分钟 ⇒ 必然超过单条命令墙钟 ⇒ **先算后拒**，别占着槽位等死。
+    const expectedWaitSeconds = pacing !== null && pacing.rate > 0 ? batchSize / pacing.rate : 0;
+    if (expectedWaitSeconds > plan.timeoutMs / 1000) {
+      const failure: ToolRunResult = {
+        status: 'blocked',
+        error: {
+          status: 'blocked',
+          code: 'classification_rejected',
+          message:
+            `批次 ${String(batchSize)} 台在当前节奏档（${String(pacing?.rate ?? 0)}/s）下需要约 ${String(Math.round(expectedWaitSeconds))} 秒，` +
+            `超过单条命令的 ${String(Math.round(plan.timeoutMs / 1000))} 秒墙钟`,
+          next_action: '把网段拆小（例如 /20）分几次跑，或在控制台把行为预设调到更快的档位',
+        },
+      };
+      await deps.store.finishRun(toolRunId, failure);
+      return failure;
+    }
+
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
     inFlight.set(toolRunId, {
@@ -1287,26 +1313,6 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     // **批次按"每地址等效速率"折算**（P0-3 设计第 3 条）：一次带 1024 台的动作不能按
     // "一次动作"放行，否则大网段就是绕过速率档的通道。折算方式 = **等比放大启动间隔**
     // （rate 除以地址数），并发/抖动/重试照旧 ⇒ 等价于"每台都按该档位的速率打"。
-    const pacing = plan.pacing ?? null;
-    const batchSize = Math.max(1, plan.resolvedAddresses.length);
-    // **批次时长必须与墙钟相容**：折算后 hosts 侧要等 `batchSize / rate` 秒才启动
-    // （等价于"每台按该档位速率打"）。4096 台 ÷ standard 5/s ≈ 13 分钟 ⇒ 必然超过单条命令
-    // 的墙钟 ⇒ 结果是"占住槽位、等十几分钟、然后超时"。**先算后拒**，给出可行下一步，
-    // 而不是让它慢慢等死（自查发现：折算本身会把这个等待放大到不可用）。
-    const expectedWaitSeconds = pacing !== null && pacing.rate > 0 ? batchSize / pacing.rate : 0;
-    if (expectedWaitSeconds > plan.timeoutMs / 1000) {
-      return {
-        status: 'blocked',
-        error: {
-          status: 'blocked',
-          code: 'classification_rejected',
-          message:
-            `批次 ${String(batchSize)} 台在当前节奏档（${String(pacing?.rate ?? 0)}/s）下需要约 ${String(Math.round(expectedWaitSeconds))} 秒，` +
-            `超过单条命令的 ${String(Math.round(plan.timeoutMs / 1000))} 秒墙钟`,
-          next_action: '把网段拆小（例如 /20）分几次跑，或在控制台把行为预设调到更快的档位',
-        },
-      };
-    }
     const effectivePacing =
       pacing === null || batchSize === 1
         ? pacing

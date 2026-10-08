@@ -743,7 +743,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         type: 'boolean',
         description:
           '这条命令是**纯本地处理**（解析自己落盘的 .gnmap/JSON、校验交付物、比对两份清单……）时设为 true：' +
-          '容器**没有网**（`--network none`），不做范围裁决，账本记成 `local_processing` 且带 `network_contact: none`。' +
+          '容器**没有网**（`--network none`，实测证实），不做范围裁决，账本单列成 `local_processing`。' +
           '**不要**拿它包装真正要打目标的命令——那种命令的类别、记账与范围裁决都不能省。',
       },
       purpose: { type: 'string', required: true, description: '目的：为什么执行它、预期看到什么' },

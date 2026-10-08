@@ -276,7 +276,8 @@ export function describeError(error: unknown): string {
 export const ACTION_CLASSES = [
   /**
    * **纯本地处理**：容器没有网（`docker run --network none`），命令只读挂载进来的文件、
-   * 做解析/校验/统计，**不触碰任何目标**。账本上单列，事件里带 `network_contact: none`。
+   * 做解析/校验/统计，**不触碰任何目标**。账本上**单列为一类**——那是它唯一需要的记账
+   * （"没碰目标"由 `--network none` 这个事实保证，比对它的转述更硬）。
    *
    * 为什么必须单列（2026-10-08 操作者实测 P0）：自由命令通道要求 `target_selector`+`port`，
    * 于是纯本地命令（`ls` / `python3` 解析 .gnmap / `cp` 归位台账）被迫挂一个假目标 ⇒

@@ -571,7 +571,7 @@ export const scopeGate: AdmissionGate = {
       const expanded = rangeAddressesOf(cidr.value);
       if (!expanded.ok) {
         return reject(
-          blocked('classification_rejected', expanded.detail, '把网段拆小（例如 /20）分几次跑，别指望一次扫完 /16'),
+          blocked('classification_rejected', expanded.detail, '批次只支持 IPv4 网段：IPv6 请逐台来，或把范围与目标都收窄到 IPv4'),
         );
       }
       for (const address of expanded.value) {
