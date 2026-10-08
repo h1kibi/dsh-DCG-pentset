@@ -608,7 +608,17 @@ function installFrozenCapabilities(
   prompt.section({
     name: SECTION_CAPABILITY,
     order: SECTION_ORDER_CAPABILITY,
-    text: renderCapabilitySection(input, mounts),
+    text:
+      renderCapabilitySection(input, mounts) +
+      // 提问通道（外部审计 P1-1）：预设没挂上时，提问工具会被 `#toolAllowWithPresetFacts`
+      // **按事实**裁掉，而这条裁剪此前是静默的——模型于是把选项写成没有落点的散文，人类只能
+      // 自己打字作答。与 `renderRetrievalChannels` 同一个道理：只说"没有 X"不够，要说"那该怎么办"。
+      (input.toolAllow.includes(HUMAN_QUESTION_TOOL)
+        ? ''
+        : '\n\n【提问通道】本会话**没有**选项式提问工具（预置的提问通道没挂上，可能因为宿主缺 ' +
+          'agent-presets 服务或预设标识无法确认）。需要人类从若干方案里选时：在消息正文里给出' +
+          '**编号选项**，每项写明代价与风险，末尾明确写「请回复编号」——不要让人类面对一段' +
+          '没有落点的散文。'),
   });
 
   // 行为预设：注入的是**指引**而不是硬边界（2026-10-04 决定）。预设决定「要多安静 / 覆盖到什么
