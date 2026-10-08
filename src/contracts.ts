@@ -98,6 +98,20 @@ export interface RunActionAvailability {
    * 运行标记复活成 `running`（2026-10-05 质检发现）。
    */
   readonly canExtendBudget: boolean;
+  /**
+   * 「重做」（§5.4：`waiting_human_review → worker_running` 的默认边）的可用性。
+   *
+   * 唯一允许的起点是**等待人工判断**——那是人类看过报告后说「这轮不算、再来一次」的时刻。
+   * 此前这条边**没有任何界面入口**（控制器有方法、RPC 有端点、零视图调用，外部审计 P0-3）。
+   */
+  readonly canRetryWorker: boolean;
+  /**
+   * 「重开技术工作」（`report_reopen` 边：从报告阶段回去补技术动作）的可用性。
+   *
+   * 起点是 `report_ready`（人类已宣布结束技术测试，但尚未签字导出）：签字导出后
+   * 一切运行期动作无意义（`complete` 已在前面全 false）。
+   */
+  readonly canReopenTechnicalWork: boolean;
 }
 
 export function runActionAvailability(state: {
@@ -113,6 +127,8 @@ export function runActionAvailability(state: {
       canInterject: false,
       canFinishTesting: false,
       canExtendBudget: false,
+      canRetryWorker: false,
+      canReopenTechnicalWork: false,
     };
   }
   const terminal = state.runMarker === 'aborted' || state.runMarker === 'failed';
@@ -125,6 +141,10 @@ export function runActionAvailability(state: {
       state.runMarker === 'running' &&
       (state.mainStatus === 'worker_running' || state.mainStatus === 'waiting_human_review'),
     canExtendBudget: state.runMarker === 'running' || state.runMarker === 'paused',
+    // 「重做」是**主状态**边（§5.4 的 waiting_human_review → worker_running）：运行标记不参与判定。
+    canRetryWorker: state.mainStatus === 'waiting_human_review',
+    // 「重开技术工作」同上，起点是报告就绪；终态标记下重开没有意义（那时该走恢复或终止）。
+    canReopenTechnicalWork: state.mainStatus === 'report_ready' && !terminal,
   };
 }
 

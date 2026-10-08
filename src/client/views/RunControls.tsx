@@ -135,6 +135,9 @@ interface RunActionAvailability extends SharedRunActionAvailability {
   readonly abortReason: string | null;
   readonly interjectReason: string | null;
   readonly finishTestingReason: string | null;
+  readonly extendBudgetReason: string | null;
+  readonly retryWorkerReason: string | null;
+  readonly reopenTechnicalWorkReason: string | null;
 }
 
 /**
@@ -153,7 +156,9 @@ export function runActionAvailability(
     return {
       canPause: false, canResume: false, canAbort: false, canInterject: false,
       canFinishTesting: false, canExtendBudget: false,
+      canRetryWorker: false, canReopenTechnicalWork: false,
       pauseReason: why, resumeReason: why, abortReason: why, interjectReason: why, finishTestingReason: why,
+      extendBudgetReason: why, retryWorkerReason: why, reopenTechnicalWorkReason: why,
     };
   }
   const marker = state.runMarker;
@@ -189,6 +194,15 @@ export function runActionAvailability(
       : state.mainStatus === 'complete'
         ? '作业已签字导出，不能再次结束技术测试'
         : `仅主状态为「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可结束技术测试；当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}`,
+    extendBudgetReason: decided.canExtendBudget
+      ? null
+      : `仅运行中或已暂停可追加预算；当前运行标记：${runMarkerLabel(marker)}`,
+    retryWorkerReason: decided.canRetryWorker
+      ? null
+      : `仅「等待人工判断」可重做（那时人类刚看过报告）；当前主状态：${mainStatusLabel(state.mainStatus)}`,
+    reopenTechnicalWorkReason: decided.canReopenTechnicalWork
+      ? null
+      : `仅「报告就绪（尚未签字）」可重开技术工作；当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}`,
   };
 }
 
@@ -200,6 +214,11 @@ export function RunControls(props: RunControlsProps): ReactNode {
   const [phase, setPhase] = useState<Phase>('intelligence-gathering');
   const [taskPrompt, setTaskPrompt] = useState(props.initialTaskPrompt ?? '');
   const [budget, setBudget] = useState<StartBudgetForm>(EMPTY_BUDGET);
+  /**
+   * 「追加预算」（§10.5）的输入。与启动预算**同一形状、同一解析**（`parseLimit`），
+   * 但不共用同一份状态：两个表单同时可见，混用会让"我填的是哪个"变成猜谜。
+   */
+  const [extraBudget, setExtraBudget] = useState<StartBudgetForm>(EMPTY_BUDGET);
 
   const [abortConfirmed, setAbortConfirmed] = useState(false);
   const [interjection, setInterjection] = useState('');
@@ -248,6 +267,23 @@ export function RunControls(props: RunControlsProps): ReactNode {
   }
 
   const availability = runActionAvailability(state);
+  /**
+   * 追加预算的三项：空 = 不追加这一项（合法），**填了但解析不了 = 拒绝提交**。
+   *
+   * 不允许静默丢弃：本文件 `parseLimit` 的事故记录（`'1e5'` 被解析成 1、三项被整体丢回默认值）
+   * 就是这一类。理由由按钮的 `reason` 说清楚，人类不该靠猜。
+   */
+  const extraTokens = parseLimit(extraBudget.maxTokensText);
+  const extraSteps = parseLimit(extraBudget.maxStepsText);
+  const extraSeconds = parseLimit(extraBudget.maxSecondsText);
+  const extraTyped =
+    extraBudget.maxTokensText.trim() !== ''
+    || extraBudget.maxStepsText.trim() !== ''
+    || extraBudget.maxSecondsText.trim() !== '';
+  const extraInvalid =
+    (extraBudget.maxTokensText.trim() !== '' && extraTokens === undefined)
+    || (extraBudget.maxStepsText.trim() !== '' && extraSteps === undefined)
+    || (extraBudget.maxSecondsText.trim() !== '' && extraSeconds === undefined);
   const canStartNow = state?.mainStatus === 'ready';
   const gates = startBlockers({
     mainStatus: state?.mainStatus ?? null,
@@ -526,6 +562,89 @@ export function RunControls(props: RunControlsProps): ReactNode {
           }}
           disabled={!availability.canFinishTesting || busy}
           reason={availability.finishTestingReason ?? (busy ? '正在提交' : undefined)}
+        />
+
+        {/*
+          下面三条是外部审计 P0-3 指出的缺口：控制器有方法、RPC 有端点，**没有任何视图调用**
+          ——与 2026-10-05 修掉的那批（startWorker / pause / resume / abort / interject）同一个形态。
+          判定取自契约层的单一出口（`runActionAvailability`），不可用时**写明原因**。
+        */}
+        <Button
+          label="重做（复用当前会话）"
+          onClick={() => {
+            settle(
+              props.controller.retryWorker({
+                engagementId,
+                taskPrompt: taskPrompt.trim() === '' ? '按上一轮的目标再执行一次' : taskPrompt.trim(),
+                reuseSession: true,
+              }),
+              () => { setNotice('已重做：复用当前会话，执行次数递增。'); },
+            );
+          }}
+          disabled={!availability.canRetryWorker || busy}
+          reason={availability.retryWorkerReason ?? (busy ? '正在提交' : undefined)}
+        />
+
+        <div className="pentest-runcontrols__budget">
+          <Field label="追加预算：tokens" hint="留空即不追加这一项">
+            <TextInput
+              value={extraBudget.maxTokensText}
+              onChange={(value) => { setExtraBudget({ ...extraBudget, maxTokensText: value }); }}
+              placeholder="例如 500000"
+            />
+          </Field>
+          <Field label="追加预算：步数">
+            <TextInput
+              value={extraBudget.maxStepsText}
+              onChange={(value) => { setExtraBudget({ ...extraBudget, maxStepsText: value }); }}
+              placeholder="例如 200"
+            />
+          </Field>
+          <Field label="追加预算：秒数">
+            <TextInput
+              value={extraBudget.maxSecondsText}
+              onChange={(value) => { setExtraBudget({ ...extraBudget, maxSecondsText: value }); }}
+              placeholder="例如 3600"
+            />
+          </Field>
+          <Button
+            label="追加预算"
+            // 追加是**增量**（`additionalTokens` 等）：只把填了的项送上去；填了但解析不了的项
+            // 由上面的 `extraInvalid` 拦在提交之前，不静默丢弃。
+            onClick={() => {
+              const sessionId = state?.activeWorkerSessionId;
+              if (sessionId === null || sessionId === undefined) return;
+              settle(
+                props.controller.extendBudget({
+                  workerSessionId: sessionId,
+                  ...(extraTokens === undefined ? {} : { additionalTokens: extraTokens }),
+                  ...(extraSteps === undefined ? {} : { additionalSteps: extraSteps }),
+                  ...(extraSeconds === undefined ? {} : { additionalSeconds: extraSeconds }),
+                }),
+                () => {
+                  setExtraBudget(EMPTY_BUDGET);
+                  setNotice('已追加预算。');
+                },
+              );
+            }}
+            disabled={!availability.canExtendBudget || busy || !extraTyped || extraInvalid}
+            reason={
+              availability.extendBudgetReason
+              ?? (!extraTyped ? '先填至少一项要追加的额度' : extraInvalid ? '只接受十进制正整数：检查填了的那几项' : busy ? '正在提交' : undefined)
+            }
+          />
+        </div>
+
+        <Button
+          label="重开技术工作"
+          // `report_reopen` 边：从报告阶段回去补技术动作（服务端会把它挂回活动会话）。
+          onClick={() => {
+            settle(props.controller.reopenTechnicalWork('人类从报告阶段返回补充技术动作'), () => {
+              setNotice('已重开技术工作：可继续补技术动作。');
+            });
+          }}
+          disabled={!availability.canReopenTechnicalWork || busy}
+          reason={availability.reopenTechnicalWorkReason ?? (busy ? '正在提交' : undefined)}
         />
       </div>
 
