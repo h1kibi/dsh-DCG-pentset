@@ -251,7 +251,9 @@ export const SHELL_CSS = `
 /* 动作区：按生命周期分区（运行期 / 阶段 / 危险 / 预算）。此前 __actions 没有任何样式，
    于是按钮与预算格挤成一段文字流——2026-10-08 人类截图报障的正是这个。 */
 .pentest-runcontrols__actions{display:flex;flex-direction:column;gap:10px}
-.pentest-runcontrols__row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.pentest-runcontrols__row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:flex-start;text-align:left}
+/* 宿主卡片把 text-align:center 传下来，行内按钮于是飘在中间；本区一律左对齐。 */
+.pentest-runcontrols{text-align:left}
 /* 行内元素**不伸缩**：否则按钮被拉成等宽条，一行里只剩几个空荡的长方块。 */
 .pentest-runcontrols__row>*{flex:0 0 auto}
 .pentest-runcontrols__zone--run{border-color:var(--pt-line-strong)}
