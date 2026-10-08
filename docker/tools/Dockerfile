@@ -139,6 +139,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       # 基础运行时与数据处理
       curl wget netcat-openbsd openssl jq git rsync ca-certificates unzip xxd file less \
   && rm -rf /var/lib/apt/lists/*
+
+# `snmpwalk` 首次运行会在 /var/lib/snmp 下建 `cert_indexes` 并**打印一行**
+# `Created directory: /var/lib/snmp/cert_indexes`，污染按行解析的产物（2026-10-08 操作者实测 P2）。
+# 预建该目录即可消掉那行：容器是一次性的，镜像里存在就等于每次运行都存在。
+RUN mkdir -p /var/lib/snmp/cert_indexes
 #
 # 有意**不装**（写在这里，免得下次又被"Kali 里都有"的直觉加回来）：
 # - `hashcat`（apt 有 6.2.6）：GPU 加速的离线破解，在 2 核/2g/无 GPU 的沙箱里跑等于自残；
