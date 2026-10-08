@@ -135,7 +135,8 @@ export function engagementViolation(binding: SessionBinding, session: string): T
       'engagement_halted',
       `engagement ${binding.engagementId} 的主状态是「${binding.mainStatus}」，不接受接触目标的动作` +
         `（只允许 ${EXECUTION_MAIN_STATUSES.join(' / ')}）。会话 ${session} 的动作不执行`,
-      '若这是误判，请人类在控制台确认作业状态；否则等待作业回到工作状态',
+      '请人类在控制台的「渗透作业 → 交接编辑」面板里**取消本次交接**（取消后作业回到可工作状态），' +
+        '然后重发本条动作；若这是误判，也在这里确认作业状态',
     );
   }
   return undefined;

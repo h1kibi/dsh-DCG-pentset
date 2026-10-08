@@ -25,6 +25,12 @@ metadata:
 ## 步骤
 
 > **优先用 `pentest_recon`**：`dns_enum` / `tls_inspect` / `ct_subdomains` 把记录类型、SNI、
+> **弱套件与主机名校验的两条坑（2026-10-08 实测踩到，写在这里是因为情报收集阶段读不到 vuln 族）**：
+> ① 判弱套件**用 `nmap --script ssl-enum-ciphers`（或 `tls_inspect enumerate_protocols=on`）**，
+> **不要**用 `openssl s_client -cipher '3DES@SECLEVEL=0'` 这类拼凑——镜像里的 OpenSSL 3 **没有**这些套件，
+> 客户端会先报 `SSL_CTX_set_cipher_list: no cipher match`：那是**你没测成**，不是服务端拒绝（当成拒绝写进报告＝假阴性）；
+> ② IP 目标校验主机名用 `-verify_ip`，**不要**用 `-verify_hostname`（证书 SAN 为 `IP Address:…` 时后者报
+> `hostname mismatch`，看着像证书问题，其实只是校验方式选错了）。
 > 通配处理都做成枚举参数，类别是 `passive_collection`/`active_probing`——**不需要逐条人工放行**；
 > 手写 `dig`/`openssl` 走 `pentest_exec` 属 `active_probing`，**免批**（命令原文不再经人过目）。
 > 注意：DNS 类 technique 在服务端按 `udp` 记账，**范围条目要声明 udp**，否则会被范围闸门拒绝。
