@@ -604,8 +604,13 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         { name: 'ping', kind: 'enum', values: ['syn', 'connect', 'skip'] },
       ],
       targetPlaceholder: 'target',
-      timeoutMs: 300_000,
-      maxOutputBytes: 512 * 1024,
+      // ── 为什么本模板的两个上限**高于**其余模板（2026-10-08 自查）──
+      // 批次的节奏按"每地址等效速率"折算（见 `ExecutionService` 的折算段），因此单条命令的
+      // 墙钟决定**能一次扫多大**：standard 5/s × 300s 只能容纳约 1500 台，一个 /20 会被拒。
+      // 抬到 15 分钟（沙箱上限也是 15 分钟，取小后即此值），出参同步抬到 2MiB——
+      // 否则上千台的端口行会被截断，而"看起来完整的截断输出"是本仓最忌讳的形态。
+      timeoutMs: 900_000,
+      maxOutputBytes: 2 * 1024 * 1024,
     },
     protocol: 'tcp',
     // 多端口扫描没有单一端口维度：如实声明 none（`carries` 里写清实际可达范围）。

@@ -1289,6 +1289,24 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     // （rate 除以地址数），并发/抖动/重试照旧 ⇒ 等价于"每台都按该档位的速率打"。
     const pacing = plan.pacing ?? null;
     const batchSize = Math.max(1, plan.resolvedAddresses.length);
+    // **批次时长必须与墙钟相容**：折算后 hosts 侧要等 `batchSize / rate` 秒才启动
+    // （等价于"每台按该档位速率打"）。4096 台 ÷ standard 5/s ≈ 13 分钟 ⇒ 必然超过单条命令
+    // 的墙钟 ⇒ 结果是"占住槽位、等十几分钟、然后超时"。**先算后拒**，给出可行下一步，
+    // 而不是让它慢慢等死（自查发现：折算本身会把这个等待放大到不可用）。
+    const expectedWaitSeconds = pacing !== null && pacing.rate > 0 ? batchSize / pacing.rate : 0;
+    if (expectedWaitSeconds > plan.timeoutMs / 1000) {
+      return {
+        status: 'blocked',
+        error: {
+          status: 'blocked',
+          code: 'classification_rejected',
+          message:
+            `批次 ${String(batchSize)} 台在当前节奏档（${String(pacing?.rate ?? 0)}/s）下需要约 ${String(Math.round(expectedWaitSeconds))} 秒，` +
+            `超过单条命令的 ${String(Math.round(plan.timeoutMs / 1000))} 秒墙钟`,
+          next_action: '把网段拆小（例如 /20）分几次跑，或在控制台把行为预设调到更快的档位',
+        },
+      };
+    }
     const effectivePacing =
       pacing === null || batchSize === 1
         ? pacing

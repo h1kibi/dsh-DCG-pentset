@@ -247,9 +247,11 @@ export function buildDockerArgs(input: {
     '--rm',
     '--name', containerName,
     // ── 网络：只接入部署指定的那一张网络（本部署非 internal ⇒ 可出网）；不发布端口（入站不可达）──
-    // 例外：**纯本地处理**（模板 `local_command`）不接任何网络——`--network none` 是**事实**，
-    // 不是记录里的一句声明。这样"这条动作没碰目标"由内核保证，审计与实现不可能不一致。
-    ...(plan.templateId === 'local_command'
+    // 例外：**纯本地处理**不接任何网络——`--network none` 是**事实**，
+    // 不是记录里的一句声明。判定用**类别**而不是模板 id：类别有专门闸门
+    // （`action_class_recomputed`）在受理时重算并冻结策略核对，是语义真源；
+    // 按 id 判会让"第二个本地模板"静默拿到网络（自查发现的第一版就是这么写的）。
+    ...(plan.actionClass === 'local_processing'
       ? ['--network', 'none']
       : ['--network', config.internalNetwork]),
     // ── 加固：与三者相关的限制全部显式声明 ──
