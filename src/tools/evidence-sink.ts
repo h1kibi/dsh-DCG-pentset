@@ -62,7 +62,11 @@ export interface EvidenceWriteResult {
  * 的动作变成失败——那会让模型以为命令没跑、进而重发（对目标再打一次）。
  */
 export function writeEvidence(root: string, relPath: string, content: string): EvidenceWriteResult {
-  if (relPath.startsWith('/') || relPath.includes('..')) {
+  // 逐段判越界：只拒**真正的** `..` / 空段 / 绝对路径。
+  // 此前是 `relPath.includes('..')` —— 那会把 `a..b` 这种合法文件名一起拒掉
+  // （2026-10-08 操作者实测 P2：purposes 里带 `..` 就整条落盘失败，另有几条落成 unnamed.txt）。
+  const segments = relPath.split('/');
+  if (relPath.startsWith('/') || segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     return { ok: false, detail: `拒绝越界的落盘路径：${relPath}` };
   }
   try {

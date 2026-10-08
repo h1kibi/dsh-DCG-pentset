@@ -912,9 +912,21 @@ CRLF 会让容器报 `/usr/bin/env: 'python3\r': No such file or directory`（�
 | 预设 | 场景 | 注入指引的骨架 | 默认节奏 | 默认启用类别 |
 |---|---|---|---|---|
 | `stealth` | 红队 · 隐蔽测试（被看见即失败） | 允许被动/低噪声；不做全端口与爆破；留痕与外传禁止 | 1/s·并发1 | passive_collection、active_probing |
-| `standard` | 已通知的授权渗透测试 | 常规识别+最小化验证；失败也要记录 | 5/s·并发2 | + credentialed_access |
+| `standard` | 已通知的授权渗透测试 | 常规识别+最小化验证；失败也要记录 | 5/s·并发2（**仅结构化动作**） | + credentialed_access |
 | `deep` | 高许可 · 穷尽利用尝试 | 全端口/爆破/多路径利用；**穷尽=尝试并记录**，不是必须打进去 | 10/s·并发4 | + exploit_validation |
 | `custom` | 自定义（人类写指引） | 逐字注入人类写的 `customGuidance`（≤2000 字），冲突时优先 | 同 stealth | 同 stealth |
+
+> **「默认节奏」只约束结构化动作**（`pentest_recon` 的模板：命令形态由服务端固定）。
+> 自由命令 `pentest_exec`（`direct_command`，自 2026-10-07 免批）**不经过这套限速**——
+> 它的实际速率取决于命令自身。2026-10-08 操作者实测：nmap 在网段上的实测约
+> **ICMP 60 目标/秒、TCP 90–400 探测/秒**，远高于表里的 5/s；按 5/s 估算会得到
+> 「/16 普查要 3.6 小时、不可行」这种**错误结论**（实际是 10 分钟量级）。
+> 要限速就自己在命令里给 `--max-rate`。
+
+> **墙钟上限**：自由命令的有效上限是 **15 分钟**（`pentest_exec` 的 `timeoutMs` 与沙箱
+> `DEFAULT_SANDBOX_LIMITS.maxWallClockMs` 取较小者，两者当前都是 15min，可由沙箱配置收窄）；
+> **结构化模板**各自声明，例如 `recon_port_scan`/`recon_service_probe` 是 **300s**。
+> 会话简报里会写出实际生效的 `wall_clock` 分钟数——以那一行为准，不要按本表猜。
 
 **必选**：建作业向导、会话内的范围确认卡、控制台的范围确认卡三处都要求**显式选择**（服务端 `createEngagement`/`confirmScopeProposal` 的 `behaviorProfile` 是必填参数；缺了报 `console/argument-invalid`）。agent 引导路径建作业时预设是数据库兜底值——**确认范围那一刻就是人类决定档位的时刻**，所以卡片不给预选。
 
