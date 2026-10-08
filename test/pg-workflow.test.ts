@@ -2191,6 +2191,18 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.equal(after[0]!.latestReport?.id, second, '被取代的那份不得当成要点给出去');
     assert.equal(after[0]!.latestReport?.summary, '第二份报告（取代前一份）');
     assert.equal(after[0]!.latestReport?.attempt, 2, '要点里的执行次数取自报告行本身');
+
+    // 正文端点（报告审阅的"Agent 本轮报告"区）：同样只给**最新未取代**的那一份，
+    // 分段由服务端按 `reportSectionTexts` 切好——每段必须有文本（空串 = 这一节本来没内容）。
+    const view = await service.getWorkerReport({ workerSessionId: started.workerSessionId });
+    assert.equal(view?.id, second, '正文也只能给最新未取代的那一份');
+    assert.equal(view?.summary, '第二份报告（取代前一份）');
+    assert.equal(view?.attempt, 2);
+    assert.ok((view?.sections.length ?? 0) > 0, '分段不能为空（那就是没接上口径）');
+    assert.ok(
+      view?.sections.every((section) => section.section !== '' && typeof section.text === 'string'),
+      '每段都要有键与文本',
+    );
   });
 
   test('getIntakeStatus：查询失败必须向上抛，不得伪装成「未绑定 / 0 待办」（P16）', async () => {

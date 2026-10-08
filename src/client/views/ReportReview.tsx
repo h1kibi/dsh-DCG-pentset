@@ -43,6 +43,7 @@ import type {
   FindingStatus,
   ReportSection,
   Severity,
+  WorkerReportView,
 } from '../../contracts.ts';
 import { isConsoleMethod } from '../../console/method-names.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
@@ -319,6 +320,84 @@ interface ReportReviewProps {
   readonly now?: Date;
 }
 
+/** 报告分段的界面标签（键来自服务端的分段口径；未知键回落到键名本身，不隐藏）。 */
+const AGENT_REPORT_SECTION_LABELS: Readonly<Record<string, string>> = {
+  summary: '摘要',
+  facts: '事实',
+  hypotheses: '假设',
+  findings: '结论',
+  candidate_findings: '候选结论',
+  limitations: '局限',
+  scope_or_roe_issues: '范围 / 规则疑问',
+  contradictions: '矛盾之处',
+  recommended_next_phase: '建议的下一阶段',
+};
+
+/**
+ * 「Agent 本轮报告」区：按需取某会话**最新未取代**报告的正文（外部审计 P0-2）。
+ *
+ * 为什么是**点击时**取而不是渲染时取：本仓纪律——视图不该在渲染中途发请求，
+ * 那会让服务端渲染无从进行（见 `ReportReviewProps.findings` 的说明）。
+ * 目标会话由 `snapshot.sessions` 的 `latestReport` 定位：那是同一次 `listWorkerSessions`
+ * 带来的事实，不需要再多一次探测；一份报告都没有时整块不画（不制造常驻噪音）。
+ */
+function AgentReportBlock(props: {
+  readonly controller: ConsoleController;
+  readonly snapshot: ConsoleSnapshot;
+  readonly now: Date;
+}): ReactNode {
+  const [report, setReport] = useState<WorkerReportView | null>(null);
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'failed'>('idle');
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const withReport = props.snapshot.sessions.filter(
+    (session) => session.latestReport !== null && session.latestReport !== undefined,
+  );
+  const target = withReport.sort((left, right) =>
+    (left.latestReport?.createdAt ?? '') < (right.latestReport?.createdAt ?? '') ? 1 : -1)[0];
+  if (target === undefined) return null;
+
+  const load = (): void => {
+    setState('loading');
+    setFailure(null);
+    void props.controller.workerReport(target.id)
+      .then((value) => {
+        setReport(value);
+        setState('done');
+      })
+      .catch((cause: unknown) => {
+        setState('failed');
+        setFailure(cause instanceof Error ? cause.message : String(cause));
+      });
+  };
+
+  return (
+    <div className="pentest-report-review__agent-report">
+      <Button
+        label={state === 'loading' ? '正在读取…' : state === 'done' ? '重新读取 Agent 本轮报告' : '读取 Agent 本轮报告'}
+        onClick={load}
+        disabled={state === 'loading'}
+        {...(state === 'loading' ? { reason: '请求已在路上，读回来即恢复' } : {})}
+      />
+      {failure === null ? null : <ErrorBar code="client_call_failed" message={failure} />}
+      {report === null ? null : (
+        <div>
+          <p className="pentest-report-review__agent-report-head">
+            {`第 ${String(report.attempt)} 次执行 · ${report.status} · ${formatTimestamp(report.createdAt, props.now)}`}
+          </p>
+          <p>{renderInlineMarkdown(report.summary)}</p>
+          {report.sections.filter((section) => section.text !== '').map((section) => (
+            <div key={section.section}>
+              <h4>{AGENT_REPORT_SECTION_LABELS[section.section] ?? section.section}</h4>
+              <p>{renderInlineMarkdown(section.text)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ReportReview(props: ReportReviewProps): ReactNode {
   const endpointExported = props.endpointExported ?? DISPOSITION_ENDPOINT_EXPORTED;
   const engagementId = props.snapshot.selectedEngagementId;
@@ -357,6 +436,13 @@ export function ReportReview(props: ReportReviewProps): ReactNode {
             hint="乐观锁版本：处置基于这个版本提交，冲突时界面重读"
           />
         </div>
+
+        {/*
+          Agent 本轮报告（外部审计 P0-2）：`worker_reports` 此前在浏览器里没有读出口，
+          人被告知"报告已提交"却在报告审阅里看不到它。这里按需取（点击时才发请求，渲染不途发请求
+          ——与本仓其余面板同一条纪律），拿到的是**服务端切好的分段**，与会话里、与记忆里同一份口径。
+        */}
+        <AgentReportBlock controller={props.controller} snapshot={props.snapshot} now={props.now ?? new Date()} />
 
         {undisposed > 0 ? (
           <p className="pentest-report-review__block" role="alert">

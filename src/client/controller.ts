@@ -22,7 +22,7 @@ import type { ConsoleCallResult, ConsoleCallInput } from '../console/client.ts';
 import { ConsoleClient } from '../console/client.ts';
 import type { HostInvoker } from '../console/client.ts';
 import type { ConsoleMethodName } from '../console/method-names.ts';
-import type { PurgePreview,
+import type { WorkerReportView, PurgePreview,
   ApprovalModeChange,
   ArchiveEngagementInput,
   PurgeEngagementInput,
@@ -501,6 +501,16 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
     const id = this.#snapshot.selectedEngagementId;
     if (id === null) return null;
     return this.#fetch<ReportDraft>('getReportDraft', { engagementId: id });
+  }
+
+  /**
+   * 某会话**最新未取代**报告的正文（报告审阅的"Agent 本轮报告"区，外部审计 P0-2）。
+   *
+   * 与 `refreshReportDraft` 不是一回事：草稿是**人类的**报告（签字与导出用），
+   * 这里取的是 **Agent 交的**那一份。该会话还没交过报告时返回 `null`。
+   */
+  async workerReport(workerSessionId: string): Promise<WorkerReportView | null> {
+    return this.#fetch<WorkerReportView | null>('getWorkerReport', { workerSessionId });
   }
 
   /**
