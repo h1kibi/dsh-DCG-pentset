@@ -250,7 +250,7 @@ export const SHELL_CSS = `
 .pentest-runcontrols__budget{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}
 /* 动作区：按生命周期分区（运行期 / 阶段 / 危险 / 预算）。此前 __actions 没有任何样式，
    于是按钮与预算格挤成一段文字流——2026-10-08 人类截图报障的正是这个。 */
-.pentest-runcontrols__actions{display:flex;flex-direction:column;gap:10px}
+.pentest-runcontrols__actions{display:flex;flex-direction:column;gap:10px;width:100%;align-self:stretch}
 .pentest-runcontrols__row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:flex-start;text-align:left}
 /* 宿主卡片把 text-align:center 传下来，行内按钮于是飘在中间；本区一律左对齐。 */
 .pentest-runcontrols{text-align:left}
