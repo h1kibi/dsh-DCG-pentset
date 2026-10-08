@@ -172,12 +172,70 @@ test('runActionAvailability：每个不可用动作都给出非空原因（禁�
     for (const [action, reason] of [
       ['pause', a.pauseReason], ['resume', a.resumeReason],
       ['abort', a.abortReason], ['interject', a.interjectReason],
+      // 这三个是外部审计 P0-3 补上的动作：此前**判定有、按钮没有**，于是"不可用给理由"
+      // 这条纪律根本没机会覆盖它们。列表必须跟着动作一起长，否则它们会再次溜出去。
+      ['extendBudget', a.extendBudgetReason],
+      ['retryWorker', a.retryWorkerReason],
+      ['reopenTechnicalWork', a.reopenTechnicalWorkReason],
     ] as const) {
       if (a[`can${action.charAt(0).toUpperCase()}${action.slice(1)}` as 'canPause'] === false) {
         assert.notEqual(reason, null, `${action} 不可用时必须说明原因`);
         assert.notEqual(String(reason).trim(), '', `${action} 的原因不能是空串`);
       }
     }
+  }
+});
+
+// ───────────────────── 外部审计 P0-3 补上的三个动作 ─────────────────────
+
+test('runActionAvailability：重做只对「等待人工判断」开放（§5.4 的 retry 边）', () => {
+  assert.equal(
+    runActionAvailability(workflowState({ mainStatus: 'waiting_human_review', runMarker: 'running' })).canRetryWorker,
+    true,
+  );
+  // 其余主状态都不行——尤其 `worker_running`（Agent 还在跑，"重做"该走插话）与 `report_ready`
+  // （人类已宣布收工，回去补动作是 `reopenTechnicalWork` 的事）。
+  for (const mainStatus of ['ready', 'worker_running', 'report_ready', 'complete'] as const) {
+    assert.equal(
+      runActionAvailability(workflowState({ mainStatus, runMarker: 'running' })).canRetryWorker,
+      false,
+      `${mainStatus} 不是重做的合法起点`,
+    );
+  }
+});
+
+test('runActionAvailability：重开技术工作只对「报告就绪且非终态」开放（report_reopen 边）', () => {
+  assert.equal(
+    runActionAvailability(workflowState({ mainStatus: 'report_ready', runMarker: 'running' })).canReopenTechnicalWork,
+    true,
+  );
+  assert.equal(
+    runActionAvailability(workflowState({ mainStatus: 'report_ready', runMarker: 'paused' })).canReopenTechnicalWork,
+    true,
+  );
+  for (const runMarker of ['aborted', 'failed'] as const) {
+    assert.equal(
+      runActionAvailability(workflowState({ mainStatus: 'report_ready', runMarker })).canReopenTechnicalWork,
+      false,
+      `运行标记 ${runMarker} 下重开没有意义`,
+    );
+  }
+  assert.equal(
+    runActionAvailability(workflowState({ mainStatus: 'waiting_human_review', runMarker: 'running' })).canReopenTechnicalWork,
+    false,
+  );
+});
+
+test('RunControls：三个动作在界面上有落点（此前判定有、按钮没有）', () => {
+  const html = renderToStaticMarkup(
+    createElement(RunControls, {
+      controller: inertController(),
+      snapshot: snapshotWith(workflowState({ mainStatus: 'waiting_human_review', runMarker: 'running' })),
+      now: NOW,
+    }),
+  );
+  for (const label of ['重做（复用当前会话）', '追加预算：tokens', '追加预算', '重开技术工作'] as const) {
+    assert.ok(html.includes(label), `界面上必须有「${label}」这个入口`);
   }
 });
 
