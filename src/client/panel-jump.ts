@@ -15,9 +15,23 @@ import { describeError } from '../contracts.ts';
  */
 let panelListener: ((panel: string) => void) | undefined;
 
+/**
+ * 面板还**没挂载**时收到的请求（外部审计⑦ 的实测修正）。
+ *
+ * 真机第一步就撞上：状态条点下去时控制台往往**还没渲染**（它不在 `main` 点位上时就如此），
+ * 于是登记点为空、请求被丢掉，人落到默认总览——"打开了对的页"这个意图落空。
+ * 因此请求**暂存一条**，`onPanelRequest` 登记时补发一次。
+ */
+let pendingPanel: string | undefined;
+
 /** 登记内部标签切换器（返回注销函数；组件卸载时要调用）。 */
 export function onPanelRequest(listener: (panel: string) => void): () => void {
   panelListener = listener;
+  if (pendingPanel !== undefined) {
+    const next = pendingPanel;
+    pendingPanel = undefined;
+    listener(next);
+  }
   return () => {
     if (panelListener === listener) panelListener = undefined;
   };
@@ -25,7 +39,11 @@ export function onPanelRequest(listener: (panel: string) => void): () => void {
 
 /** 请求切到内部标签（与 {@link selectPentestPanel} 配成一对：先切标签，再打开主面板）。 */
 export function requestPanel(panel: string): void {
-  panelListener?.(panel);
+  if (panelListener === undefined) {
+    pendingPanel = panel;
+    return;
+  }
+  panelListener(panel);
 }
 
 /**
