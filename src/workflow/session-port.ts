@@ -32,7 +32,7 @@
  *   - 任务经 `agent.followup()` 投递，等待用 `agent.whenIdle()`。
  */
 
-import type { ActionClass, BehaviorProfile, BudgetLimits, Phase } from '../contracts.ts';
+import type { ActionClass, BehaviorProfile, BudgetLimits, Phase, ScopeTarget } from '../contracts.ts';
 
 /** 冻结到会话的能力快照；来源是 `workflow/model.ts` 的 `ResolvedCapabilities`，经人类确认收窄后固化。 */
 export interface FrozenSessionInput {
@@ -44,6 +44,16 @@ export interface FrozenSessionInput {
   readonly engagementId: string;
   /** intake 与五阶段 phase Agent 的能力边界和提示词必须显式区分。 */
   readonly sessionKind: 'intake' | 'phase';
+  /**
+   * **冻结范围的只读视图**（当前版本的条目）。缺省即"读不到"，简报会如实写。
+   *
+   * 有了它，模型不必靠试错知道"哪个段被放行、CIDR 能不能当目标"——那正是 2026-10-08
+   * 操作者实测里最贵的两次弯路（一次 `/16` 被拆成 283 台逐 IP）。
+   */
+  readonly scope?: {
+    readonly targets: readonly ScopeTarget[];
+    readonly exclusions: readonly ScopeTarget[];
+  };
   readonly phase: Phase;
   readonly profileId: string;
   readonly profileRevision: string;

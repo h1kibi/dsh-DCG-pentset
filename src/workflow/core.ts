@@ -633,6 +633,41 @@ export class WorkflowCore {
   }
 
   /**
+   * 冻结范围的**条目**（当前版本）——只读范围视图的数据源。
+   *
+   * 2026-10-08 操作者实测 P2：「没有工具能读『当前生效的范围』」，于是他们靠**试错**才知道
+   * CIDR 选择器不行、哪个段被放行；一次 `/16` 普查因此被拆成 283 台逐 IP，扫描预算大头花在这里。
+   *
+   * 只给**规范化后**的 `kind/value/protocols/ports`：那既是判定真正读取的字段，
+   * 也是让人能做**数值**判断的形态——排除项与 CIDR 的包含关系是数值的，不是文本的
+   * （实测那次误判：`172.0.0.0/12` 看着"覆盖" `172.16.204.0/24`，数值上并不覆盖）。
+   */
+  async scopeEntriesOf(
+    engagementId: string,
+  ): Promise<{ readonly targets: readonly ScopeTarget[]; readonly exclusions: readonly ScopeTarget[] }> {
+    const toTargets = (value: unknown): readonly ScopeTarget[] =>
+      Array.isArray(value)
+        ? value.filter(
+            (entry): entry is ScopeTarget =>
+              typeof entry === 'object' &&
+              entry !== null &&
+              typeof (entry as ScopeTarget).kind === 'string' &&
+              typeof (entry as ScopeTarget).value === 'string',
+          )
+        : [];
+    const r = await this.deps.db.query<{ targets: unknown; exclusions: unknown }>(
+      `select targets, exclusions from pentest.scope_versions
+        where engagement_id = $1::uuid
+        order by version desc
+        limit 1`,
+      [engagementId],
+    );
+    const row = r.rows[0];
+    if (row === undefined) return { targets: [], exclusions: [] };
+    return { targets: toTargets(row.targets), exclusions: toTargets(row.exclusions) };
+  }
+
+  /**
    * 该作业当前冻结的行为预设与节奏（供会话提示词注入）。
    *
    * 读最新一版策略快照。预设现在是**提示词**而不是硬闸，所以这里只取展示所需的最小事实；

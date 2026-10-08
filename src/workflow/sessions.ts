@@ -143,6 +143,7 @@ export class SessionFlow {
       handoffContext: null,
       actionTemplates: this.#core.actionTemplates(),
       behavior: await this.#core.behaviorBriefOf(input.engagementId),
+      scope: await this.#core.scopeEntriesOf(input.engagementId),
       publicMemory: await this.#core.publicMemoryOf(input.engagementId),
     });
 
@@ -319,7 +320,8 @@ export class SessionFlow {
         profileRevision: caps.profileRevision,
         modelRoute: caps.modelRoute,
         actionTemplates: this.#core.actionTemplates(),
-      behavior: await this.#core.behaviorBriefOf(input.engagementId),
+        behavior: await this.#core.behaviorBriefOf(input.engagementId),
+        scope: await this.#core.scopeEntriesOf(input.engagementId),
         publicMemory: await this.#core.publicMemoryOf(input.engagementId),
         toolAllow: inherited.toolAllow,
         skillIds: inherited.skillIds,

@@ -732,6 +732,20 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
     '',
     '能力边界由人类在创建会话时确认：只能收窄，不会因为后台配置变动而放宽。需要更大的能力、或者要做',
     '超出当前行为预设的动作时：先用 `pentest_request_action_approval` 请人类放行，不要绕过、也不要先做后报。',
+    // 冻结范围的**只读视图**（2026-10-08 操作者实测 P2）：把"哪些目标真能打"摊给模型，
+    // 免得它靠试错——一次 `/16` 普查被拆成 283 台逐 IP，就是因为不知道范围条目长什么样。
+    // 只列条目本身；包含/排除的**数值关系**留给它自己算（这是事实，不是结论）。
+    '【当前生效的范围】（只读；判定真正读取的就是这些条目）',
+    ...(input.scope === undefined || input.scope.targets.length === 0
+      ? ['  （读不到冻结范围：按"只打已授权目标"的最保守口径行动；需要具体条目时问人类）']
+      : [
+          ...input.scope.targets.map(
+            (t) =>
+              `  - 包含：${t.kind} ${t.value}${t.protocols.length === 0 ? '' : `，协议 ${t.protocols.join('/')}`}`,
+          ),
+          ...input.scope.exclusions.map((t) => `  - 排除：${t.kind} ${t.value}（**排除项优先于包含项**）`),
+          '  判包含关系一律按**数值**算，不要按文本长度猜：实测 `172.0.0.0/12` 看着覆盖 `172.16.204.0/24`，数值上并不覆盖。',
+        ]),
   ].join('\n');
 }
 
