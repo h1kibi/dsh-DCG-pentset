@@ -42,6 +42,7 @@ import type {
 import { TERMINAL_SESSION_STATUSES, EXECUTION_MAIN_STATUSES, PURPOSE_MAX_CHARS } from '../contracts.ts';
 import { derivePlanHash } from './idempotency.ts';
 import { executionGateForAudit } from '../workflow/reconcile.ts';
+import { normalizeCidr, rangeAddressesOf } from '../policy/scope.ts';
 import {
   portForScope,
   validateParams,
@@ -540,6 +541,54 @@ export const scopeGate: AdmissionGate = {
       return pass();
     }
     const port = portForScope(spec, state.params);
+    // **范围批次**（`allowTargetRange`）：选择器可以是一个网段 ⇒ **逐地址裁决**，
+    // 一台越界就**整条拒绝**——授权一点没放宽，只是把"283 次单台"收成一次动作
+    // （2026-10-08 操作者实测：全段普查被拆成逐 IP，扫描预算大头花在这里）。
+    if (spec.allowTargetRange === true && state.intent.targetSelector.includes('/')) {
+      const cidr = normalizeCidr(state.intent.targetSelector);
+      if (!cidr.ok) {
+        return reject(
+          blocked(
+            'classification_rejected',
+            `批次选择器不是合法网段：${cidr.detail}`,
+            '用 IPv4 网段字面量（例如 10.25.0.0/20）；单台目标照旧直接写地址',
+          ),
+        );
+      }
+      const expanded = rangeAddressesOf(cidr.value);
+      if (!expanded.ok) {
+        return reject(
+          blocked('classification_rejected', expanded.detail, '把网段拆小（例如 /20）分几次跑，别指望一次扫完 /16'),
+        );
+      }
+      for (const address of expanded.value) {
+        const one = await state.ports.policy.evaluateScope({
+          engagementId: binding.engagementId,
+          scopeVersion: binding.scopeVersion,
+          target: address,
+          protocol: spec.protocol,
+          ...(port === undefined ? {} : { port }),
+        });
+        if (!one.ok) {
+          return reject(
+            blocked(
+              mapScopeRejection(one.code),
+              `批次里的 ${address} 未被裁决为在范围内（${one.code}）：${one.detail}`,
+              '批次里任何一台越界都会整条拒绝：缩小网段，或先修订范围',
+            ),
+            {
+              eventType: 'scope.violation',
+              rule: one.code,
+              detail: one.detail,
+              normalized: one.normalized ?? null,
+            },
+          );
+        }
+      }
+      // 裁决通过的**全部**地址（执行侧只打这份集合；分发器拿到的是裁决后的地址）。
+      state.resolveAddresses(expanded.value);
+      return pass();
+    }
     const scope = await state.ports.policy.evaluateScope({
       engagementId: binding.engagementId,
       scopeVersion: binding.scopeVersion,
