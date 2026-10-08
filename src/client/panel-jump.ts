@@ -4,6 +4,31 @@ import { logWarn } from './log.ts';
 import { describeError } from '../contracts.ts';
 
 /**
+ * 控制台**内部标签**的切换通道（外部审计建议⑦）。
+ *
+ * 状态条（会话上栏）与控制台内部是两棵子树：前者只能 `selectPentestPanel` 打开主面板，
+ * 却够不到后者 React 里的 `activePanel` 状态。所以这里放一个**登记点**：控制台 App
+ * 挂载时把自己的 `setPanel` 登记进来，状态条请求切换时按需调用。
+ *
+ * 没有登记（控制台还没挂载）时**静默什么都不做**——这是有意的：面板还没渲染，
+ * 切换请求本就无从生效；而 `selectPentestPanel` 马上会把面板打开，人看到的是"打开了"。
+ */
+let panelListener: ((panel: string) => void) | undefined;
+
+/** 登记内部标签切换器（返回注销函数；组件卸载时要调用）。 */
+export function onPanelRequest(listener: (panel: string) => void): () => void {
+  panelListener = listener;
+  return () => {
+    if (panelListener === listener) panelListener = undefined;
+  };
+}
+
+/** 请求切到内部标签（与 {@link selectPentestPanel} 配成一对：先切标签，再打开主面板）。 */
+export function requestPanel(panel: string): void {
+  panelListener?.(panel);
+}
+
+/**
  * 跳到渗透作业主面板（常驻状态条与卡片上的「打开控制台」都走这里）。
  *
  * ── 为什么用 `ctx.get('layout')` 而不是 `ctx.layout` ──

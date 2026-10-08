@@ -271,7 +271,11 @@ export function PentestStatusPill(props: {
 
 export function StatusPillSurface(props: {
   readonly controller: ConsoleController;
-  readonly onOpen: () => void;
+  /**
+   * 打开控制台，可指定**落点标签**（外部审计建议⑦）：有会话在等人工判断时落「报告审阅」，
+   * 否则落总览。状态条是唯一常驻面，"下一步看哪"不该再让人类自己找。
+   */
+  readonly onOpen: (panel?: 'overview' | 'report') => void;
 }): ReactNode {
   const snapshot = useConsoleSnapshot(props.controller);
   const [modeBusy, setModeBusy] = useState(false);
@@ -300,9 +304,11 @@ export function StatusPillSurface(props: {
       })
       .finally(() => { setModeBusy(false); });
   };
+  // 取一次，两处用（`onOpen` 的落点判定要看同一份 facts）。
+  const statusFacts = statusPillFacts(snapshot);
   return createElement(PentestStatusPill, {
-    facts: statusPillFacts(snapshot),
-    onOpen: props.onOpen,
+    facts: statusFacts,
+    onOpen: () => { props.onOpen(statusFacts.waiting > 0 ? 'report' : 'overview'); },
     onToggleMode: toggleMode,
     modeBusy,
     modeError,

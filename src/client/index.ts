@@ -29,7 +29,7 @@ import type { Context } from '@deepseek-ai/cordis';
 
 import { logWarn } from './log.ts';
 import { describeError } from '../contracts.ts';
-import { selectPentestPanel } from './panel-jump.ts';
+import { onPanelRequest, requestPanel, selectPentestPanel } from './panel-jump.ts';
 
 import type {
   ApprovalDetail,
@@ -349,6 +349,9 @@ function ConsoleApp(props: {
 }): ReactNode {
   const snapshot = useConsoleSnapshot(props.controller);
   const [panel, setPanel] = useState<ConsolePanel>('overview');
+  // 状态条（会话上栏）跳进来时**落到指定标签**：它够不到这里的 state，只能经登记点请求。
+  // 卸载时注销，免得面板已不在却还留着回调。
+  useEffect(() => onPanelRequest((next) => { setPanel(next as ConsolePanel); }), []);
   const [filter, setFilter] = useState<TimelineFilter>({});
   const [following, setFollowing] = useState(true);
   const [highlighted, setHighlighted] = useState<string | null>(null);
@@ -1126,7 +1129,16 @@ function workspaceConnectorOf(ctx: Context): WorkspaceConnector | undefined {
 }
 
 function registerSurfaces(slots: SlotRegistryLike, ctx: Context, label: () => string): void {
-  const openPanel = (): void => { selectPentestPanel(ctx, PENTEST_PANEL_ID); };
+  /**
+   * 打开插件主面板，并**落到指定标签**（外部审计建议⑦）。
+   *
+   * 状态条是唯一常驻面，"下一步该看哪"就不该再让人类自己找：有会话在等人工判断时，
+   * 直接落「报告审阅」（Agent 交的报告与结论都在那里）；其余情况落总览。
+   */
+  const openPanel = (panel?: ConsolePanel): void => {
+    if (panel !== undefined) requestPanel(panel);
+    selectPentestPanel(ctx, PENTEST_PANEL_ID);
+  };
   const consoleOf = (): ReactNode => renderConsole(() => connectionRpcOf(ctx), ctx);
 
   // ① 全高主面板。
