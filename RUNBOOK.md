@@ -923,10 +923,14 @@ CRLF 会让容器报 `/usr/bin/env: 'python3\r': No such file or directory`（�
 > 「/16 普查要 3.6 小时、不可行」这种**错误结论**（实际是 10 分钟量级）。
 > 要限速就自己在命令里给 `--max-rate`。
 
-> **墙钟上限**：自由命令的有效上限是 **15 分钟**（`pentest_exec` 的 `timeoutMs` 与沙箱
-> `DEFAULT_SANDBOX_LIMITS.maxWallClockMs` 取较小者，两者当前都是 15min，可由沙箱配置收窄）；
-> **结构化模板**各自声明，例如 `recon_port_scan`/`recon_service_probe` 是 **300s**。
-> 会话简报里会写出实际生效的 `wall_clock` 分钟数——以那一行为准，不要按本表猜。
+> **墙钟上限 = 模板声明与沙箱上限取较小者**（`min(plan.timeoutMs, DEFAULT_SANDBOX_LIMITS.maxWallClockMs)`）。
+> 出厂两张命令模板的 `timeoutMs` 都是 **300 秒** ⇒ **自由命令 `pentest_exec` 实际是 5 分钟**；
+> 沙箱上限（当前 15 分钟）只是**上限**，不是默认。结构化模板各自声明，`recon_port_scan`/
+> `recon_service_probe` 同样是 300s。会话简报里会写出实际生效的 `wall_clock` 分钟数——以那行为准。
+>
+> ⚠ 本条曾在本文件里被写错成"自由命令 15 分钟"（我按 `pentest_exec.timeoutMs` 推断，
+> 漏了模板声明会取小）——**以 `sandbox-brief.ts` 下发给模型的那一行为准**，那是唯一经过
+> 同一份常量算出来的地方。
 
 **必选**：建作业向导、会话内的范围确认卡、控制台的范围确认卡三处都要求**显式选择**（服务端 `createEngagement`/`confirmScopeProposal` 的 `behaviorProfile` 是必填参数；缺了报 `console/argument-invalid`）。agent 引导路径建作业时预设是数据库兜底值——**确认范围那一刻就是人类决定档位的时刻**，所以卡片不给预选。
 

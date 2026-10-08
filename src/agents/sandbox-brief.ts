@@ -70,6 +70,13 @@ export function renderSandboxBrief(
   );
   const wordlists = SANDBOX_WORDLISTS.map((w) => `/usr/share/wordlists/${w.file}（${w.purpose}）`);
   const wallClockMinutes = Math.round(DEFAULT_SANDBOX_LIMITS.maxWallClockMs / 60000);
+  // 环境事实里**最该常驻**的一条（2026-10-08 操作者实测 P0-1）：它决定资产底数对不对，
+  // 而漏报的形态是"看起来完全正常"。放在简报里比放在 skill 里更靠前——skill 要装才看得见。
+  const hostgroupFact =
+    '- **多主机扫描必须钉死主机级并行**：段级/多目标 nmap 一律带 ' +
+    '`--min-hostgroup 32 --max-hostgroup 64 --min-parallelism 16`（沙箱的 `port_scan` 动词已内置；' +
+    '手写命令必须自己带），跑完**抽一台已知开放的主机做单台交叉验证**——' +
+    '不做交叉验证，漏报会以"有输出、rc=0、有端口行"的形态骗过你。';
 
   return [
     '【沙箱环境】（每次会话都会注入；动手前先读完这一节，它决定你的命令怎么写）',
@@ -111,6 +118,7 @@ export function renderSandboxBrief(
     '**限额**（按这个规划命令，超限即失败或截断）：',
     `- 墙钟：**单条命令的上限由模板决定** —— 自由命令 \`pentest_exec\` 是 **5 分钟**，不是 ${String(wallClockMinutes)} 分钟；`,
     '  结构化动作更小（端口扫描 5 分钟、nuclei/爬取 3 分钟、探针类 1 分钟）。',
+    hostgroupFact,
     `  ${String(wallClockMinutes)} 分钟是本沙箱的**上限**而非默认 ⇒ 规划长任务时按 5 分钟切段。`,
     ...(mounts.length === 0
       ? []
