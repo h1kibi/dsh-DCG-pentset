@@ -272,9 +272,6 @@ export function buildDockerArgs(input: {
     // 出口边界改由「网络成员集合」承担：目标必须与沙箱同在 internalNetwork 上。
     // ── 已裁决地址：容器不得按域名再次解析；JSON 由服务端生成，非用户参数 ──
     '-e', `PENTEST_RESOLVED_ADDRESSES=${JSON.stringify(plan.resolvedAddresses)}`,
-    // **范围批次**（宿主已逐地址裁决；见 `allowTargetRange`）：把网段原样告诉容器，
-    // 由它按**字符串相等**识别并把网段交给 nmap 原生处理——不做第二份展开实现。
-    ...(plan.normalizedTarget.includes('/') ? ['-e', `PENTEST_TARGET_RANGE=${plan.normalizedTarget}`] : []),
     // ── 裁决基准：经环境变量传递，不出现在 argv（ps 可见）──
     '-e', `PENTEST_PLAN_HASH=${plan.planHash}`,
     '-e', `PENTEST_POLICY_EPOCH=${plan.policyEpoch}`,

@@ -133,12 +133,12 @@ export const PROFILE_DEFAULTS: Readonly<Record<BehaviorProfile, {
   standard: {
     detectionObjective: 'balanced_coverage',
     pacing: { rate: 5, concurrency: 2, jitter: 0.25, burst: 2, retry: 1 },
-    enabled: ['passive_collection', 'active_probing', 'credentialed_access'],
+    enabled: ['local_processing', 'passive_collection', 'active_probing', 'credentialed_access'],
   },
   deep: {
     detectionObjective: 'maximize_bounded_coverage',
     pacing: { rate: 10, concurrency: 4, jitter: 0.1, burst: 2, retry: 2 },
-    enabled: ['passive_collection', 'active_probing', 'credentialed_access', 'exploit_validation'],
+    enabled: ['local_processing', 'passive_collection', 'active_probing', 'credentialed_access', 'exploit_validation'],
   },
   custom: {
     detectionObjective: 'minimize_detection',

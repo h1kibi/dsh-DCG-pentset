@@ -537,6 +537,19 @@ export const scopeGate: AdmissionGate = {
     // 容器无网（宿主侧 `--network none`），命令只读挂载进来的文件。放它进 `evaluateScope`
     // 只会得到一条没有意义的 `scope_violation`，把"本地解析"记成"越界打目标"。
     if (spec.template.actionClass === 'local_processing') {
+      // 与下面的批次分支**同一个坑**：`admit` 之后的计划构造要读 `state.scope`
+      // （`normalizedTarget`），少了它每条本地调用都会在**闸门之后**抛「顺序被破坏」——
+      // 本地通道等于不能用（2026-10-08 独立复核 P0；我给范围分支补了却漏了这一支）。
+      // 本地处理没有目标可裁决：`host` 放选择器本身（工具侧默认 `local`），地址集合为空
+      // ——容器无网（宿主按类别下发 `--network none`）。
+      state.resolveScope({
+        ok: true,
+        normalized: {
+          kind: 'ip',
+          host: state.intent.targetSelector === '' ? 'local' : state.intent.targetSelector,
+          resolvedAddresses: [],
+        },
+      });
       state.resolveAddresses([]);
       return pass();
     }
