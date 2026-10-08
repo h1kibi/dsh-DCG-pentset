@@ -865,11 +865,15 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
     return (
       <div className="pentest-chat-card">
         {fallback === 'lookup' ? (
-          <p>
-            按本会话的 dsh 会话 id 反查不到 Worker 会话绑定，因此这张在环卡片读不到状态。
-            上栏的"待你判断"徽标走的是作业列表，与这里**不同源**——所以会出现"徽标在、卡片不在"。
-            控制台「渗透作业」里仍可继续操作。
-          </p>
+          // 与同文件其余卡片同一形制：`Card`（带标题）+ 纯文本正文。
+          // 上一版是裸 <p> 且写了字面 markdown（`**不同源**`）——那是我给界面留下的错，
+          // 人类看到的是两个星号。
+          <Card title="这张卡片读不到状态">
+            <p>
+              按本会话的 dsh 会话 id 反查不到 Worker 会话绑定。上栏的「待你判断」徽标走的是作业列表，
+              与这里不同源——所以会出现「徽标在、卡片不在」。控制台「渗透作业」里仍可继续操作。
+            </p>
+          </Card>
         ) : null}
         {error === null ? null : <ErrorBar code={error.code} message={error.message} />}
       </div>
@@ -894,14 +898,15 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
 
   if (approvalsFailed) {
     // 读不到 ≠ 没有：上面那栏写着「待放行 N 条」，这里必须说清楚"是读不到"，
-    // 否则人会把空白当成"没有待办"（本仓最忌讳的那种静默）。
+    // 否则人会把空白当成"没有待办"（本仓最忌讳的那种静默）。形制与下面的
+    // 「动作放行待处理」卡一致（同文件其余卡片都是 Card + 纯文本）。
     return (
-      <div className="pentest-chat-card">
+      <Card title={`动作放行待处理：${String(facts.approvalCount)} 项`}>
         <p>
-          {`待放行的 ${String(facts.approvalCount)} 条证据**读不到**（控制台调用失败或超时）——`
-            + '这不是"没有待放行"。稍后会随状态轮询自动重试；也可以直接到控制台「放行队列」处理。'}
+          {`放行条目暂时读不到（控制台调用失败或超时）——这不是"没有待放行"。`
+            + '稍后会随状态轮询自动重试；也可以直接到控制台「放行队列」处理。'}
         </p>
-      </div>
+      </Card>
     );
   }
 
