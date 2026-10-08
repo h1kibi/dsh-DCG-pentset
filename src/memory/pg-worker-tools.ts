@@ -1327,11 +1327,20 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
       // `worker_reports.payload_json` 与账本事件里，信息不丢，只是未结构化。
       const reportPayload: ReportPayload = report.payload ?? {};
       const findingItems = [...(reportPayload.findings ?? []), ...(reportPayload.candidate_findings ?? [])];
+      // 与 worker_reports 同一条纪律：**先让位、后插入**（本次提交取代本会话此前仍在待处置
+      // 状态的结论）。"待处置"的唯一定义是 `isUndisposed`（从未有处置记录），**不是**行状态：
+      // 「暂缓」不改状态（`defer` 只写 human_decisions），因此只按 status 过滤会把人类显式
+      // 暂缓过的结论一并置为 superseded——那是用 Agent 的下一次提交反转人类的判断。
       await tx.query(
         `UPDATE pentest.findings
             SET status = 'superseded', updated_at = now()
           WHERE discovered_in_session_id = $1::uuid
-            AND status IN ('candidate','validation_pending')`,
+            AND status IN ('candidate','validation_pending')
+            AND NOT EXISTS (
+              SELECT 1 FROM pentest.human_decisions d
+               WHERE d.decision_type = 'finding_disposition'
+                 AND d.subject_id = pentest.findings.id::text
+            )`,
         [input.workerSessionId],
       );
       const allowedSeverities = new Set(['critical', 'high', 'medium', 'low', 'info']);

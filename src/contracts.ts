@@ -141,8 +141,10 @@ export function runActionAvailability(state: {
       state.runMarker === 'running' &&
       (state.mainStatus === 'worker_running' || state.mainStatus === 'waiting_human_review'),
     canExtendBudget: state.runMarker === 'running' || state.runMarker === 'paused',
-    // 「重做」是**主状态**边（§5.4 的 waiting_human_review → worker_running）：运行标记不参与判定。
-    canRetryWorker: state.mainStatus === 'waiting_human_review',
+    // 「重做」是**主状态**边（§5.4 的 waiting_human_review → worker_running）：运行标记只用来
+    // 排除终态——`aborted`/`failed` 下会话已全被置 closed，重做会打在终态行上被
+    // `worker_sessions_state_progression` 拒成 `console/internal`（按钮可点但必失败）。
+    canRetryWorker: state.mainStatus === 'waiting_human_review' && !terminal,
     // 「重开技术工作」同上，起点是报告就绪；终态标记下重开没有意义（那时该走恢复或终止）。
     canReopenTechnicalWork: state.mainStatus === 'report_ready' && !terminal,
   };
@@ -1292,7 +1294,10 @@ export interface EngagementSummary {
  */
 export interface WorkerReportDigest {
   readonly id: string;
-  /** 同阶段内的第几次执行（与 `WorkerSessionSummary.attempt` 同口径）。 */
+  /**
+   * 该**报告行**的执行次数（取自报告行本身，不是在读会话的当前 `attempt`：会话被重做但
+   * 还没交新报告时，两者会不同）。
+   */
   readonly attempt: number;
   /** `worker_reports.status` 是自由文本列，界面只做展示，不在客户端窄化。 */
   readonly status: string;

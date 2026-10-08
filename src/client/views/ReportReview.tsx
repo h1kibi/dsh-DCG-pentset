@@ -364,6 +364,10 @@ function AgentReportBlock(props: {
       .then((value) => {
         setReport(value);
         setState('done');
+        // `null` 有两种来源：**调用失败**（`#fetch` 对 `!ok` 返回 null——这是主要的一种）与
+        // "该会话确实没有可取的报告"（刚被取代/清空的竞态）。两者都**不能**显示成读取成功：
+        // 那会让人以为"这个会话没交过报告"，而同一页的时间轴正说它交了。
+        setFailure(value === null ? '没读到报告正文（调用失败，或该报告刚被取代）：可再点一次' : null);
       })
       .catch((cause: unknown) => {
         setState('failed');
@@ -380,7 +384,16 @@ function AgentReportBlock(props: {
         {...(state === 'loading' ? { reason: '请求已在路上，读回来即恢复' } : {})}
       />
       {failure === null ? null : <ErrorBar code="client_call_failed" message={failure} />}
-      {report === null ? null : (
+      {/*
+        已加载的正文只在**它仍属于当前目标会话**时才显示：切换作业后 `target` 变了而本组件
+        不重挂载，`report` 会留下上一个作业的内容——显示它就是让界面撒谎。
+      */}
+      {report !== null && report.workerSessionId !== target.id ? (
+        <p className="pentest-report-review__block">
+          目标会话已切换：已加载的正文属于另一个会话，已隐藏——请重新读取。
+        </p>
+      ) : null}
+      {report === null || report.workerSessionId !== target.id ? null : (
         <div>
           <p className="pentest-report-review__agent-report-head">
             {`第 ${String(report.attempt)} 次执行 · ${report.status} · ${formatTimestamp(report.createdAt, props.now)}`}

@@ -196,7 +196,9 @@ export function runActionAvailability(
         : `仅主状态为「Agent 正在运行」或「等待人工判断」且运行标记为 running 时可结束技术测试；当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}`,
     extendBudgetReason: decided.canExtendBudget
       ? null
-      : `仅运行中或已暂停可追加预算；当前运行标记：${runMarkerLabel(marker)}`,
+      : state.mainStatus === 'complete'
+        ? '作业已签字导出，追加预算没有意义'
+        : `仅运行中或已暂停可追加预算；当前运行标记：${runMarkerLabel(marker)}`,
     retryWorkerReason: decided.canRetryWorker
       ? null
       : `仅「等待人工判断」可重做（那时人类刚看过报告）；当前主状态：${mainStatusLabel(state.mainStatus)}`,
@@ -284,6 +286,13 @@ export function RunControls(props: RunControlsProps): ReactNode {
     (extraBudget.maxTokensText.trim() !== '' && extraTokens === undefined)
     || (extraBudget.maxStepsText.trim() !== '' && extraSteps === undefined)
     || (extraBudget.maxSecondsText.trim() !== '' && extraSeconds === undefined);
+  /**
+   * 追加预算还要**有活动会话**才能落。`canExtendBudget` 只看运行标记（running/paused），
+   * 而"新建作业"（ready+running+无会话）与"结束技术测试"（清空活动会话、标记仍 running）
+   * 都会命中它——此时按钮点了会 `return`，静默无响应。前置检查必须与 `canInterject`
+   * 同形（它也要求 `activeWorkerSessionId !== null`），否则就是"能点但落空"。
+   */
+  const extraNoSession = state?.activeWorkerSessionId === null || state?.activeWorkerSessionId === undefined;
   const canStartNow = state?.mainStatus === 'ready';
   const gates = startBlockers({
     mainStatus: state?.mainStatus ?? null,
@@ -627,10 +636,10 @@ export function RunControls(props: RunControlsProps): ReactNode {
                 },
               );
             }}
-            disabled={!availability.canExtendBudget || busy || !extraTyped || extraInvalid}
+            disabled={!availability.canExtendBudget || busy || extraNoSession || !extraTyped || extraInvalid}
             reason={
               availability.extendBudgetReason
-              ?? (!extraTyped ? '先填至少一项要追加的额度' : extraInvalid ? '只接受十进制正整数：检查填了的那几项' : busy ? '正在提交' : undefined)
+              ?? (extraNoSession ? '当前没有活动 Worker 会话：先启动一轮，或恢复/重开作业' : !extraTyped ? '先填至少一项要追加的额度' : extraInvalid ? '只接受十进制正整数：检查填了的那几项' : busy ? '正在提交' : undefined)
             }
           />
         </div>

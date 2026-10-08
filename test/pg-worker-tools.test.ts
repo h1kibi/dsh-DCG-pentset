@@ -1107,6 +1107,59 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
     ]);
   });
 
+  it('报告：人类暂缓过的结论不被下一次提交取代（暂缓只写决策、不改行状态）', async () => {
+    // 「暂缓」在本仓不改 findings 行状态（defer 只写 human_decisions），因此"待处置"的判据
+    // 不能只看 status——只看状态就会用 Agent 的下一次提交反转人类的判断（外部质检 P2）。
+    await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '暂缓场景',
+        summary: 'A 待人类暂缓、B 未处置',
+        payload: { candidate_findings: [{ title: '暂缓项 A' }, { title: '未处置项 B' }] },
+      },
+    });
+
+    const session = await client.query<{ engagement_id: string }>(
+      'SELECT engagement_id FROM pentest.worker_sessions WHERE id = $1::uuid',
+      [workerSessionId],
+    );
+    const engagementId = session.rows[0]!.engagement_id;
+    const inserted = await client.query<{ id: string }>(
+      `SELECT id FROM pentest.findings WHERE discovered_in_session_id = $1::uuid AND title = $2::text`,
+      [workerSessionId, '暂缓项 A'],
+    );
+    const deferredId = inserted.rows[0]!.id;
+    await client.query(
+      `INSERT INTO pentest.human_decisions
+         (engagement_id, operator_id, decision_type, subject_id, decision, reason, auth_context)
+       VALUES ($1::uuid, 'op', 'finding_disposition', $2::text, 'defer', '先放着，等更多证据', '{}'::jsonb)`,
+      [engagementId, deferredId],
+    );
+
+    // Agent 再交一份（不再重复 A）：A 必须**存活**，B 才该让位。
+    await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '暂缓场景第二轮',
+        summary: '只交新结论',
+        payload: { candidate_findings: [{ title: '第三轮新结论' }] },
+      },
+    });
+
+    const after = await client.query<{ title: string; status: string }>(
+      `SELECT title, status FROM pentest.findings WHERE discovered_in_session_id = $1::uuid`,
+      [workerSessionId],
+    );
+    const byTitle = new Map(after.rows.map((row) => [row.title, row.status]));
+    assert.equal(byTitle.get('暂缓项 A'), 'candidate', '人类暂缓过的结论不得被 Agent 的下一次提交反转');
+    assert.equal(byTitle.get('未处置项 B'), 'superseded', '没被处置过的结论才该让位');
+    assert.equal(byTitle.get('第三轮新结论'), 'candidate');
+  });
+
   it('报告：同一 attempt 的第二份当前报告被部分唯一索引拒绝', async () => {
     await tools.submitReport({
       workerSessionId,

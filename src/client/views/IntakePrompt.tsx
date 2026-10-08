@@ -673,10 +673,16 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
           if (cancelled) return;
           const next = intakePromptFacts(status);
           setFacts(next);
-          // `status === null` = RPC 通了但**反查不到绑定**（不是"没有待办"）：上栏徽标走作业列表、
-          // 卡片走这条反查，两条路径不同源，于是能出现"徽标说待你判断、卡片一张都不画"。记下来，
-          // 由下面的出口变成一条看得见的说明。
-          setLookupFailed(status === null);
+          // 两种"没有卡片"必须分开（外部审计 P0-4），而它们的事实来源**不同**：
+          //   - `status === null`：只可能是**控制台调用失败**——`#fetch` 对 `!ok` 返回 null，
+          //     服务端的 `getIntakeStatus` 永远返回对象（`intake.ts` 明说"查询失败不吞"）。
+          //     这是"读不到"，要说出来，不能渲染成任何确定结论；
+          //   - `status.engagementId === null`：**真的反查不到绑定**（不属于本作业），
+          //     这是"确实没得画"，但要给人一张说明卡而不是一片空白。
+          setError(status === null
+            ? { code: 'client_call_failed', message: '读不到在环状态：控制台调用失败或超时' }
+            : null);
+          setLookupFailed(status !== null && status.engagementId === null);
           // 条目只在**确实有放行待办**时读：没有待办就没有证据要展示，
           // 而这类读端点在 FORCE RLS 下也是真查询，别让常驻卡片每次轮询都白打一发。
           // 没有待办时读一次运行快照：它同时回答「Agent 在哪」与「要不要把界面切过去」。

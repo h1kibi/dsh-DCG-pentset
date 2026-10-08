@@ -723,9 +723,11 @@ export class EngagementFlow {
       created_at: string;
       report_id: string | null;
       report_attempt: number | string | null;
-      report_status: string | null;
-      report_summary: string | null;
-      report_created_at: string | null;
+      // 这三列是 NOT NULL：外层连接只会让它们在 `report_id IS NULL` 时一起为 NULL，
+      // 而那条路径上面已经直接返回 null——所以这里不写 `| null`，也就不用假回退。
+      report_status: string;
+      report_summary: string;
+      report_created_at: string;
     }>(
       // 报告要点用 `left join lateral` 取每会话**最新未取代**的一份（外部审计 P0-2）：
       // 一次查询拿全，避免界面为了显示一行要点再打 N 发。改名必须在**连接内部**完成——
@@ -777,9 +779,9 @@ export class EngagementFlow {
         : {
             id: row.report_id,
             attempt: toInt(row.report_attempt, 'report_attempt'),
-            status: row.report_status ?? '',
-            summary: row.report_summary ?? '',
-            createdAt: row.report_created_at ?? row.created_at,
+            status: row.report_status,
+            summary: row.report_summary,
+            createdAt: row.report_created_at,
           },
       startedAt: row.started_at,
       endedAt: row.ended_at,

@@ -296,7 +296,7 @@ export interface ReportItemObject {
   readonly missing_evidence?: readonly string[];
   readonly affected_assets?: readonly string[];
   /**
-   * 下面四个来自 `pentest_submit_report` 的 `reportFindingSchema`（工具 schema 明确要求
+   * 下面五个来自 `pentest_submit_report` 的 `reportFindingSchema`（工具 schema 明确要求
    * 模型写它们），因此 `candidate_findings` 里**一定会**出现——类型不收就等于让消费方去猜。
    */
   readonly reproduction_plan?: readonly string[];
