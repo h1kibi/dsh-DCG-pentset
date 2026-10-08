@@ -373,9 +373,9 @@ export function RunControls(props: RunControlsProps): ReactNode {
       {/* 审批模式：切换在任何时候都可用（运行中亦可）。切一次 = 新策略版本 + epoch 推进。 */}
       <div className="pentest-runcontrols__mode">
         <p className="pentest-runcontrols__mode-current">
-          {`当前审批模式：${APPROVAL_MODE_LABELS[currentApprovalMode]}`}
+          {`审批模式 · ${APPROVAL_MODE_LABELS[currentApprovalMode]}`}
         </p>
-        <Field label="切换审批模式" hint="收紧为人工审批立刻生效；放宽到高权限后，预设内动作不再经人过目。">
+        <Field label="目标档位" hint="收紧即刻生效；放宽后预设内动作不再逐条报批。">
           <select
             className="pentest-select"
             value={modeTarget}
@@ -395,7 +395,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
           <p className="pentest-runcontrols__mode-current">{APPROVAL_MODE_HINTS[modeTarget]}</p>
         )}
         <Button
-          label={modeBusy ? '切换中…' : '切换审批模式'}
+          label={modeBusy ? '切换中…' : '应用'}
           disabled={modeBusy || modeTarget === '' || modeTarget === currentApprovalMode}
           onClick={switchApprovalMode}
           reason={
@@ -501,6 +501,9 @@ export function RunControls(props: RunControlsProps): ReactNode {
 
       {/* ── 运行期动作 ── */}
       <div className="pentest-runcontrols__actions">
+        <div className="pentest-runcontrols__zone pentest-runcontrols__zone--run">
+          <p className="pentest-runcontrols__zone-title">运行期</p>
+          <div className="pentest-runcontrols__row">
         <Button
           label="暂停"
           onClick={() => { settle(props.controller.pause(''), () => { setNotice('已暂停。'); }); }}
@@ -518,10 +521,12 @@ export function RunControls(props: RunControlsProps): ReactNode {
             availability.resumeReason ?? (busy ? '正在提交' : undefined)
           }
         />
+          </div>
+        </div>
 
         <Field
           label="插话内容"
-          hint="运行中按步骤边界送达；改变 Agent 的判断，不改变范围与权限"
+          hint="在步骤边界送达；只改判断，不改范围与权限"
         >
           <TextArea value={interjection} onChange={setInterjection} placeholder="例如：跳过那个端口，它属于客户的生产系统" />
         </Field>
@@ -542,23 +547,32 @@ export function RunControls(props: RunControlsProps): ReactNode {
           }
         />
 
-        <label className="pentest-check">
-          <input
-            type="checkbox"
-            checked={abortConfirmed}
-            onChange={(event) => { setAbortConfirmed(event.target.checked); }}
-          />
-          确认终止，不可撤销
-        </label>
-        <Button
-          label="终止"
-          onClick={() => { settle(props.controller.abort(''), () => { setNotice('已终止。'); }); }}
-          disabled={!availability.canAbort || !abortConfirmed || busy}
-          reason={
-            availability.abortReason ??
-            (!abortConfirmed ? '终止不可撤销，需勾选二次确认' : busy ? '正在提交' : undefined)
-          }
-        />
+        <div className="pentest-runcontrols__zone pentest-runcontrols__zone--danger">
+          <p className="pentest-runcontrols__zone-title">不可撤销</p>
+          <div className="pentest-runcontrols__row">
+            <label className="pentest-check">
+              <input
+                type="checkbox"
+                checked={abortConfirmed}
+                onChange={(event) => { setAbortConfirmed(event.target.checked); }}
+              />
+              我确认终止（不可撤销）
+            </label>
+            <Button
+              label="终止"
+              onClick={() => { settle(props.controller.abort(''), () => { setNotice('已终止。'); }); }}
+              disabled={!availability.canAbort || !abortConfirmed || busy}
+              reason={
+                availability.abortReason ??
+                (!abortConfirmed ? '终止不可撤销，需勾选二次确认' : busy ? '正在提交' : undefined)
+              }
+            />
+          </div>
+        </div>
+
+        <div className="pentest-runcontrols__zone">
+          <p className="pentest-runcontrols__zone-title">阶段</p>
+          <div className="pentest-runcontrols__row">
         <Button
           label="结束技术测试"
           // 这条边此前**没有界面入口**：服务端有 `finishTechnicalTesting`（§13.8），
@@ -579,7 +593,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
           判定取自契约层的单一出口（`runActionAvailability`），不可用时**写明原因**。
         */}
         <Button
-          label="重做（复用当前会话）"
+          label="重做"
           onClick={() => {
             settle(
               props.controller.retryWorker({
@@ -593,57 +607,6 @@ export function RunControls(props: RunControlsProps): ReactNode {
           disabled={!availability.canRetryWorker || busy}
           reason={availability.retryWorkerReason ?? (busy ? '正在提交' : undefined)}
         />
-
-        <div className="pentest-runcontrols__budget">
-          <Field label="追加预算：tokens" hint="留空即不追加这一项">
-            <TextInput
-              value={extraBudget.maxTokensText}
-              onChange={(value) => { setExtraBudget({ ...extraBudget, maxTokensText: value }); }}
-              placeholder="例如 500000"
-            />
-          </Field>
-          <Field label="追加预算：步数">
-            <TextInput
-              value={extraBudget.maxStepsText}
-              onChange={(value) => { setExtraBudget({ ...extraBudget, maxStepsText: value }); }}
-              placeholder="例如 200"
-            />
-          </Field>
-          <Field label="追加预算：秒数">
-            <TextInput
-              value={extraBudget.maxSecondsText}
-              onChange={(value) => { setExtraBudget({ ...extraBudget, maxSecondsText: value }); }}
-              placeholder="例如 3600"
-            />
-          </Field>
-          <Button
-            label="追加预算"
-            // 追加是**增量**（`additionalTokens` 等）：只把填了的项送上去；填了但解析不了的项
-            // 由上面的 `extraInvalid` 拦在提交之前，不静默丢弃。
-            onClick={() => {
-              const sessionId = state?.activeWorkerSessionId;
-              if (sessionId === null || sessionId === undefined) return;
-              settle(
-                props.controller.extendBudget({
-                  workerSessionId: sessionId,
-                  ...(extraTokens === undefined ? {} : { additionalTokens: extraTokens }),
-                  ...(extraSteps === undefined ? {} : { additionalSteps: extraSteps }),
-                  ...(extraSeconds === undefined ? {} : { additionalSeconds: extraSeconds }),
-                }),
-                () => {
-                  setExtraBudget(EMPTY_BUDGET);
-                  setNotice('已追加预算。');
-                },
-              );
-            }}
-            disabled={!availability.canExtendBudget || busy || extraNoSession || !extraTyped || extraInvalid}
-            reason={
-              availability.extendBudgetReason
-              ?? (extraNoSession ? '当前没有活动 Worker 会话：先启动一轮，或恢复/重开作业' : !extraTyped ? '先填至少一项要追加的额度' : extraInvalid ? '只接受十进制正整数：检查填了的那几项' : busy ? '正在提交' : undefined)
-            }
-          />
-        </div>
-
         <Button
           label="重开技术工作"
           // `report_reopen` 边：从报告阶段回去补技术动作（服务端会把它挂回活动会话）。
@@ -655,11 +618,63 @@ export function RunControls(props: RunControlsProps): ReactNode {
           disabled={!availability.canReopenTechnicalWork || busy}
           reason={availability.reopenTechnicalWorkReason ?? (busy ? '正在提交' : undefined)}
         />
+          </div>
+        </div>
+
+        <div className="pentest-runcontrols__zone">
+          <p className="pentest-runcontrols__zone-title">追加预算</p>
+          <div className="pentest-runcontrols__budget">
+            <Field label="tokens" hint="留空即不追加这一项">
+              <TextInput
+                value={extraBudget.maxTokensText}
+                onChange={(value) => { setExtraBudget({ ...extraBudget, maxTokensText: value }); }}
+                placeholder="500000"
+              />
+            </Field>
+            <Field label="步数">
+              <TextInput
+                value={extraBudget.maxStepsText}
+                onChange={(value) => { setExtraBudget({ ...extraBudget, maxStepsText: value }); }}
+                placeholder="200"
+              />
+            </Field>
+            <Field label="秒数">
+              <TextInput
+                value={extraBudget.maxSecondsText}
+                onChange={(value) => { setExtraBudget({ ...extraBudget, maxSecondsText: value }); }}
+                placeholder="3600"
+              />
+            </Field>
+            <Button
+              label="追加"
+              onClick={() => {
+                const sessionId = state?.activeWorkerSessionId;
+                if (sessionId === null || sessionId === undefined) return;
+                settle(
+                  props.controller.extendBudget({
+                    workerSessionId: sessionId,
+                    ...(extraTokens === undefined ? {} : { additionalTokens: extraTokens }),
+                    ...(extraSteps === undefined ? {} : { additionalSteps: extraSteps }),
+                    ...(extraSeconds === undefined ? {} : { additionalSeconds: extraSeconds }),
+                  }),
+                  () => {
+                    setExtraBudget(EMPTY_BUDGET);
+                    setNotice('已追加预算。');
+                  },
+                );
+              }}
+              disabled={!availability.canExtendBudget || busy || extraNoSession || !extraTyped || extraInvalid}
+              reason={
+                availability.extendBudgetReason
+                ?? (extraNoSession ? '当前没有活动 Worker 会话：先启动一轮，或恢复/重开作业' : !extraTyped ? '先填至少一项' : extraInvalid ? '只接受十进制正整数：检查填了的那几项' : busy ? '正在提交' : undefined)
+              }
+            />
+          </div>
+        </div>
       </div>
 
-      <p className="pentest-runcontrols__hint">
-        {`状态版本 ${formatCount(state?.stateVersion ?? 0)} · 图迭代 ${formatCount(state?.graphIteration ?? 0)}。`}
-        {' 所有写操作都记入人类决策与审计：操作者与时间。'}
+      <p className="pentest-runcontrols__meta">
+        {`状态版本 ${formatCount(state?.stateVersion ?? 0)} · 图迭代 ${formatCount(state?.graphIteration ?? 0)} · 写操作记入人类决策与审计`}
       </p>
     </Card>
   );

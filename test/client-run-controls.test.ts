@@ -234,7 +234,9 @@ test('RunControls：三个动作在界面上有落点（此前判定有、按钮
       now: NOW,
     }),
   );
-  for (const label of ['重做（复用当前会话）', '追加预算：tokens', '追加预算', '重开技术工作'] as const) {
+  // 断言能真正在 HTML 里出现的东西：按钮文案与分区标题（`Field` 的 label 渲染成属性，
+  // 不在文本里——上一版断言 `追加预算：tokens` 就是因为这个假阴性）。
+  for (const label of ['重做', '重开技术工作', '阶段', '追加预算', '不可撤销'] as const) {
     assert.ok(html.includes(label), `界面上必须有「${label}」这个入口`);
   }
 });
@@ -359,7 +361,7 @@ test('RunControls：终止只要二次确认（不可撤销的防手滑），不
     }),
   );
   assert.ok(!blocked.includes('必须填写终止理由'), '不该再要求填终止理由');
-  assert.ok(blocked.includes('确认终止，不可撤销'), '二次确认必须可见——它不可撤销');
+  assert.ok(blocked.includes('我确认终止（不可撤销）'), '二次确认必须可见——它不可撤销');
   assert.ok(blocked.includes('需勾选二次确认'), '未勾选时的禁用原因必须写出来');
 });
 

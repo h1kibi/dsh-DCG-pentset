@@ -248,6 +248,19 @@ export const SHELL_CSS = `
 .pentest-runcontrols__status{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .pentest-runcontrols__start{display:flex;flex-direction:column;gap:9px;border:1px solid var(--pt-line);background:var(--pt-bg-well);padding:10px}
 .pentest-runcontrols__budget{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}
+/* 动作区：按生命周期分区（运行期 / 阶段 / 危险 / 预算）。此前 __actions 没有任何样式，
+   于是按钮与预算格挤成一段文字流——2026-10-08 人类截图报障的正是这个。 */
+.pentest-runcontrols__actions{display:flex;flex-direction:column;gap:10px}
+.pentest-runcontrols__row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+/* 行内元素**不伸缩**：否则按钮被拉成等宽条，一行里只剩几个空荡的长方块。 */
+.pentest-runcontrols__row>*{flex:0 0 auto}
+.pentest-runcontrols__zone--run{border-color:var(--pt-line-strong)}
+.pentest-runcontrols__zone{display:flex;flex-direction:column;gap:6px;border:1px solid var(--pt-line);padding:9px 10px}
+.pentest-runcontrols__zone-title{margin:0;font:500 10.5px/1 var(--pt-font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--pt-fg-dim)}
+.pentest-runcontrols__zone--danger{border-color:var(--pt-danger-line);background:var(--pt-danger-wash)}
+.pentest-runcontrols__zone--danger .pentest-runcontrols__zone-title{color:var(--pt-danger)}
+.pentest-runcontrols__zone--budget .pentest-runcontrols__budget{grid-template-columns:repeat(auto-fit,minmax(128px,1fr)) auto;align-items:end}
+.pentest-runcontrols__meta{margin:0;font:400 11px/1.6 var(--pt-font-mono);color:var(--pt-fg-dim)}
 .pentest-runcontrols__gates{list-style:none;display:flex;flex-direction:column;gap:4px;padding:0;margin:0;font-size:11.5px;color:var(--pt-fg-faint)}
 .pentest-runcontrols__gates li::before{content:"›";color:var(--pt-accent-dim);margin-right:6px}
 .pentest-runcontrols__actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--pt-line);padding-top:10px}
