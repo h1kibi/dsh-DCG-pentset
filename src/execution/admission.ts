@@ -586,6 +586,18 @@ export const scopeGate: AdmissionGate = {
         }
       }
       // 裁决通过的**全部**地址（执行侧只打这份集合；分发器拿到的是裁决后的地址）。
+      // `resolveScope` 也必须给：`admit` 之后的计划构造要读它（`normalizedTarget`），
+      // 少了它会在**闸门之后**抛「顺序被破坏」——那是这一支专有的坑。
+      // 对批次而言 `host` 就是网段字面量（它只进展示与审计；真正的拨号地址是下面那份集合，
+      // 容器侧按 `PENTEST_TARGET_RANGE` 字符串相等识别它，交给 nmap 原生处理）。
+      state.resolveScope({
+        ok: true,
+        normalized: {
+          kind: 'ip',
+          host: state.intent.targetSelector,
+          resolvedAddresses: expanded.value,
+        },
+      });
       state.resolveAddresses(expanded.value);
       return pass();
     }
