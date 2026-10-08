@@ -1257,25 +1257,27 @@ function dshSessionIdOf(exec: { agent?: unknown }): string {
  * ── 这条错误为什么写得这么长 ──
  *
  * 它是**唯一**会出现在「会话不是控制台创建的」这一情形里的信号，而模型会把它的文本
- * 原样转述给人类。此前只说「未登记为 worker 会话」，于是人和模型都会去做一件做不到的事：
- * 试图给这个会话补一个绑定。
+ * 原样转述给人类——所以它必须把「该去哪儿」一次讲清，且不许把两件事混成一句"补不了"。
  *
- * 事实上**补不了**：worker 会话由控制台的 `startWorker` 创建，会话标识在那时按
- * `dsh-<workerSessionId>` 派生并写库。一个在聊天界面里开的会话（`session-…`）没有、
- * 也不可能有这条记录——这不是权限没给够，是身份模型如此。
+ * 事实分两层（2026-10-08 人类实测：模型照旧文案告诉人"无法事后补上"，而它自己手里
+ * 就有 `pentest_bootstrap_intake`）：
  *
- * 所以错误文本必须把「为什么不可能」和「该去哪儿」一次讲清，否则这个死角每被撞一次
- * 就要重查一遍。
+ *   1. **worker 会话**确实补不了：它由控制台的 `startWorker` 创建，标识按
+ *      `dsh-<workerSessionId>` 派生并写库，聊天界面里的 `session-…` 没有、也不该有这条记录。
+ *   2. **但本会话可以成为 intake**：调 `pentest_bootstrap_intake` 即以本会话建一个作业草稿
+ *      （名字形如「未命名任务 …」），人类在控制台确认范围后即可启动真正的 Worker。
  */
 async function workerSessionIdOf(deps: WorkerToolDeps, exec: { agent?: unknown }): Promise<string> {
   const dshSessionId = dshSessionIdOf(exec);
   const workerSessionId = await deps.resolveWorkerSessionId(dshSessionId);
   if (workerSessionId === null) {
     throw new Error(
-      `本会话（${dshSessionId}）不是渗透控制台创建的，因此没有 engagement 绑定；` +
-        '而且它**无法**事后补上：worker 会话只由控制台的「启动 Agent」创建，' +
-        '会话标识在那时按 dsh-<workerSessionId> 派生并写库，聊天界面里开的会话不在那条路径上。' +
-        '要开始一轮作业：打开控制台（左侧栏「渗透作业」）→ 建/选 engagement → 在「运行控制」里启动 Agent。' +
+      `本会话（${dshSessionId}）不是渗透控制台创建的，因此没有 engagement 绑定——` +
+        'Worker 会话只在控制台「启动 Agent」那一步派生并写库，聊天界面里开的会话不在那条路径上。' +
+        '**但你可以把本会话立成 intake**：调用 pentest_bootstrap_intake 建一个作业草稿' +
+        '（名字形如「未命名任务 …」），人类在控制台「渗透作业」确认范围后即可启动真正的 Worker。' +
+        '另注：读**宿主目录里的普通文件**不需要 engagement（用宿主自带的读工具即可）；' +
+        '本插件的读工具面向的是作业记忆、产物与**沙箱内**的挂载目录。' +
         '在此之前请把这件事告诉人类，不要重试、也不要用猜测的范围填补空白。',
     );
   }
@@ -1292,7 +1294,8 @@ async function workerSessionContextOf(
     if (context === null) {
       throw new Error(
         `本会话（${dshSessionId}）不是渗透控制台创建的，因此没有 engagement 绑定；` +
-          '而且它无法事后补上：请从控制台「启动 Agent」创建渗透 Worker 后再提交报告。',
+          '先把本会话立成 intake（pentest_bootstrap_intake），' +
+          '或从控制台「启动 Agent」创建渗透 Worker 后再试。',
       );
     }
     return context;
