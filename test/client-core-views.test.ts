@@ -18,6 +18,7 @@ import { buildPhaseTrack, buildEdges, phaseTone } from '../src/client/phase-trac
 import { buildMinimap, filterSessions, orphanInfo, buildTimeTicks } from '../src/client/timeline.ts';
 import { truncate } from '../src/client/format.ts';
 import { PhaseTrack } from '../src/client/views/PhaseTrack.tsx';
+import { intakeFallbackOf } from '../src/client/views/IntakePrompt.tsx';
 import { SessionTimeline } from '../src/client/views/SessionTimeline.tsx';
 import { RunHeader } from '../src/client/views/RunHeader.tsx';
 import type { Phase, SessionStatus, WorkerSessionSummary } from '../src/contracts.ts';
@@ -446,4 +447,13 @@ test('截断站点的顺序契约：先 strip 再 truncate（反过来会把标�
   assert.ok(html.includes('A组完成…'), `应先 strip 再截断（得到 A组完成…）：${html.slice(0, 200)}`);
   assert.equal(html.includes('**'), false, '标记不得出现在可见文本里');
   assert.ok(!html.includes('>A组<'), '若出现裸 A组，说明截断发生在 strip 之前（标记占了字数）');
+});
+
+test('在环卡片的回退：读不到 ≠ 没有待办（外部审计 P0-4 第 4 入口）', () => {
+  // "没有待办"不画卡片是**有意的**（避免常驻噪音）：这里锁住的就是它俩不再被同一个 null 吃掉。
+  assert.equal(intakeFallbackOf(false, null), 'hidden');
+  assert.equal(intakeFallbackOf(true, null), 'lookup');
+  // 取数失败优先于反查失败：错误正文必须画出来（`facts === null` 的出口以前在错误条之前返回 null）。
+  assert.equal(intakeFallbackOf(true, { code: 'client_call_failed' }), 'error');
+  assert.equal(intakeFallbackOf(false, { code: 'client_call_failed' }), 'error');
 });

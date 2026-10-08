@@ -599,8 +599,30 @@ interface IntakePromptProps {
   readonly autoFollowSession?: boolean;
 }
 
+/**
+ * `facts === null` 时该画什么（外部审计 P0-4）：**"读不到"与"没有待办"必须分开**。
+ *
+ * - `hidden`：确实没有待办（`auth_pending` 之类）——不画，避免常驻噪音；
+ * - `lookup`：RPC 通了但按 dsh 会话 id **反查不到绑定**——必须画说明，否则界面一片空白；
+ * - `error`：取数本身失败——必须画，且要画在 `facts === null` 的出口上（以前那个出口
+ *   在错误条之前 `return null`，`ErrorBar` 永远够不到）。
+ */
+export function intakeFallbackOf(
+  lookupFailed: boolean,
+  error: { readonly code: string } | null,
+): 'hidden' | 'lookup' | 'error' {
+  if (error !== null) return 'error';
+  if (lookupFailed) return 'lookup';
+  return 'hidden';
+}
+
 function IntakePromptBody(props: IntakePromptProps): ReactNode {
   const [facts, setFacts] = useState<IntakePromptFacts | null>(null);
+  /**
+   * 「按 dsh 会话 id 反查不到绑定」——与「确实没有待办」是两件事，以前都被 `facts === null`
+   * 吃掉，界面只好什么都不画（外部审计 P0-4 第 4 入口）。
+   */
+  const [lookupFailed, setLookupFailed] = useState(false);
   const [error, setError] = useState<{ readonly code: string; readonly message: string } | null>(null);
   const [busy, setBusy] = useState<'confirm' | 'reject' | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -651,6 +673,10 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
           if (cancelled) return;
           const next = intakePromptFacts(status);
           setFacts(next);
+          // `status === null` = RPC 通了但**反查不到绑定**（不是"没有待办"）：上栏徽标走作业列表、
+          // 卡片走这条反查，两条路径不同源，于是能出现"徽标说待你判断、卡片一张都不画"。记下来，
+          // 由下面的出口变成一条看得见的说明。
+          setLookupFailed(status === null);
           // 条目只在**确实有放行待办**时读：没有待办就没有证据要展示，
           // 而这类读端点在 FORCE RLS 下也是真查询，别让常驻卡片每次轮询都白打一发。
           // 没有待办时读一次运行快照：它同时回答「Agent 在哪」与「要不要把界面切过去」。
@@ -812,7 +838,24 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
       });
   };
 
-  if (facts === null) return null;
+  if (facts === null) {
+    const fallback = intakeFallbackOf(lookupFailed, error);
+    // 没有待办：不画（避免常驻噪音）。
+    if (fallback === 'hidden') return null;
+    // 回退路径**也要包住令牌根**（`.pentest-chat-card`，见文件尾注释）。
+    return (
+      <div className="pentest-chat-card">
+        {fallback === 'lookup' ? (
+          <p>
+            按本会话的 dsh 会话 id 反查不到 Worker 会话绑定，因此这张在环卡片读不到状态。
+            上栏的"待你判断"徽标走的是作业列表，与这里**不同源**——所以会出现"徽标在、卡片不在"。
+            控制台「渗透作业」里仍可继续操作。
+          </p>
+        ) : null}
+        {error === null ? null : <ErrorBar code={error.code} message={error.message} />}
+      </div>
+    );
+  }
 
   const approvalItems: readonly ApprovalItem[] = approvals ?? [];
   const approvalsCard: ReactNode = (
