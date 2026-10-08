@@ -152,7 +152,7 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
     assert.deepEqual(second, first);
   });
 
-  it('出厂集 = 直连命令 + 两族结构化模板（侦察/核验）；**没有任何**出厂模板落在逐次放行类别里', async () => {
+  it('出厂集 = 两张直连命令 + 两族结构化模板（侦察/核验）；**没有任何**出厂模板落在逐次放行类别里', async () => {
     // 2026-10-05 清理：五个示例模板删除（镜像里有真工具，Agent 直接写命令）。
     // 2026-10-06：新增 12 张 `recon_*`（类别 passive_collection/active_probing，不触发逐次放行）——
     // 这一族的意义就是「侦察不消耗人类审批预算，危险动作才消耗」。
@@ -161,9 +161,9 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
     // 执行层那条锁旁边（test/execution.test.ts 的「直连命令模板」用例）。
     const ids = DEFAULT_TEMPLATES.map((s) => s.template.id);
     assert.equal(ids[0], 'direct_command');
-    assert.equal(ids.length, 17, `实际：${ids.join('、')}`);
+    assert.equal(ids.length, 18, `实际：${ids.join('、')}`);
     const freeForm = DEFAULT_TEMPLATES.filter((s) => s.allowFreeForm === true);
-    assert.deepEqual(freeForm.map((s) => s.template.id), ['direct_command']);
+    assert.deepEqual(freeForm.map((s) => s.template.id), ['direct_command', 'local_command']);
     const perAction = DEFAULT_TEMPLATES.filter((s) =>
       (PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(s.template.actionClass),
     );

@@ -731,8 +731,21 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '不要因为免批就扩大范围或提权。',
     parameters: {
       command: { type: 'string', required: true, description: '在沙箱内执行的命令原文（shell 语法）' },
-      port: { type: 'integer', required: true, description: '这条命令主要针对的端口（范围闸门据此记账）' },
-      target_selector: { type: 'string', required: true, description: '目标选择器（已授权范围内的目标）' },
+      port: {
+        type: 'integer',
+        description: '这条命令主要针对的端口（范围闸门据此记账）；`local_only` 时不需要',
+      },
+      target_selector: {
+        type: 'string',
+        description: '目标选择器（已授权范围内的目标）；`local_only` 时不需要',
+      },
+      local_only: {
+        type: 'boolean',
+        description:
+          '这条命令是**纯本地处理**（解析自己落盘的 .gnmap/JSON、校验交付物、比对两份清单……）时设为 true：' +
+          '容器**没有网**（`--network none`），不做范围裁决，账本记成 `local_processing` 且带 `network_contact: none`。' +
+          '**不要**拿它包装真正要打目标的命令——那种命令的类别、记账与范围裁决都不能省。',
+      },
       purpose: { type: 'string', required: true, description: '目的：为什么执行它、预期看到什么' },
       approval_id: {
         type: 'string',
@@ -753,19 +766,43 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       const workerSessionId = await workerSessionIdOf(deps, exec);
+      const local = args.local_only === true;
+      const targetSelector = args.target_selector ?? '';
+      const port = args.port ?? 0;
+      // 本地处理与目标动作走**两张不同的模板**：前者容器无网、不做范围裁决、账本单列；
+      // 后者必须有 target/port（范围闸门据此记账）。这条校验只能写在这里——
+      // schema 表达不了"某参数在另一个参数为真时必填"。
+      if (!local && (targetSelector === '' || args.port === undefined)) {
+        return toJson(asError({
+          status: 'blocked',
+          code: 'classification_rejected',
+          message:
+            'target_selector 与 port 必填——除非这条命令是**纯本地处理**（那种情况请传 local_only: true）。',
+          next_action:
+            '要么补上目标与端口（命令确实要打目标），要么改成 local_only: true（容器无网，只读挂载进来的文件）。',
+        }));
+      }
+      const commandB64 = Buffer.from(args.command, 'utf8').toString('base64');
       // 命令以 base64 传输：宿主拼出的是一条**单个 argv 字符串**并按空格切分，
       // 裸命令会被切散。编码在这里做（工具侧），所以 Agent 只管写命令原文。
-      const intent: ActionIntent = {
-        workerSessionId,
-        templateId: 'direct_command',
-        targetSelector: args.target_selector,
-        purpose: args.purpose,
-        params: {
-          port: args.port,
-          command_b64: Buffer.from(args.command, 'utf8').toString('base64'),
-        },
-        ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
-      };
+      const intent: ActionIntent = local
+        ? {
+            workerSessionId,
+            templateId: 'local_command',
+            // 本地模板的哨兵占位符取值：只进审计展示，不参与裁决（分发器的 `shell_exec` 只读 command_b64）。
+            targetSelector: targetSelector === '' ? 'local' : targetSelector,
+            purpose: args.purpose,
+            params: { command_b64: commandB64 },
+            ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
+          }
+        : {
+            workerSessionId,
+            templateId: 'direct_command',
+            targetSelector,
+            purpose: args.purpose,
+            params: { port, command_b64: commandB64 },
+            ...(args.approval_id === undefined ? {} : { approvalId: args.approval_id }),
+          };
       const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
       // 拒绝路径把契约错误直接交给模型（与 memory_read 的拒绝形状一致），
       // 不包在 {plan,result} 里——那会让「被拒绝」看起来像「执行完了」。
@@ -792,7 +829,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
           if (typeof stdout === 'string' && stdout.length > 0) {
             const written = writeEvidence(
               root,
-              evidenceRelPath({ targetSelector: args.target_selector, purpose: args.purpose, at: new Date() }),
+              evidenceRelPath({ targetSelector, purpose: args.purpose, at: new Date() }),
               stdout,
             );
             evidenceNote = written.ok ? `evidence: ${written.detail}` : `evidence: ${written.detail}`;

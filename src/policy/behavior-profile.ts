@@ -128,7 +128,7 @@ export const PROFILE_DEFAULTS: Readonly<Record<BehaviorProfile, {
   stealth: {
     detectionObjective: 'minimize_detection',
     pacing: { rate: 1, concurrency: 1, jitter: 0.5, burst: 1, retry: 1 },
-    enabled: ['passive_collection', 'active_probing'],
+    enabled: ['local_processing', 'passive_collection', 'active_probing'],
   },
   standard: {
     detectionObjective: 'balanced_coverage',
@@ -143,7 +143,7 @@ export const PROFILE_DEFAULTS: Readonly<Record<BehaviorProfile, {
   custom: {
     detectionObjective: 'minimize_detection',
     pacing: { rate: 1, concurrency: 1, jitter: 0.5, burst: 1, retry: 1 },
-    enabled: ['passive_collection', 'active_probing'],
+    enabled: ['local_processing', 'passive_collection', 'active_probing'],
   },
 });
 

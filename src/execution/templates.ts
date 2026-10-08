@@ -516,6 +516,45 @@ const DIRECT_COMMAND_SPEC: ActionTemplateSpec = {
 };
 
 /**
+ * **纯本地处理模板**（2026-10-08 操作者实测 P0 的落点）。
+ *
+ * 与 `DIRECT_COMMAND_SPEC` 的差别只有三处，但每一处都是必须的：
+ *   1. 类别 `local_processing`（不在 `PER_ACTION_APPROVAL_CLASSES` 里 ⇒ 免批；账本单列）；
+ *   2. **容器没有网**（宿主侧 `buildDockerArgs` 见该类别 ⇒ `--network none`）——
+ *      不是"记录里写 `network_contact: none`"，而是物理上没有网，声明与事实不可能不一致；
+ *   3. 只声明 `command_b64` 一个参数（`target`/`port` 都不存在）。
+ *
+ * `targetPlaceholder` 仍然要写：注册校验要求"命令必须且只能引用一次目标占位符"。
+ * 这里的 `{local}` 是**哨兵**——分发器的 `shell_exec` 只读 `command_b64`，多出来的参数被忽略，
+ * 因此哨兵取值（本地路径标签之类）只进审计展示，不参与任何裁决。
+ */
+const LOCAL_COMMAND_SPEC: ActionTemplateSpec = {
+  template: {
+    id: 'local_command',
+    actionClass: 'local_processing',
+    tool: 'shell_exec',
+    parameters: [
+      // 与自由命令同一条编码规则：宿主拼出的是单个 argv 字符串并按空格切分。
+      { name: 'command_b64', kind: 'string', pattern: '^[A-Za-z0-9+/]+={0,2}$' },
+    ],
+    targetPlaceholder: 'local',
+    // 本地处理多数是快命令；聚合解析可能慢，与自由命令同档。
+    timeoutMs: 300_000,
+    maxOutputBytes: 256 * 1024,
+  },
+  protocol: 'tcp',
+  portSource: { kind: 'none' },
+  carries: {
+    command_b64:
+      '要执行的本地命令（UTF-8 原文的 base64）；沙箱内以 bash -c 运行。**容器没有网**：' +
+      '只读挂载进来的文件（`/work` 与登记过的只读挂载）做解析、校验、统计、比对。' +
+      '要访问目标就别用这条——用 pentest_exec 或 pentest_recon。',
+  },
+  commandTemplate: 'shell_exec local={local} command_b64={command_b64}',
+  allowFreeForm: true,
+};
+
+/**
  * 默认模板集：**只有一张**直连命令模板。
  *
  * 曾经的 `http_read` / `tcp_connect` / `udp_probe` / `icmp_ping` / `dns_lookup` 五个「示例模板」
@@ -937,7 +976,12 @@ const VULN_TEMPLATES: readonly ActionTemplateSpec[] = [
   },
 ];
 
-const DEFAULT_TEMPLATE_SPECS: readonly ActionTemplateSpec[] = [DIRECT_COMMAND_SPEC, ...RECON_TEMPLATES, ...VULN_TEMPLATES];
+const DEFAULT_TEMPLATE_SPECS: readonly ActionTemplateSpec[] = [
+  DIRECT_COMMAND_SPEC,
+  LOCAL_COMMAND_SPEC,
+  ...RECON_TEMPLATES,
+  ...VULN_TEMPLATES,
+];
 
 
 

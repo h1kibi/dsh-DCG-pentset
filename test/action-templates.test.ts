@@ -101,9 +101,11 @@ describe('结构化动作模板族：注册表与类别', () => {
     }
   });
 
-  it('自由命令只允许 direct_command 一张（两族都没有偷开这个开关）', () => {
+  it('自由命令开关只给命令模板族两张（direct_command / local_command），结构化两族都没有偷开', () => {
     const freeForm = registry.list().filter((spec) => spec.allowFreeForm === true).map((spec) => spec.template.id);
-    assert.deepEqual(freeForm, ['direct_command']);
+    // 2026-10-08 加第二张：`local_command`（纯本地处理，容器无网）。它同样是"参数即任意命令文本"，
+    // 因此**必须**开这个开关；规则本身不变——结构化两族一张都不许开。
+    assert.deepEqual(freeForm, ['direct_command', 'local_command']);
   });
 });
 

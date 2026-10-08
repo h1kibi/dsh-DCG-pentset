@@ -27,6 +27,7 @@ import { PER_ACTION_APPROVAL_CLASSES, DEFAULT_DISABLED_CLASSES, normalizeActionC
 
 /** 类别 → 显示名。 */
 export const ACTION_CLASS_LABELS: Readonly<Record<ActionClass, string>> = Object.freeze({
+  local_processing: 'Local Processing',
   passive_collection: 'Passive Collection',
   active_probing: 'Active Probing',
   credentialed_access: 'Credentialed Access',
@@ -43,6 +44,7 @@ export const ACTION_CLASS_LABELS: Readonly<Record<ActionClass, string>> = Object
  * 这话是给**做放行决定的人**和**规划动作的模型**看的：只给名字时两边都在猜。
  */
 export const ACTION_CLASS_MEANINGS: Readonly<Record<ActionClass, string>> = Object.freeze({
+  local_processing: '不触碰目标：容器无网，只读挂载进来的文件做解析、校验与统计（jq / python3 / diff 之类）',
   passive_collection: '不触碰目标：只读公开源与第三方（whois / 证书透明日志 / DNS 查询）',
   active_probing: '主动探测目标：只读、低噪声（端口、指纹、TLS、HTTP、字典）',
   credentialed_access: '用凭据访问目标（凭据来自人类提供或既有成果）',

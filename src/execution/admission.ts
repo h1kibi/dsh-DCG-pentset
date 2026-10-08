@@ -532,6 +532,13 @@ export const scopeGate: AdmissionGate = {
   async check(state) {
     const binding = state.requireBinding();
     const spec = state.spec;
+    // **纯本地处理不做范围裁决**（2026-10-08 操作者实测 P0）：它没有目标可裁决——
+    // 容器无网（宿主侧 `--network none`），命令只读挂载进来的文件。放它进 `evaluateScope`
+    // 只会得到一条没有意义的 `scope_violation`，把"本地解析"记成"越界打目标"。
+    if (spec.template.actionClass === 'local_processing') {
+      state.resolveAddresses([]);
+      return pass();
+    }
     const port = portForScope(spec, state.params);
     const scope = await state.ports.policy.evaluateScope({
       engagementId: binding.engagementId,
@@ -600,6 +607,9 @@ export const leaseGate: AdmissionGate = {
 export const adjudicatedAddressesGate: AdmissionGate = {
   name: 'addresses_adjudicated',
   async check(state) {
+    // 本地处理没有目标 ⇒ 没有已裁决地址集合，也**不需要**（容器无网）。上面那道闸门已经
+    // 显式 resolve 成空集合，这里直接放过，不再去读 `state.scope`。
+    if (state.spec.template.actionClass === 'local_processing') return pass();
     const normalized = state.scope.normalized;
     const addresses =
       normalized.resolvedAddresses ?? (normalized.kind === 'ip' ? [normalized.host] : []);

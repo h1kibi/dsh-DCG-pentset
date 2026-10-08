@@ -247,7 +247,11 @@ export function buildDockerArgs(input: {
     '--rm',
     '--name', containerName,
     // ── 网络：只接入部署指定的那一张网络（本部署非 internal ⇒ 可出网）；不发布端口（入站不可达）──
-    '--network', config.internalNetwork,
+    // 例外：**纯本地处理**（模板 `local_command`）不接任何网络——`--network none` 是**事实**，
+    // 不是记录里的一句声明。这样"这条动作没碰目标"由内核保证，审计与实现不可能不一致。
+    ...(plan.templateId === 'local_command'
+      ? ['--network', 'none']
+      : ['--network', config.internalNetwork]),
     // ── 加固：与三者相关的限制全部显式声明 ──
     // NET_RAW 是放开后的**唯一**新增能力：真 SYN 扫描/原始套接字需要它。
     // 注意它只对 root 生效（见文件头第 2 条）——镜像里已不切非特权用户。

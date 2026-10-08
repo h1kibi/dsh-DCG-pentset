@@ -127,6 +127,7 @@ const RESOLUTION_LABELS: Readonly<Record<ApprovalResolution, string>> = {
  * 人工授权**——那才是人类在这一屏上要判断的东西。
  */
 const RISK_TIER_LABELS: Readonly<Record<ActionClass, string>> = {
+  local_processing: '最低：容器无网、不触碰目标，engagement 授权即可',
   passive_collection: '低：engagement 授权即可，通常不需逐次放行',
   active_probing: '中：阶段级放行，受速率、目标白名单与时间窗约束',
   credentialed_access: '中：需要凭据引用与人工放行',
@@ -139,6 +140,7 @@ const RISK_TIER_LABELS: Readonly<Record<ActionClass, string>> = {
 
 function riskTone(actionClass: ActionClass): Tone {
   switch (actionClass) {
+    case 'local_processing':
     case 'passive_collection':
       return 'neutral';
     case 'active_probing':

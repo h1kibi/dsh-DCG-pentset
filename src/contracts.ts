@@ -274,6 +274,16 @@ export function describeError(error: unknown): string {
  *   3. 写侧只写新值，且旧值不得出现在任何下拉框/提示词/新文档里。
  */
 export const ACTION_CLASSES = [
+  /**
+   * **纯本地处理**：容器没有网（`docker run --network none`），命令只读挂载进来的文件、
+   * 做解析/校验/统计，**不触碰任何目标**。账本上单列，事件里带 `network_contact: none`。
+   *
+   * 为什么必须单列（2026-10-08 操作者实测 P0）：自由命令通道要求 `target_selector`+`port`，
+   * 于是纯本地命令（`ls` / `python3` 解析 .gnmap / `cp` 归位台账）被迫挂一个假目标 ⇒
+   * 账本里全记成 `active_probing` ⇒ 免批之后账本是**唯一**记录，而它分不清"我解析了自己的文件"
+   * 与"我真往 10.25.1.20:443 发了包"——出争议时是误导性证据。
+   */
+  'local_processing',
   'passive_collection',
   'active_probing',
   'credentialed_access',

@@ -489,7 +489,7 @@ async function admitApproved(
 
 // ───────────────────────────── 模板注册表 ─────────────────────────────
 
-test('出厂注册表：一张直连命令 + 两族结构化模板（侦察 / 核验）', () => {
+test('出厂注册表：两张直连命令（自由命令 / 本地处理）+ 两族结构化模板（侦察 / 核验）', () => {
   const registry = createRegistry(DEFAULT_TEMPLATES);
   assert.ok(registry.get('direct_command'), '直连命令：逐条人批的那条通路');
   // 旧示例模板已删：镜像里有真工具（curl/nmap/nc/dig…），Agent 直接写命令，不必先猜模板名。
@@ -498,10 +498,11 @@ test('出厂注册表：一张直连命令 + 两族结构化模板（侦察 / �
   }
   assert.equal(registry.get('sh_c'), undefined);
   // 2026-10-06 新增两族结构化模板：12 张 `recon_*`（情报收集）+ 4 张 `vuln_*`（漏洞分析），
-  // 类别都是 passive_collection/active_probing（不触发逐次放行）+ 那张直连命令 = 17。
+  // 类别都是 passive_collection/active_probing（不触发逐次放行）+ 两张直连命令
+  // （`direct_command` 自由命令 / `local_command` 纯本地处理）= 18。
   // 数量断言在这里是**刻意的**：模板集变化必须同时改这一行与 test/action-templates.test.ts 的目录断言，
   // 逼人解释新增了什么、以及它落在哪个类别上（类别决定要不要人批）。
-  assert.equal(registry.list().length, 17);
+  assert.equal(registry.list().length, 18);
 });
 
 test('注册表拒绝重复模板 id', () => {
