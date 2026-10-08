@@ -501,7 +501,7 @@ export function RunControls(props: RunControlsProps): ReactNode {
 
       {/* ── 运行期动作 ── */}
       <div className="pentest-runcontrols__actions">
-        <div className="pentest-runcontrols__zone pentest-runcontrols__zone--run">
+        <div className="pentest-runcontrols__zone">
           <p className="pentest-runcontrols__zone-title">运行期</p>
           <div className="pentest-runcontrols__row">
         <Button

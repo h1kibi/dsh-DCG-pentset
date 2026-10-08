@@ -254,7 +254,6 @@ export const SHELL_CSS = `
 .pentest-runcontrols{text-align:left}
 /* 行内元素**不伸缩**：否则按钮被拉成等宽条，一行里只剩几个空荡的长方块。 */
 .pentest-runcontrols__row>*{flex:0 0 auto}
-.pentest-runcontrols__zone--run{border-color:var(--pt-line-strong)}
 .pentest-runcontrols__zone{display:flex;flex-direction:column;gap:6px;border:1px solid var(--pt-line);padding:9px 10px}
 .pentest-runcontrols__zone-title{margin:0;font:500 10.5px/1 var(--pt-font-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--pt-fg-dim)}
 .pentest-runcontrols__zone--danger{border-color:var(--pt-danger-line);background:var(--pt-danger-wash)}

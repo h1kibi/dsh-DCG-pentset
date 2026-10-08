@@ -123,7 +123,7 @@ LABEL org.opencontainers.image.title="dsh-pentest sandbox tools" \
 # 不用 ENV——ENV 会带进运行镜像，改变容器里每条命令的环境。
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       # 侦察与资产测绘
-      nmap masscan dnsutils whois fping traceroute mtr-tiny arp-scan nbtscan whatweb dnsenum iproute2 \
+      nmap masscan dnsutils whois fping iputils-ping traceroute mtr-tiny arp-scan nbtscan whatweb dnsenum iproute2 \
       # Web 内容与核验
       ffuf gobuster dirb wfuzz sslscan testssl.sh \
       # 凭据与杂凑（**默认禁止爆破**，见 skills/exploit-auth-testing）
