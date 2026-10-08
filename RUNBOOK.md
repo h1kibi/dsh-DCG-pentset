@@ -980,7 +980,7 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 | 项 | 结果 |
 |---|---|
 | 宿主从哪来 | 本仓库的 `node_modules/@deepseek-ai/dsh`（`start-personal.mjs` 直接 spawn 它）⇒ 升依赖就等于升宿主 |
-| 本插件在 0.2.0-rc.2 上 | `typecheck` / `lint` / `build` 全绿，**1712 项测试全过**（含客户端产物与 typert 端点面） |
+| 本插件在 0.2.0-rc.2 上 | `typecheck` / `lint` / `build` 全绿，**1787 项测试全过**（含客户端产物与 typert 端点面） |
 | 启动预检 | 通过（Docker、网络、代理、镜像摘要、个人库；迁移已是最新 26 项），本插件的启动自检也照常打印 |
 | **阻塞 1：生态插件** | `dsh-budget` / `dsh-permission-rules` / `dsh-defend` / `dsh-mask` / `dsh-observe` 的**最新版本**仍把 peer 钉在 `@deepseek-ai/dsh-llm: >=0.1.2-rc.1 <0.2.0`（**明确排除 0.2**）。实测启动直接失败：`startup failed: 2 required plugins did not activate`，其中 `typert-loader` 报 `dsh-budget#budget/status parameter codec has no create() factory`（0.2 的 typert 校验更严，旧版清单不合规） |
 | 阻塞 2（环境，与版本无关） | 起不来时先查端口：`PENTEST_PORT=3092` → `listen EACCES 127.0.0.1:3092`；**3090 同样不可绑定**（本机落在 Windows 保留段里——`netstat` 显示"空闲"不代表能 bind）。**已修**：`start-personal.mjs` 现在先探测端口，绑不上就退回 `0`（系统分配）并打印提醒——症状从"60 秒后说没拿到可用页面"变成一行明确的提醒 |
