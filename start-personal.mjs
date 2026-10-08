@@ -141,7 +141,14 @@ function checkNetwork(network, proxy, notes = [], allowEgress = false) {
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry !== '');
-  const undeclared = memberNames.filter((name) => name !== proxy && !declaredTargets.includes(name));
+  // 沙箱**自己**的一次性容器也会出现在这张网里：名字是 `pentest-<幂等键前 24 位>`
+  // （`docker-sandbox.ts` 的 `containerName`）。它们既不是目标也不该被声明成目标——
+  // 2026-10-08 实测：一次实战动作在跑，重启就被自己家的临时容器拦死（fail-closed 误伤）。
+  // 用**精确形状**而不是 `pentest-` 前缀：靶场容器本来就叫 `pentest-target-http` / `pentest-agent`。
+  const isSandboxRun = (name) => /^pentest-[0-9a-f]{24}$/.test(name);
+  const undeclared = memberNames.filter(
+    (name) => name !== proxy && !isSandboxRun(name) && !declaredTargets.includes(name),
+  );
   if (undeclared.length > 0) {
     return (
       `网络 ${network} 上的成员未声明为授权目标：${undeclared.join(', ')}（当前成员：${memberNames.join(', ')}）。` +
