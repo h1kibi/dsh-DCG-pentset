@@ -110,7 +110,8 @@ cmd_proxy() {
 
 cmd_up() {
   require_egress_allow
-  docker build -t "${IMAGE_REPO}:${IMAGE_TAG}" docker/tools
+  # 字典源可覆盖（见 Dockerfile 的 `ARG SECLISTS_BASE` 说明）：留空即用镜像里的默认（jsDelivr）。
+  docker build ${SECLISTS_BASE:+--build-arg "SECLISTS_BASE=${SECLISTS_BASE}"} -t "${IMAGE_REPO}:${IMAGE_TAG}" docker/tools
 
   if ! docker network inspect "${NETWORK}" >/dev/null 2>&1; then
     # internal: true ——容器没有默认路由，无法直连外网；唯一可达的是同网内的代理容器。

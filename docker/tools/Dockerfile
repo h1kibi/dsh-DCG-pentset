@@ -129,7 +129,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       # 凭据与杂凑（**默认禁止爆破**，见 skills/exploit-auth-testing）
       hydra john \
       # AD / Windows 服务
-      smbclient smbmap samba-common-bin ldap-utils snmp \
+      smbclient smbmap samba-common-bin ldap-utils snmp nfs-common \
       # 隧道与转发
       socat proxychains4 sshpass openssh-client \
       # 数据库客户端（2026-10-07 加：④ 报告实测"容器里没有 psql/redis-cli，只能手搓协议"）
@@ -230,8 +230,12 @@ COPY --from=gobuild /go/bin/ /usr/local/bin/
 
 # 字典：放进镜像，沙箱里直接用。走 jsDelivr（逐字镜像 GitHub 内容），**钉到 tag** 而非 master——
 # master 会让同一次构建在不同时间拿到不同字典（供应链与复现性都受害）。
+# 字典源**可换**（`--build-arg SECLISTS_BASE=…`）。2026-10-09 实测：某些网络下**容器内** DNS
+# 只解析出 IPv6 而容器 IPv6 不可达 ⇒ jsDelivr 必失败（宿主 curl 却正常，极易误判成"抖动"）。
+# 换一个可达的镜像源即可（内容仍是钉住的 tag，不用 master）。默认保持原样。
+ARG SECLISTS_BASE="https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@2023.4"
 RUN mkdir -p /usr/share/wordlists && cd /usr/share/wordlists && \
-    SECLISTS="https://cdn.jsdelivr.net/gh/danielmiessler/SecLists@2023.4"; \
+    SECLISTS="${SECLISTS_BASE}"; \
     fetch() { curl -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 -o "$1" "$2"; }; \
     fetch common.txt               "$SECLISTS/Discovery/Web-Content/common.txt"; \
     fetch raft-small-directories.txt "$SECLISTS/Discovery/Web-Content/raft-small-directories.txt"; \
