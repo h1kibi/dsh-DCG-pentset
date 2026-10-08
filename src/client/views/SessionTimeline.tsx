@@ -31,6 +31,7 @@ import type { TimelineFilter } from '../timeline.ts';
 import {
   formatTimestamp,
   phaseLabel,
+  sessionStatusLabel,
   sessionStatusTone,
   renderInlineMarkdown,
   stripInlineMarkdown,
@@ -183,7 +184,9 @@ function SessionRow(props: {
       >
         <span className="pentest-timeline__head">
           <Badge text={phaseLabel(session.phase)} tone={sessionStatusTone(session.status)} />
-          <span className="pentest-timeline__status">{session.status}</span>
+          {/* 会话状态用**中文标签**（`format.ts` 是唯一出处）：同一个人在等待态，
+              在 AgentTrace 里是"等待人工"、在这里不该是机器枚举 `waiting_human`。 */}
+          <span className="pentest-timeline__status">{sessionStatusLabel(session.status)}</span>
           <span className="pentest-timeline__time">{formatTimestamp(session.createdAt, props.now)}</span>
           {session.attempt > 1 ? <Badge text={`第 ${String(session.attempt)} 次执行`} tone="attention" /> : null}
           {session.iteration > 1 ? <Badge text={`第 ${String(session.iteration)} 轮`} tone="neutral" /> : null}
