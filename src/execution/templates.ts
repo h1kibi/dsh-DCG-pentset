@@ -65,6 +65,16 @@ export interface ActionTemplateSpec {
    * 因而本部署**每条命令都要人类逐次放行**。除它以外的模板一律不许打开（评审与测试都盯着这一条）。
    */
   readonly allowFreeForm?: boolean;
+  /**
+   * **允许选择器是一个网段**（默认 false）。只有"一次动作能扫一段"的模板才开它——
+   * 例如 `recon_port_scan`：它下发的是**一条** nmap（`-iL` 式的地址列表或 CIDR 字面量），
+   * 因此一个 `/16` 可以从"283 台逐 IP"变成一次批扫（2026-10-08 操作者实测：
+   * 全段普查被拆成逐 IP，扫描预算大头花在这里）。
+   *
+   * 开它的模板要**自己保证**：宿主会逐地址裁决（一台越界即整条拒绝）、把裁决后的地址集合
+   * 注入容器（`PENTEST_RESOLVED_ADDRESSES`），并且执行侧只打那份集合。授权一点没放宽。
+   */
+  readonly allowTargetRange?: boolean;
   /** 每个参数「可携带什么」的显式声明；键集合必须与 parameters 完全一致。 */
   readonly carries: Readonly<Record<string, string>>;
   /**
@@ -600,6 +610,9 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
     protocol: 'tcp',
     // 多端口扫描没有单一端口维度：如实声明 none（`carries` 里写清实际可达范围）。
     portSource: { kind: 'none' },
+    // 选择器可以是网段：本模板下发的是一条 nmap，宿主逐地址裁决后把地址集合注入容器。
+    // 这是"全段普查"从 283 次单台变成一次批扫的落点（见 `allowTargetRange` 的说明）。
+    allowTargetRange: true,
     carries: {
       scope: '扫描档位：top100 / top1000 / common_services（约 30 个常见服务端口）/ full_tcp（全 65535，需人类显式选择）',
       ports: 'none 表示按 scope；也可以给显式表达式（如 80,443,8000-8100，最多 64 段）——此时 scope 被忽略',

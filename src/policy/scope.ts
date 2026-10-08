@@ -369,6 +369,44 @@ export function normalizeCidr(text: string): Result<NormalizedCidr> {
   return ok({ family: 6, network: formatIpv6(maskIpv6(groups, prefix)), prefix });
 }
 
+/**
+ * 把一个 IPv4 网段展开成地址列表（**供范围批次用**）。
+ *
+ * 为什么设上限：宿主会逐地址裁决这份列表，并把它注入容器（`PENTEST_RESOLVED_ADDRESSES`）——
+ * `/16` = 65536 条既撑爆环境变量，也让"逐地址裁决"失去意义（那本就是一次 nmap 的输入）。
+ * 超过上限**如实拒绝**并给出可行的下一步（拆成更小的段），绝不静默截断——静默截断等于
+ * 悄悄少扫一段，那正是这套工具最贵的错误形态。
+ */
+export function rangeAddressesOf(
+  cidr: NormalizedCidr,
+  maxAddresses = 4096,
+): Result<readonly string[]> {
+  if (cidr.family !== 4) {
+    return fail(
+      'malformed_target',
+      `批次选择器目前只支持 IPv4 网段（${cidr.network}/${String(cidr.prefix)} 是 IPv6）`,
+    );
+  }
+  const octets = cidr.network.split('.').map((part) => Number(part));
+  const base =
+    (((octets[0] ?? 0) << 24) | ((octets[1] ?? 0) << 16) | ((octets[2] ?? 0) << 8) | (octets[3] ?? 0)) >>> 0;
+  const count = 2 ** (32 - cidr.prefix);
+  if (count > maxAddresses) {
+    return fail(
+      'malformed_target',
+      `网段 ${cidr.network}/${String(cidr.prefix)} 有 ${String(count)} 个地址，超过单次批次的 ${String(maxAddresses)} 上限：拆成更小的段（例如 /20）分几次跑`,
+    );
+  }
+  const out: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const value = (base + i) >>> 0;
+    out.push(
+      `${String((value >>> 24) & 255)}.${String((value >>> 16) & 255)}.${String((value >>> 8) & 255)}.${String(value & 255)}`,
+    );
+  }
+  return ok(out);
+}
+
 function cidrContains(cidr: NormalizedCidr, host: NormalizedHost): boolean {
   if (cidr.family === 4) {
     if (host.v4) {
