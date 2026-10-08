@@ -2148,6 +2148,51 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.equal(unknown.stateVersion, 0, '读不到绑定时版本给 0（界面此时不画任何东西）');
   });
 
+  test('会话列表带上最新未取代报告的要点：报告在界面上有出口（外部审计 P0-2）', async () => {
+    engagementId = await newEngagement();
+    const started = await service.startWorker({
+      engagementId,
+      operatorId: 'op',
+      reason: '开始情报收集',
+      expectedStateVersion: 0,
+      phase: 'intelligence-gathering',
+      taskPrompt: '收集目标资产',
+      skillIds: [],
+      toolAllow: ['pentest_exec'],
+    });
+
+    // 没交过报告时是 null，不是空对象：界面要能区分"没交过"与"交了但摘要是空的"。
+    const before = await service.listWorkerSessions({ engagementId });
+    assert.equal(
+      before.length,
+      1,
+      `这个全新作业里冒出了 ${String(before.length)} 个会话：`
+        + JSON.stringify(before.map((s) => [s.id, s.phase, s.status, s.dshSessionId])),
+    );
+    assert.equal(before[0]!.latestReport, null);
+
+    // 交两份：列表给**最新未取代**的那份。两条行用不同的 `attempt`——同一 `(会话, attempt)`
+    // 上只允许一条 `superseded_by is null`（部分唯一索引），而这里是自动提交，没有延迟外键
+    // 可以颠倒"先让位、后插入"的顺序。
+    const first = randomUUID();
+    const second = randomUUID();
+    const insertReport = `insert into pentest.worker_reports
+         (id, engagement_id, worker_session_id, attempt, iteration, status, objective, summary,
+          payload_json, content_hash, supersedes_id)
+       values ($1::uuid, $2::uuid, $3::uuid, $4::int, 1, 'report_ready', $5, $6, '{}'::jsonb, $7, $8)`;
+    await pool.query(insertReport, [first, engagementId, started.workerSessionId, 1, '第一轮', '第一份报告', 'h1', null]);
+    await pool.query(insertReport, [second, engagementId, started.workerSessionId, 2, '第二轮', '第二份报告（取代前一份）', 'h2', first]);
+    await pool.query(
+      `update pentest.worker_reports set superseded_by = $2::uuid where id = $1::uuid`,
+      [first, second],
+    );
+
+    const after = await service.listWorkerSessions({ engagementId });
+    assert.equal(after[0]!.latestReport?.id, second, '被取代的那份不得当成要点给出去');
+    assert.equal(after[0]!.latestReport?.summary, '第二份报告（取代前一份）');
+    assert.equal(after[0]!.latestReport?.attempt, 2, '要点里的执行次数取自报告行本身');
+  });
+
   test('getIntakeStatus：查询失败必须向上抛，不得伪装成「未绑定 / 0 待办」（P16）', async () => {
     // 此前这两条读路径各带 `.catch(() => ({ rows: [] }))`：DB 错误被折叠成
     // 「不属于本插件」或「0 个待放行」——与真实事实的含义相反（人会以为没有待办）。

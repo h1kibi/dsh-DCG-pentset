@@ -1262,6 +1262,23 @@ export interface EngagementSummary {
 }
 
 /**
+ * 一份任务报告的要点（外部审计 P0-2）。
+ *
+ * Agent 交的报告正文一直只活在会话里与"交接草稿"里，控制台没有任何出口——人被告知
+ * "报告已提交"，却在界面上看不到它。这里把**最新一份未取代**报告的要点随会话列表带出去，
+ * 于是时间轴、控制台列表、报告审阅同时拿到同一份事实。
+ */
+export interface WorkerReportDigest {
+  readonly id: string;
+  /** 同阶段内的第几次执行（与 `WorkerSessionSummary.attempt` 同口径）。 */
+  readonly attempt: number;
+  /** `worker_reports.status` 是自由文本列，界面只做展示，不在客户端窄化。 */
+  readonly status: string;
+  readonly summary: string;
+  readonly createdAt: string;
+}
+
+/**
  * 一个 Worker 会话的摘要（阶段轨道、时间轴、审计追溯共用）。
  *
  * 带全部历史关联指针而不是只给当前状态：阶段轨道要按阶段聚合、时间轴要画重做链
@@ -1286,6 +1303,13 @@ export interface WorkerSessionSummary {
   readonly statusNote: string | null;
   readonly statusNoteSource: 'agent' | 'derived' | null;
   readonly statusNoteAt: string | null;
+  /**
+   * 最新一份**未取代**的任务报告要点；没交过报告时 `null`（不是空对象：界面要能区分
+   * "没交过"与"交了但摘要是空的"）。
+   *
+   * 可选是因为构造点很多（测试夹具、旧快照）；**服务端总是给这个字段**。
+   */
+  readonly latestReport?: WorkerReportDigest | null;
   readonly startedAt: string | null;
   readonly endedAt: string | null;
   readonly createdAt: string;

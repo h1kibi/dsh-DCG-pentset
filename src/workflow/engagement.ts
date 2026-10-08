@@ -720,12 +720,30 @@ export class EngagementFlow {
       started_at: string | null;
       ended_at: string | null;
       created_at: string;
+      report_id: string | null;
+      report_attempt: number | string | null;
+      report_status: string | null;
+      report_summary: string | null;
+      report_created_at: string | null;
     }>(
+      // 报告要点用 `left join lateral` 取每会话**最新未取代**的一份（外部审计 P0-2）：
+      // 一次查询拿全，避免界面为了显示一行要点再打 N 发。改名必须在**连接内部**完成——
+      // 只在外层 `as` 改不动作用域：连接暴露的列名仍叫 `id`/`status`/`created_at`，
+      // 与外层同名列撞成 `column reference "id" is ambiguous`（实测 42702）。
       `select id, dsh_session_id, phase, status, session_kind, attempt, iteration, scope_version,
               previous_agent_session_id, retry_of_session_id, transition_id,
               status_note, status_note_source, status_note_at,
-              started_at, ended_at, created_at
-         from pentest.worker_sessions
+              started_at, ended_at, created_at,
+              report_id, report_attempt, report_status, report_summary, report_created_at
+         from pentest.worker_sessions ws
+         left join lateral (
+           select r.id as report_id, r.attempt as report_attempt, r.status as report_status,
+                  r.summary as report_summary, r.created_at as report_created_at
+             from pentest.worker_reports r
+            where r.worker_session_id = ws.id and r.superseded_by is null
+            order by r.created_at desc, r.id desc
+            limit 1
+         ) report on true
         where engagement_id = $1::uuid
           and ($2::text[] is null or phase = any($2::text[]))
         order by created_at
@@ -753,6 +771,15 @@ export class EngagementFlow {
       statusNoteSource: row.status_note_source === 'agent' ? 'agent'
         : row.status_note_source === 'derived' ? 'derived' : null,
       statusNoteAt: row.status_note_at,
+      latestReport: row.report_id === null
+        ? null
+        : {
+            id: row.report_id,
+            attempt: toInt(row.report_attempt, 'report_attempt'),
+            status: row.report_status ?? '',
+            summary: row.report_summary ?? '',
+            createdAt: row.report_created_at ?? row.created_at,
+          },
       startedAt: row.started_at,
       endedAt: row.ended_at,
       createdAt: row.created_at,

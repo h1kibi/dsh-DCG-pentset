@@ -202,6 +202,19 @@ function SessionRow(props: {
           </span>
         )}
 
+        {/* Agent 交的报告（外部审计 P0-2）：此前它只在"交接草稿"里露过面，人在时间轴上
+            只看到一行被截断的便签，于是"报告已提交"在界面上没有任何落点。这里给出报告号与摘要，
+            全文（悬停可见）走 title——同一份事实由 listWorkerSessions 一次带出。 */}
+        {session.latestReport === null || session.latestReport === undefined ? null : (
+          <span
+            className="pentest-timeline__note"
+            title={stripInlineMarkdown(session.latestReport.summary)}
+          >
+            {`报告 #${String(session.latestReport.attempt)}：`}
+            {renderInlineMarkdown(truncate(stripInlineMarkdown(session.latestReport.summary), props.noteMaxChars))}
+          </span>
+        )}
+
         {/*
           孤儿与会话来源必须显示——这正是 §15.2「不隐藏、不静默清理」的落点。
           未收尾的会话很可能意味着目标上留下了未清理的东西。
