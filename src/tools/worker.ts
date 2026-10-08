@@ -743,7 +743,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         description:
           '设为 true 时，服务端把这条命令的 stdout **原文**写进会话工作目录（`/work/evidence/<目标>/<UTC时间>-<用途>.txt`），' +
           '返回值里给出一行 `evidence: <相对路径>`。**建议凡是产出证据的命令都开**：容器是一次性的，' +
-          '不开就只能靠你自己在命令里 tee（忘一条那条原文就永久没了）。它只是**额外落盘**，不改命令本身。',
+          '不开就只能靠你自己在命令里 tee（忘一条那条原文就永久没了）。它只是**额外落盘**，不改命令本身。' +
+          '**超时/中止时也落盘**（写已捕获的部分），此时返回值带 `partial_output: true`——' +
+          '那半截输出往往是唯一线索，别丢掉。',
       },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
@@ -770,13 +772,23 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       //
       // 证据落盘（2026-10-08 实地记录 §3.3）：**执行完之后**由宿主侧写文件，不依赖模型记得 `tee`。
       // 失败只回一行说明：一次**已经执行完**的动作不该因为写盘失败被报成失败（那会诱发重发＝对目标再打一次）。
+      //
+      // **为什么条件不是 `kind === 'executed'`**（2026-10-08 操作者实测 P0-2）：容器是一次性的，
+      // 超时/中止时 `kind` 不是 `executed`，于是恰恰在**最需要那半截输出**的场景下不落盘——
+      // 一条跑了 289 秒的命令，前 288 秒的产出全部不可回收，人只能重跑（等于对目标再打一遍）。
+      // 宿主侧的捕获器本来就把已读到的 stdout 保留在 `mapOutcome` 的返回里（`timed_out`/`cancelled`
+      // 两个分支都带 `stdout`），所以这里只需把落盘条件放宽到"有结果就落"。
       let evidenceNote: string | null = null;
-      if (args.save_stdout_as_evidence === true && outcome.kind === 'executed') {
+      // 先收窄再取 result：`blocked` 变体没有 `result` 字段（类型系统盯着这一点）。
+      const executed = outcome.kind === 'blocked' ? null : outcome;
+      const resultView = executed?.result as { readonly stdout?: unknown; readonly status?: unknown } | null;
+      const partial = resultView?.status === 'timed_out' || resultView?.status === 'cancelled';
+      if (args.save_stdout_as_evidence === true && outcome.kind !== 'blocked') {
         const root = deps.evidenceRoot;
         if (root === undefined) {
           evidenceNote = 'evidence: 未挂载工作目录，无法落盘（见 pentest_workdir 的 no_roots）';
         } else {
-          const stdout = (outcome.result as { readonly stdout?: unknown } | null)?.stdout;
+          const stdout = resultView?.stdout;
           if (typeof stdout === 'string' && stdout.length > 0) {
             const written = writeEvidence(
               root,
@@ -784,6 +796,8 @@ export function createWorkerTools(deps: WorkerToolDeps) {
               stdout,
             );
             evidenceNote = written.ok ? `evidence: ${written.detail}` : `evidence: ${written.detail}`;
+          } else if (partial) {
+            evidenceNote = 'evidence: 本次没有捕获到任何 stdout（命令在产出前就被终止）';
           }
         }
       }
@@ -793,6 +807,8 @@ export function createWorkerTools(deps: WorkerToolDeps) {
           : {
               plan: outcome.plan,
               result: outcome.result,
+              // 超时/中止时明确标注"这是部分输出"：消费方不该把它当完整结果（§10.3 同一条纪律）。
+              ...(partial ? { partial_output: true } : {}),
               ...(evidenceNote === null ? {} : { evidence: evidenceNote.replace(/^evidence: /, '') }),
               ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
             },
