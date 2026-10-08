@@ -417,6 +417,8 @@ export class EngagementFlow {
         archived: input.archived,
       });
     }, input.engagementId);
+    // 回读用**全部五个运行标记**（`statuses` 是运行标记域，不是主状态域——五者即"不过滤"）。
+    // 排序 `updated_at` 倒序且归档刚更新过它，因此目标必在默认 limit 的第一页。
     const listed = await this.listEngagements({ operatorId: input.operatorId, statuses: ['running', 'paused', 'blocked', 'aborted', 'failed'], includeArchived: true });
     const found = listed.find((entry) => entry.id === input.engagementId);
     if (found === undefined) {

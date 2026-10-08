@@ -2205,6 +2205,18 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     );
   });
 
+  test('归档：ready 状态的作业也能归档并读回（撤销归档同样）', async () => {
+    // 归档的**事务先提交**、之后才回读摘要：这一步不许因为"读不回"而报错——
+    // 那会让人以为归档失败，再点一次却收到"已经是归档状态"（同一件事两条错）。
+    const id = await newEngagement();
+    const archived = await service.archiveEngagement({ engagementId: id, operatorId: 'op', archived: true });
+    assert.notEqual(archived.archivedAt, null, 'ready 状态的作业归档后必须能读回摘要');
+    const listed = await service.listEngagements({ operatorId: 'op', includeArchived: true });
+    assert.ok(listed.some((entry) => entry.id === id), '归档后仍读得到（只是默认视图隐藏）');
+    const unarchived = await service.archiveEngagement({ engagementId: id, operatorId: 'op', archived: false });
+    assert.equal(unarchived.archivedAt, null, '撤销归档同样要读得回');
+  });
+
   test('getIntakeStatus：查询失败必须向上抛，不得伪装成「未绑定 / 0 待办」（P16）', async () => {
     // 此前这两条读路径各带 `.catch(() => ({ rows: [] }))`：DB 错误被折叠成
     // 「不属于本插件」或「0 个待放行」——与真实事实的含义相反（人会以为没有待办）。
