@@ -640,6 +640,13 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
   /** 待放行的证据行（`null` = 读不到；空数组 = 确定没有）。 */
   const [approvals, setApprovals] = useState<readonly ApprovalItem[] | null>(null);
   /**
+   * 待放行条目**读失败**（`#fetch` 把 `!ok` 折成 null，与"确定没有"无法在值上区分）。
+   *
+   * 没有它就会出现屏幕上自相矛盾：上面写着「待放行 N 条」，下面一条都不画（组件对空数组
+   * `return null`）——人被引向"没有待放行"这个错误结论。读失败必须**说出来**。
+   */
+  const [approvalsFailed, setApprovalsFailed] = useState(false);
+  /**
    * 作业运行快照（主状态 / 当前阶段 / 当前活动会话）。
    *
    * 只在**没有待办**时才去读：那时唯一要回答的问题就是「Agent 在哪、在做什么」。
@@ -731,10 +738,15 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
           }
           if (next === null || !next.hasApprovals) {
             setApprovals(null);
+            setApprovalsFailed(false);
             return;
           }
           const details = await controller.approvalsFor(next.engagementId).catch(() => null);
-          if (!cancelled) setApprovals(details === null ? null : details.map(approvalItemOf));
+          if (!cancelled) {
+            setApprovals(details === null ? null : details.map(approvalItemOf));
+            // `hasApprovals` 已知为真 ⇒ 这里拿到 null 只可能是**读失败**，不是"确实没有"。
+            setApprovalsFailed(details === null);
+          }
         })
         .catch((cause: unknown) => {
           if (!cancelled) {
@@ -833,6 +845,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             ? await controller.approvalsFor(next.engagementId).catch(() => null)
             : null;
         setApprovals(details === null ? null : details.map(approvalItemOf));
+        setApprovalsFailed(next !== null && next.hasApprovals && details === null);
         setBusyApprovalId(null);
       })
       .catch((cause: unknown) => {
@@ -878,6 +891,19 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
       onOpenConsole={props.onOpenConsole}
     />
   );
+
+  if (approvalsFailed) {
+    // 读不到 ≠ 没有：上面那栏写着「待放行 N 条」，这里必须说清楚"是读不到"，
+    // 否则人会把空白当成"没有待办"（本仓最忌讳的那种静默）。
+    return (
+      <div className="pentest-chat-card">
+        <p>
+          {`待放行的 ${String(facts.approvalCount)} 条证据**读不到**（控制台调用失败或超时）——`
+            + '这不是"没有待放行"。稍后会随状态轮询自动重试；也可以直接到控制台「放行队列」处理。'}
+        </p>
+      </div>
+    );
+  }
 
   if (facts.proposal === null) {
     // 有放行待办但条目读不到（或还没读回来）：退回入口卡片——**不能**画成「没有待办」。
