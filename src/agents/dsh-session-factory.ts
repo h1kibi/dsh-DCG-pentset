@@ -174,6 +174,12 @@ export interface DshSessionFactoryDeps {
    */
   readonly sandboxMounts?: readonly SandboxMount[];
   /**
+   * **按会话取挂载根**（2026-10-08）：与沙箱 argv 用的是**同一个解析器**（`compose` 的
+   * `sessionCwdOf`），因此简报说的就是实况。给了它就**取代** `sandboxMounts` 的显示值
+   * （配置项只作回退）；这让"简报 ↔ argv"这对同源要求从注释约定变成代码事实。
+   */
+  readonly mountRootOf?: (dshSessionId: string) => string | undefined;
+  /**
    * 在 agent 作用域里挂载预设（由装配层注入）。
    *
    * ── 为什么是函数而不是预设 id ──
@@ -261,8 +267,19 @@ interface ToolRuntimeView {
  */
 export class DshSessionFactory implements SessionFactory {
   readonly #ctx: Context;
+  /**
+   * 简报里要写的挂载：**与沙箱 argv 同源** —— 有该会话的 cwd 就写它（落 `/work`），否则退回
+   * 配置里的 `sandboxMounts`。两者不同源的症状极难归因：模型照简报往 `/work/xxx` 写，
+   * 而容器里挂的是另一个目录 ⇒ `No such file or directory`（2026-10-08 起由代码保证同源）。
+   */
+  #briefMounts(dshSessionId: string): readonly SandboxMount[] {
+    const root = this.#mountRootOf?.(dshSessionId);
+    return root === undefined ? this.#sandboxMounts : [{ hostPath: root, containerPath: '/work' }];
+  }
+
   readonly #cwd: string | undefined;
   readonly #sandboxMounts: readonly SandboxMount[];
+  readonly #mountRootOf: ((dshSessionId: string) => string | undefined) | undefined;
   readonly #mountPreset: ((agentCtx: unknown) => Promise<void>) | undefined;
   readonly #presetId: string | undefined;
   readonly #live = new Map<string, LiveSession>();
@@ -272,6 +289,7 @@ export class DshSessionFactory implements SessionFactory {
     this.#ctx = ctx;
     this.#cwd = deps.cwd;
     this.#sandboxMounts = deps.sandboxMounts ?? [];
+    this.#mountRootOf = deps.mountRootOf;
     this.#mountPreset = deps.mountPreset;
     this.#presetId = deps.presetId;
   }
@@ -329,7 +347,7 @@ export class DshSessionFactory implements SessionFactory {
               ...input,
               toolAllow: this.#toolAllowWithPresetFacts(input.toolAllow),
             },
-            this.#sandboxMounts,
+            this.#briefMounts(input.dshSessionId),
           );
         },
       });

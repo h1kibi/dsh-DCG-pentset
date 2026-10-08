@@ -554,21 +554,26 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
           await (mount as (c: unknown, id: string) => Promise<unknown>).call(service, agentCtx, presetId);
         };
   const runtimeBudget = runtime.dshBudget ?? budgetPortOf(ctx);
+  // 按会话区分工作目录（2026-10-08）：优先用**宿主的会话头 cwd**（"我在哪个目录开会话"），
+  // 取不到再退回 profile 的 `runtime.sessionCwd`（会话工厂本来就按这个优先级用 cwd ✓）。
+  // **同一个解析器喂两处**：沙箱 argv（挂哪个目录）与简报（说哪个目录）——不同源就会变成
+  // "模型以为 `/work` 是 A、实际挂的是 B"，症状是 No such file or directory，极难归因。
+  const sessionCwdOf = (dshSessionId: string): string | undefined => {
+    // `ctx.sessions.get` 要的是品牌类型 `SessionId`，而这里的入参是普通字符串（它来自
+    // 会话头与工具上下文）。这一处是**唯一**的边界，集中在这里转换而不是让上游到处带品牌。
+    const session = ctx.sessions.get(dshSessionId as Parameters<typeof ctx.sessions.get>[0]);
+    return session?.header.cwd ?? runtime.sessionCwd;
+  };
   const composed = compose({
     ...runtime,
-    // 按会话区分工作目录（2026-10-08）：优先用**宿主的会话头 cwd**（"我在哪个目录开会话"），
-    // 取不到再退回 profile 的 `runtime.sessionCwd`（会话工厂本来就按这个优先级用 cwd ✓）。
-    sessionCwdOf: (dshSessionId: string) => {
-      // `ctx.sessions.get` 要的是品牌类型 `SessionId`，而这里的入参是普通字符串（它来自
-      // 会话头与工具上下文）。这一处是**唯一**的边界，集中在这里转换而不是让上游到处带品牌。
-      const session = ctx.sessions.get(dshSessionId as Parameters<typeof ctx.sessions.get>[0]);
-      return session?.header.cwd ?? runtime.sessionCwd;
-    },
+    sessionCwdOf,
     ...(runtimeBudget === undefined ? {} : { dshBudget: runtimeBudget }),
     ...(runtime.modelRoute === undefined ? { modelRoute: hostModel } : { modelRoute: runtime.modelRoute }),
     sessions: runtime.sessions ?? new DshSessionFactory(ctx, {
       ...(runtime.sessionCwd === undefined ? {} : { cwd: runtime.sessionCwd }),
-      // 会话提示词里的挂载说明必须与沙箱 argv 同源（见 DshSessionFactoryDeps.sandboxMounts）。
+      // 会话提示词里的挂载说明必须与沙箱 argv 同源（见 DshSessionFactoryDeps.mountRootOf）：
+      // 传**同一个** `sessionCwdOf`，配置值只作回退。
+      mountRootOf: sessionCwdOf,
       ...(runtime.sandbox.mounts === undefined ? {} : { sandboxMounts: runtime.sandbox.mounts }),
       ...(mountPreset === undefined ? {} : { mountPreset }),
       ...(presetId === undefined ? {} : { presetId }),
