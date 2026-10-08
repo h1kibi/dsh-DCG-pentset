@@ -282,7 +282,7 @@ interface BinaryEvidencePayload {
  * 但历史载荷与模型都可能写成纯字符串——两种都要能落块。**形状不匹配不能表现为静默丢弃**：
  * 丢掉的正是「事实」，那等于报告在记忆面不存在（QA 2026-10-04 实测：facts 全丢，只剩摘要）。
  */
-interface ReportItemObject {
+export interface ReportItemObject {
   /** 主文本。设计用 `statement`；`fact`/`title`/`text` 是实测中模型写过的同义字段。 */
   readonly statement?: string;
   readonly fact?: string;
@@ -295,10 +295,19 @@ interface ReportItemObject {
   readonly evidence_refs?: readonly string[];
   readonly missing_evidence?: readonly string[];
   readonly affected_assets?: readonly string[];
+  /**
+   * 下面四个来自 `pentest_submit_report` 的 `reportFindingSchema`（工具 schema 明确要求
+   * 模型写它们），因此 `candidate_findings` 里**一定会**出现——类型不收就等于让消费方去猜。
+   */
+  readonly reproduction_plan?: readonly string[];
+  readonly reproduction_steps?: readonly string[];
+  readonly validation_required?: boolean;
+  readonly impact?: string;
+  readonly remediation?: string;
 }
 
 /** 报告分段里的一条：字符串（旧载荷）或对象（设计 schema）。 */
-type ReportItem = string | ReportItemObject;
+export type ReportItem = string | ReportItemObject;
 
 export interface ReportPayload {
   readonly revision?: number;

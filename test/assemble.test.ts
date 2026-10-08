@@ -74,7 +74,8 @@ const fakeDeps: WorkerToolDeps = {
     };
   },
   async submitReport() {
-    return { reportId: 'r', stateVersion: 1 };
+    // 这个假端口不落 findings（真实端口在提交事务里写 `pentest.findings`）。
+    return { reportId: 'r', stateVersion: 1, findings: { written: 0, skipped: 0 } };
   },
   async writeStatusNote() {
     return { stored: true, source: 'agent' as const };

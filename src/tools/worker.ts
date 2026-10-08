@@ -112,7 +112,15 @@ export interface WorkerToolDeps {
     workerSessionId: string;
     leaseGeneration?: number | null;
     report: WorkerReportInput;
-  }): Promise<{ reportId: string; stateVersion: number }>;
+  }): Promise<{
+    reportId: string;
+    stateVersion: number;
+    /**
+     * 同事务里落进 `pentest.findings` 的候选结论计数（外部审计 P0-1 的写入方）。
+     * `skipped` 只统计**空标题**这类无法成行的条目——原始条目仍在 `worker_reports.payload_json`。
+     */
+    findings: { written: number; skipped: number };
+  }>;
   /**
    * 写入本轮状态便签（§6.2.2）。`leaseGeneration` 与报告同口径：写入必须绑定世代。
    *

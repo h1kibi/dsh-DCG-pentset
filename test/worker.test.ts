@@ -169,7 +169,8 @@ function makeDeps(): FakeDeps {
     },
     async submitReport(input) {
       submitReportCalls.push(input);
-      return { reportId: 'report-1', stateVersion: 3 };
+      // 这个假端口不落 findings（真实端口在提交事务里写 `pentest.findings`）。
+      return { reportId: 'report-1', stateVersion: 3, findings: { written: 0, skipped: 0 } };
     },
     async writeStatusNote(input) {
       writeStatusNoteCalls.push(input);

@@ -61,6 +61,8 @@ import {
   isChunkKind,
   sha256Hex,
   type ChunkKind,
+  type ReportItemObject,
+  type ReportPayload,
 } from './chunks.ts';
 import { TRUST_LEVELS } from './hash.ts';
 import type { DbClient } from '../db/port.ts';
@@ -1176,7 +1178,11 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
 
   async submitReport(
     input: Parameters<WorkerToolDeps['submitReport']>[0],
-  ): Promise<{ reportId: string; stateVersion: number }> {
+  ): Promise<{
+    reportId: string;
+    stateVersion: number;
+    findings: { written: number; skipped: number };
+  }> {
     const report = input.report;
     return this.#withTransaction(input.workerSessionId, async (tx) => {
       const locked = await tx.query<SessionRow & {
@@ -1309,6 +1315,68 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
         ],
       );
 
+      // ── 候选结论落表（外部审计 P0-1）──
+      // 在此之前 `pentest.findings` **全仓没有任何写入方**："报告审阅"恒空、`listUndisposed`
+      // 恒为 0 ⇒ "未处置不得签字"这道闸门实际恒满足。这里把 `candidate_findings` 与它的同分段
+      // 别名 `findings`（口径见 chunks.ts 的 REPORT_SECTION_ALIASES）投影成 findings 行——
+      // 与分块器读的是**同一份载荷**，保证"会话里看到的结论"与"报告里签字的结论"同源。
+      //
+      // 与 worker_reports 同一条纪律：**先让位、后插入**（本次提交取代本会话此前仍在待处置
+      // 状态的结论）。只投影能一一对应的列：模型侧的 `evidence_refs`/`affected_assets` 是字符串
+      // （"标识或地址"），表里是 uuid[]，**不做猜测性转换**——原始条目始终留在
+      // `worker_reports.payload_json` 与账本事件里，信息不丢，只是未结构化。
+      const reportPayload: ReportPayload = report.payload ?? {};
+      const findingItems = [...(reportPayload.findings ?? []), ...(reportPayload.candidate_findings ?? [])];
+      await tx.query(
+        `UPDATE pentest.findings
+            SET status = 'superseded', updated_at = now()
+          WHERE discovered_in_session_id = $1::uuid
+            AND status IN ('candidate','validation_pending')`,
+        [input.workerSessionId],
+      );
+      const allowedSeverities = new Set(['critical', 'high', 'medium', 'low', 'info']);
+      let findingsWritten = 0;
+      let findingsSkipped = 0;
+      for (const item of findingItems) {
+        // 字符串是旧载荷形态；对象的主文本按 chunks.ts 记的同义链取（title/statement/fact/text）。
+        const asObject: ReportItemObject = typeof item === 'string' ? { title: item } : item;
+        const title = (asObject.title ?? asObject.statement ?? asObject.fact ?? asObject.text ?? '').trim();
+        if (title === '') {
+          // 空标题无法满足 `title NOT NULL`：计数而不是静默丢弃（原始条目仍在 payload 里）。
+          findingsSkipped += 1;
+          continue;
+        }
+        const steps = (asObject.reproduction_plan ?? asObject.reproduction_steps ?? []).filter(
+          (step): step is string => typeof step === 'string',
+        );
+        const severity =
+          typeof asObject.severity === 'string' && allowedSeverities.has(asObject.severity)
+            ? asObject.severity
+            : null;
+        const confidence =
+          typeof asObject.confidence === 'number' && asObject.confidence >= 0 && asObject.confidence <= 1
+            ? asObject.confidence
+            : null;
+        await tx.query(
+          `INSERT INTO pentest.findings
+             (engagement_id, discovered_in_session_id, title, severity, status,
+              reproduction_steps, impact, remediation, confidence)
+           VALUES ($1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::jsonb, $7::text, $8::text, $9)`,
+          [
+            session.engagement_id,
+            input.workerSessionId,
+            title,
+            severity,
+            asObject.validation_required === true ? 'validation_pending' : 'candidate',
+            JSON.stringify(steps),
+            typeof asObject.impact === 'string' ? asObject.impact : null,
+            typeof asObject.remediation === 'string' ? asObject.remediation : null,
+            confidence,
+          ],
+        );
+        findingsWritten += 1;
+      }
+
       await tx.query(
         `UPDATE pentest.worker_sessions
             SET status = 'waiting_human',
@@ -1385,7 +1453,11 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
           },
         ]);
       }
-      return { reportId: newId, stateVersion: Number(version) };
+      return {
+        reportId: newId,
+        stateVersion: Number(version),
+        findings: { written: findingsWritten, skipped: findingsSkipped },
+      };
     });
   }
 

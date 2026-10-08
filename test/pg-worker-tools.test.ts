@@ -1025,6 +1025,88 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
     );
   });
 
+  it('报告：candidate_findings 在同一事务里落进 findings（外部审计 P0-1 的写入方）', async () => {
+    const submitted = await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '结论落表',
+        summary: '两条候选结论 + 一条无法成行的空标题',
+        payload: {
+          candidate_findings: [
+            {
+              title: '未授权访问 /admin 面板',
+              severity: 'high',
+              affected_assets: ['http://target/admin'],
+              reproduction_plan: ['curl -i http://target/admin'],
+              evidence_refs: ['evidence/target/admin.txt'],
+              validation_required: true,
+            },
+            { statement: '低危信息泄露', severity: 'not-a-severity', confidence: 0.8 },
+            { title: '   ' },
+          ],
+        },
+      },
+    });
+    // 计数必须如实：空标题无法满足 `title NOT NULL` 记 skipped，不静默丢弃。
+    assert.deepEqual(submitted.findings, { written: 2, skipped: 1 });
+
+    const rows = await client.query<{
+      title: string;
+      severity: string | null;
+      status: string;
+      steps: unknown;
+      assets: unknown;
+      confidence: string | null;
+    }>(
+      `SELECT title, severity, status, reproduction_steps AS steps,
+              affected_asset_ids AS assets, confidence::text AS confidence
+         FROM pentest.findings WHERE discovered_in_session_id = $1::uuid`,
+      [workerSessionId],
+    );
+    // 排序在 JS 里做：字符序随库的 collation 变，断言不能依赖它。
+    const projected = rows.rows
+      .map((row) => [row.title, row.severity, row.status] as const)
+      .sort((left, right) => (left[0] < right[0] ? -1 : 1));
+    assert.deepEqual(projected, [
+      ['低危信息泄露', null, 'candidate'],
+      ['未授权访问 /admin 面板', 'high', 'validation_pending'],
+    ]);
+
+    const detail = new Map(rows.rows.map((row) => [row.title, row]));
+    assert.deepEqual(detail.get('未授权访问 /admin 面板')?.steps, ['curl -i http://target/admin']);
+    assert.equal(detail.get('低危信息泄露')?.confidence, '0.8000');
+    // 模型侧的 `affected_assets` 是字符串（"标识或地址"），表里是 uuid[]：**不猜测性转换**，
+    // 原始条目留在 worker_reports.payload_json 与账本事件里。
+    assert.deepEqual(detail.get('未授权访问 /admin 面板')?.assets, []);
+  });
+
+  it('报告：再次提交把本会话仍在待处置的结论置为 superseded（先让位、后插入）', async () => {
+    await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '二轮',
+        summary: '重新提交',
+        payload: { candidate_findings: [{ title: '新结论', severity: 'info' }] },
+      },
+    });
+    const rows = await client.query<{ title: string; status: string }>(
+      `SELECT title, status FROM pentest.findings WHERE discovered_in_session_id = $1::uuid`,
+      [workerSessionId],
+    );
+    const projected = rows.rows
+      .map((row) => [row.title, row.status] as const)
+      .sort((left, right) => (left[0] < right[0] ? -1 : 1));
+    assert.deepEqual(projected, [
+      ['低危信息泄露', 'superseded'],
+      ['新结论', 'candidate'],
+      ['未授权访问 /admin 面板', 'superseded'],
+    ]);
+  });
+
   it('报告：同一 attempt 的第二份当前报告被部分唯一索引拒绝', async () => {
     await tools.submitReport({
       workerSessionId,
