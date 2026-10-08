@@ -1468,6 +1468,14 @@ function installWorkflow(input: {
     },
     resolveWorkerSessionId: pgTools.resolveWorkerSessionId.bind(pgTools),
     loadSkill: pgTools.loadSkill.bind(pgTools),
+    // 证据落盘根：优先挑挂在 `/work` 的那个挂载（会话的工作目录），否则用第一个。
+    // 没有挂载就整块省略：`save_stdout_as_evidence` 会如实回一句"未挂载"，而不是静默失败。
+    ...(config.sandbox.mounts === undefined || config.sandbox.mounts.length === 0
+      ? {}
+      : {
+          evidenceRoot: (config.sandbox.mounts.find((entry) => entry.containerPath === '/work') ??
+            config.sandbox.mounts[0])?.hostPath,
+        }),
     resolveWorkerSessionContext: pgTools.resolveWorkerSessionContext.bind(pgTools),
     search: pgTools.search.bind(pgTools),
     read: pgTools.read.bind(pgTools),

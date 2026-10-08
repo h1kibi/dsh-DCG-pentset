@@ -33,6 +33,7 @@ import type {
   WorkerReportInput,
 } from '../contracts.ts';
 import { DEFAULTS } from '../contracts.ts';
+import { evidenceRelPath, writeEvidence } from './evidence-sink.ts';
 import { PHASE_ORDER } from '../workflow/phases.ts';
 // 结构化动作的技巧表搬到了 execution/techniques.ts（提示词与测试共用同一份），
 // 这里再导出一次，既有调用点不必改。
@@ -49,6 +50,13 @@ import type { WorkdirFile, WorkdirListing, WorkdirSearchResult, WorkdirWriteResu
 
 /** 工具实现依赖的服务面（全部由宿主注入，便于测试）。 */
 export interface WorkerToolDeps {
+  /**
+   * 证据落盘的宿主根（挂载目录的宿主侧路径；沙箱里对应 `/work`）。
+   *
+   * 缺省 = 没挂载 ⇒ `pentest_exec` 的 `save_stdout_as_evidence` 只回一句说明，**不报错**
+   * （没挂载时连 `pentest_workdir` 都是 `no_roots`，那是同一个事实）。
+   */
+  readonly evidenceRoot?: string;
   /** dsh 会话标识 → worker 会话标识。 */
   resolveWorkerSessionId(dshSessionId: string): Promise<string | null>;
   /** 原子解析当前 worker 会话及调用开始时的生效租约世代。 */
@@ -722,6 +730,13 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         type: 'string',
         description: '需要放行的动作必须携带人类放行后返回的 approval_id',
       },
+      save_stdout_as_evidence: {
+        type: 'boolean',
+        description:
+          '设为 true 时，服务端把这条命令的 stdout **原文**写进会话工作目录（`/work/evidence/<目标>/<UTC时间>-<用途>.txt`），' +
+          '返回值里给出一行 `evidence: <相对路径>`。**建议凡是产出证据的命令都开**：容器是一次性的，' +
+          '不开就只能靠你自己在命令里 tee（忘一条那条原文就永久没了）。它只是**额外落盘**，不改命令本身。',
+      },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
     timeoutMs: 15 * 60 * 1000,
@@ -744,12 +759,33 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       const outcome = await deps.execute({ workerSessionId, intent, signal: exec.signal });
       // 拒绝路径把契约错误直接交给模型（与 memory_read 的拒绝形状一致），
       // 不包在 {plan,result} 里——那会让「被拒绝」看起来像「执行完了」。
+      //
+      // 证据落盘（2026-10-08 实地记录 §3.3）：**执行完之后**由宿主侧写文件，不依赖模型记得 `tee`。
+      // 失败只回一行说明：一次**已经执行完**的动作不该因为写盘失败被报成失败（那会诱发重发＝对目标再打一次）。
+      let evidenceNote: string | null = null;
+      if (args.save_stdout_as_evidence === true && outcome.kind === 'executed') {
+        const root = deps.evidenceRoot;
+        if (root === undefined) {
+          evidenceNote = 'evidence: 未挂载工作目录，无法落盘（见 pentest_workdir 的 no_roots）';
+        } else {
+          const stdout = (outcome.result as { readonly stdout?: unknown } | null)?.stdout;
+          if (typeof stdout === 'string' && stdout.length > 0) {
+            const written = writeEvidence(
+              root,
+              evidenceRelPath({ targetSelector: args.target_selector, purpose: args.purpose, at: new Date() }),
+              stdout,
+            );
+            evidenceNote = written.ok ? `evidence: ${written.detail}` : `evidence: ${written.detail}`;
+          }
+        }
+      }
       return toJson(
         outcome.kind === 'blocked'
           ? outcome.error
           : {
               plan: outcome.plan,
               result: outcome.result,
+              ...(evidenceNote === null ? {} : { evidence: evidenceNote.replace(/^evidence: /, '') }),
               ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
             },
       );
