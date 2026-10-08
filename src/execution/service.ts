@@ -1283,11 +1283,20 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     });
     // pacing 槽位：取得即意味着「本动作按冻结策略的节奏开始」。取得失败（被中止）
     // 不进入沙箱——那正是策略 epoch 前进要终止的对象。
+    //
+    // **批次按"每地址等效速率"折算**（P0-3 设计第 3 条）：一次带 1024 台的动作不能按
+    // "一次动作"放行，否则大网段就是绕过速率档的通道。折算方式 = **等比放大启动间隔**
+    // （rate 除以地址数），并发/抖动/重试照旧 ⇒ 等价于"每台都按该档位的速率打"。
     const pacing = plan.pacing ?? null;
+    const batchSize = Math.max(1, plan.resolvedAddresses.length);
+    const effectivePacing =
+      pacing === null || batchSize === 1
+        ? pacing
+        : { ...pacing, rate: pacing.rate > 0 ? pacing.rate / batchSize : pacing.rate };
     let slotHeld = false;
-    if (pacing !== null) {
+    if (effectivePacing !== null) {
       try {
-        await pacingGate.acquire(binding.engagementId, pacing, combined);
+        await pacingGate.acquire(binding.engagementId, effectivePacing, combined);
         slotHeld = true;
       } catch {
         inFlight.delete(toolRunId);

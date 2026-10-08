@@ -33,6 +33,7 @@ import {
   normalizeCidr,
   normalizeScopeEntry,
   normalizeTarget,
+  rangeAddressesOf,
 } from '../src/policy/scope.ts';
 import type { AdjudicatedAddresses, ScopeRuleSet } from '../src/policy/scope.ts';
 
@@ -913,4 +914,29 @@ test('J4 标签成员非法时按成员错误码拒绝（成员携带具体拒�
 test('J5 资产标签在规范化工具中展开为唯一目标时可用，多目标时需按条目展开', () => {
   assert.equal(expectOk(normalizeTarget('@single', { assetRegistry: { single: ['api.target.com'] } })).host, 'api.target.com');
   expectRejected(normalizeTarget('@web', { assetRegistry: REGISTRY }), 'malformed_target');
+});
+
+test('P0-3 批次：网段展开成连续地址，超上限与 IPv6 一律如实拒绝', () => {
+  // /20 = 4096 台，正好在上限内 ⇒ 展开成**连续**地址（不是抽样、也不静默截断）。
+  const okCidr = normalizeCidr('10.25.16.0/20');
+  assert.ok(okCidr.ok);
+  const expanded = rangeAddressesOf(okCidr.value);
+  assert.ok(expanded.ok);
+  assert.equal(expanded.value.length, 4096);
+  assert.equal(expanded.value[0], '10.25.16.0');
+  assert.equal(expanded.value.at(-1), '10.25.31.255');
+
+  // 超过上限：拒绝 + 给出下一步。**静默截断等于悄悄少扫一段**，那是这套工具最贵的错误形态。
+  const tooBigCidr = normalizeCidr('10.25.0.0/16');
+  assert.ok(tooBigCidr.ok);
+  const tooBig = rangeAddressesOf(tooBigCidr.value, 4096);
+  assert.equal(tooBig.ok, false);
+  assert.match(tooBig.detail, /拆成更小的段/);
+
+  // IPv6 批次暂不支持：也如实说，不假装扫过。
+  const v6Cidr = normalizeCidr('2001:db8::/120');
+  assert.ok(v6Cidr.ok);
+  const v6 = rangeAddressesOf(v6Cidr.value);
+  assert.equal(v6.ok, false);
+  assert.match(v6.detail, /只支持 IPv4/);
 });
