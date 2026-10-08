@@ -248,9 +248,7 @@ export const SHELL_CSS = `
 .pentest-runcontrols__status{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .pentest-runcontrols__start{display:flex;flex-direction:column;gap:9px;border:1px solid var(--pt-line);background:var(--pt-bg-well);padding:10px}
 .pentest-runcontrols__budget{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px}
-/* 动作区：按生命周期分区（运行期 / 阶段 / 危险 / 预算）。此前 __actions 没有任何样式，
-   于是按钮与预算格挤成一段文字流——2026-10-08 人类截图报障的正是这个。 */
-.pentest-runcontrols__actions{display:flex;flex-direction:column;gap:10px;width:100%;align-self:stretch;align-items:stretch}
+/* 动作区：按生命周期分区（运行期 / 阶段 / 危险 / 预算）。 */
 .pentest-runcontrols__row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:flex-start;text-align:left}
 /* 宿主卡片把 text-align:center 传下来，行内按钮于是飘在中间；本区一律左对齐。 */
 .pentest-runcontrols{text-align:left}
@@ -265,7 +263,9 @@ export const SHELL_CSS = `
 .pentest-runcontrols__meta{margin:0;font:400 11px/1.6 var(--pt-font-mono);color:var(--pt-fg-dim)}
 .pentest-runcontrols__gates{list-style:none;display:flex;flex-direction:column;gap:4px;padding:0;margin:0;font-size:11.5px;color:var(--pt-fg-faint)}
 .pentest-runcontrols__gates li::before{content:"›";color:var(--pt-accent-dim);margin-right:6px}
-.pentest-runcontrols__actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--pt-line);padding-top:10px}
+/* 动作区：分区竖排。**这不是新建的类**——它原本是"一行 wrap 的按钮条"，2026-10-08 分区后
+   改为列向：四个区各自成块，跨轴 stretch（否则各区按内容收缩、宽度互不相同）。 */
+.pentest-runcontrols__actions{display:flex;flex-direction:column;gap:10px;align-items:stretch;width:100%;border-top:1px solid var(--pt-line);padding-top:10px}
 .pentest-runcontrols__hint{font-size:11px;line-height:1.55;color:var(--pt-fg-faint);max-width:72ch}
 
 /* ───────────── 常驻状态条（宿主 overlay） ───────────── */
