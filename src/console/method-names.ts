@@ -48,6 +48,7 @@ export const CONSOLE_METHOD_NAMES = [
   'rejectScopeProposal',
   'listEngagements',
   'listWorkerSessions',
+  'getWorkerReport',
   'beginHandoff',
   'currentHandoffDraft',
   'previewScope',

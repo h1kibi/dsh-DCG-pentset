@@ -179,6 +179,18 @@ export class ConsoleTypertService extends TypertRemoteService {
   }
 
   /**
+   * `getWorkerReport` —— 转发到 {@link ConsoleRpc.handle}。
+   *
+   * 参数名 `request` 是**线协议的一部分**：SRC 模式从函数源码解析参数名，网关据此校验
+   * `payload.args` 的字段是否与之匹配（`assertExactArguments`），因此这个标识符不能随意改，
+   * 也不能用解构/默认值/rest（会以 `gateway/signature-invalid` 被拒）。
+   */
+  @Remote
+  async getWorkerReport(request: ConsoleRequest): Promise<ConsoleResponse> {
+    return this.rpcImpl.handle(request, this.contextOf());
+  }
+
+  /**
    * `previewScope` —— 转发到 {@link ConsoleRpc.handle}。
    *
    * 参数名 `request` 是**线协议的一部分**：SRC 模式从函数源码解析参数名，网关据此校验

@@ -5,7 +5,7 @@
  * 方法体与拆分前逐字一致；共享原语经构造注入的 {@link WorkflowCore} 使用。
  */
 
-import type { ApprovalModeChange, ApprovalModeChangeRef, ArchiveEngagementInput, PurgeEngagementInput, PurgePreview, PurgeResult, ActionClass, BehaviorProfile, CandidateAsset, CreateEngagementInput, EngagementMemory, EngagementSummary, GetEngagementMemoryInput, GetScopeInput, ListCandidateAssetsInput, ListEngagementsInput, ListWorkerSessionsInput, MainStatus, Phase, PolicyPreview, PolicyPreviewInput, PreviewScopeInput, RunMarker, ScopeDetail, ScopeEntryProfile, ScopePreview, ScopePreviewEntry, SessionStatus, UpdateEngagementMemoryInput, WorkerSessionSummary } from '../contracts.ts';
+import type { ApprovalModeChange, ApprovalModeChangeRef, ArchiveEngagementInput, PurgeEngagementInput, PurgePreview, PurgeResult, ActionClass, BehaviorProfile, CandidateAsset, CreateEngagementInput, EngagementMemory, EngagementSummary, GetEngagementMemoryInput, GetScopeInput, GetWorkerReportInput, ListCandidateAssetsInput, ListEngagementsInput, ListWorkerSessionsInput, MainStatus, Phase, PolicyPreview, PolicyPreviewInput, PreviewScopeInput, RunMarker, ScopeDetail, ScopeEntryProfile, ScopePreview, ScopePreviewEntry, SessionStatus, UpdateEngagementMemoryInput, WorkerReportView, WorkerSessionSummary } from '../contracts.ts';
 import { ACTION_CLASSES, TERMINAL_SESSION_STATUSES } from '../contracts.ts';
 import { scopeContentHash } from '../policy/scope-snapshot.ts';
 import { policyContentHash, policySnapshotIsIntact, requireApprovalMode, requireBehaviorSelection, withCustomGuidance } from '../policy/behavior-profile.ts';
@@ -13,6 +13,7 @@ import { actionPolicyFromSnapshot } from '../policy/pg-policy.ts';
 import type { ScopeTarget } from '../contracts.ts';
 import { isPhase } from '../contracts.ts';
 import { WorkflowRejection, actionPolicyRiskSummary, asPlainRecord, asStringArray, assertPublicMemorySize, isScopeDecision, previewOne, toInt, toScopeVersionDetail } from './model.ts';
+import { REPORT_SECTIONS, reportSectionTexts } from '../memory/chunks.ts';
 import type { ConfirmationExpansion } from './model.ts';
 import type { WorkflowCore } from './core.ts';
 
@@ -784,6 +785,44 @@ export class EngagementFlow {
       endedAt: row.ended_at,
       createdAt: row.created_at,
     }));
+  }
+
+  /**
+   * 读某会话**最新未取代**报告的正文（报告审阅的"Agent 本轮报告"区，外部审计 P0-2）。
+   *
+   * 分段复用 `memory/chunks.ts` 的 `reportSectionTexts`——**与分块器读的是同一份口径**，
+   * 保证"人在报告里看到的"与"记忆里存的、会话里说的"是同一次切分，而不是又一套同义链。
+   */
+  async getWorkerReport(input: GetWorkerReportInput): Promise<WorkerReportView | null> {
+    const r = await this.#core.deps.db.query<{
+      id: string;
+      attempt: number | string;
+      status: string;
+      objective: string;
+      summary: string;
+      created_at: string;
+      payload_json: unknown;
+    }>(
+      `select id, attempt, status, objective, summary, created_at, payload_json
+         from pentest.worker_reports
+        where worker_session_id = $1::uuid and superseded_by is null
+        order by created_at desc, id desc
+        limit 1`,
+      [input.workerSessionId],
+    );
+    const row = r.rows[0];
+    if (row === undefined) return null;
+    const texts = reportSectionTexts(row.payload_json);
+    return {
+      id: row.id,
+      workerSessionId: input.workerSessionId,
+      attempt: toInt(row.attempt, 'attempt'),
+      status: row.status,
+      objective: row.objective,
+      summary: row.summary,
+      createdAt: row.created_at,
+      sections: REPORT_SECTIONS.map((section, index) => ({ section, text: texts[index] ?? '' })),
+    };
   }
 
   /**

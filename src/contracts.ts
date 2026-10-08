@@ -1051,6 +1051,8 @@ export interface HumanWorkflowService {
   listEngagements(input: ListEngagementsInput): Promise<readonly EngagementSummary[]>;
   /** 列出某 engagement 的 Worker 会话。 */
   listWorkerSessions(input: ListWorkerSessionsInput): Promise<readonly WorkerSessionSummary[]>;
+  /** 读某会话**最新未取代**报告的正文（报告审阅的"Agent 本轮报告"区，外部审计 P0-2）。 */
+  getWorkerReport(input: GetWorkerReportInput): Promise<WorkerReportView | null>;
   /** 范围 dry-run。 */
   previewScope(input: PreviewScopeInput): Promise<ScopePreview>;
   /**
@@ -1320,6 +1322,40 @@ export interface ListWorkerSessionsInput {
   /** 只返回这些阶段；省略即全部五个。 */
   readonly phases?: readonly Phase[];
   readonly limit?: number;
+}
+
+/** 报告正文的一个分段（`getWorkerReport` 的返回项）。 */
+export interface WorkerReportSectionView {
+  /**
+   * 分段键，取自 `memory/chunks.ts` 的 `REPORT_SECTIONS`（**不是**本文件里同名的结论审阅分节）。
+   * 故意是 `string` 而不是那套类型：客户端 bundle 不能引 `memory/chunks.ts`（它链到 `node:crypto`），
+   * 中文标签归界面自己（与 `ReportReview` 的既有做法一致）。
+   */
+  readonly section: string;
+  /** 该分段的可读文本；空串 = 这一节本来就没有内容（不是读不到）。 */
+  readonly text: string;
+}
+
+/**
+ * 一份任务报告的正文视图。
+ *
+ * 存在的理由（外部审计 P0-2）：`worker_reports` 此前只有一处读（给交接草稿用），
+ * 人在报告审阅面板里看不到 Agent 交的报告。
+ */
+export interface WorkerReportView {
+  readonly id: string;
+  readonly workerSessionId: string;
+  readonly attempt: number;
+  readonly status: string;
+  readonly objective: string;
+  readonly summary: string;
+  readonly createdAt: string;
+  /** 与 `reportSectionTexts()` 同源、与 `REPORT_SECTIONS` 同序。 */
+  readonly sections: readonly WorkerReportSectionView[];
+}
+
+export interface GetWorkerReportInput {
+  readonly workerSessionId: string;
 }
 
 /** 授权向导的范围 dry-run 输入（尚未创建 engagement，因此不要求它的标识）。 */

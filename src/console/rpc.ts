@@ -571,6 +571,16 @@ const WORKFLOW_METHOD_TABLE: Record<keyof HumanWorkflowService, ConsoleMethodSpe
     invoke: call('workflow', 'listWorkerSessions', 'object'),
   },
 
+  /** Agent 本轮报告的正文（报告审阅面板顶部，外部审计 P0-2）。只读、无副作用。 */
+  getWorkerReport: {
+    kind: 'read',
+    lock: 'none',
+    operator: false,
+    reason: false,
+    fields: [f('workerSessionId', 'string')],
+    invoke: call('workflow', 'getWorkerReport', 'object'),
+  },
+
   /**
    * 「进入下一阶段」：服务端**起稿**（不经 Agent），返回可直接编辑的交接包。
    *
