@@ -463,14 +463,23 @@ export class EngagementFlow {
       [engagementId, [...TERMINAL_SESSION_STATUSES]],
     );
     const liveSessions = toInt(live.rows[0]?.n ?? 0, 'live_sessions');
-    if (liveSessions > 0) blockers.push(`仍有 ${String(liveSessions)} 个未终结的会话：先让它结束（或中止）再删`);
+    if (liveSessions > 0) {
+      // 说清"在哪做、做完会怎样"：只说"先让它结束"会让人在清空面板上找不到出口
+      // （用户实测："怎么让他结束再删除"）。「终止」是那把唯一的万能钥匙。
+      blockers.push(
+        `仍有 ${String(liveSessions)} 个未终结的会话（通常是「等待人工判断」）：先去**运行控制**点「终止」——` +
+        '它会关掉全部会话并吊销租约，之后回到这里即可清空；也可以先「结束技术测试」再终止',
+      );
+    }
     const leases = await this.#core.deps.db.query<{ n: number | string }>(
       `select count(*)::int as n from pentest.session_leases
         where engagement_id = $1::uuid and revoked_at is null and expires_at > now()`,
       [engagementId],
     );
     const liveLeases = toInt(leases.rows[0]?.n ?? 0, 'live_leases');
-    if (liveLeases > 0) blockers.push(`仍有 ${String(liveLeases)} 份有效租约：等它过期或先吊销`);
+    if (liveLeases > 0) {
+      blockers.push(`仍有 ${String(liveLeases)} 份有效租约：等它过期，或在**运行控制**点「终止」（会一并吊销）`);
+    }
     return blockers;
   }
 
