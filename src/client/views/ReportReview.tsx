@@ -47,7 +47,7 @@ import type {
 } from '../../contracts.ts';
 import { isConsoleMethod } from '../../console/method-names.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatConfidence, formatCount, formatTimestamp, renderInlineMarkdown, truncate } from '../format.ts';
+import { formatConfidence, formatCount, formatTimestamp, renderInlineMarkdown, reportStatusLabel, truncate } from '../format.ts';
 import type { Tone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextArea } from '../ui.tsx';
 
@@ -396,7 +396,7 @@ function AgentReportBlock(props: {
       {report === null || report.workerSessionId !== target.id ? null : (
         <div>
           <p className="pentest-report-review__agent-report-head">
-            {`第 ${String(report.attempt)} 次执行 · ${report.status} · ${formatTimestamp(report.createdAt, props.now)}`}
+            {`第 ${String(report.attempt)} 次执行 · ${reportStatusLabel(report.status)} · ${formatTimestamp(report.createdAt, props.now)}`}
           </p>
           <p>{renderInlineMarkdown(report.summary)}</p>
           {report.sections.filter((section) => section.text !== '').map((section) => (

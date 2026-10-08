@@ -142,6 +142,19 @@ export function sessionStatusLabel(status: SessionStatus): string {
 }
 
 /**
+ * 任务报告状态的界面标签（`worker_reports.status`，列上只有 `report_ready` / `blocked` 两个取值）。
+ *
+ * 与 `sessionStatusLabel` 同一个道理：机器枚举不进界面。未知值回落原样，不隐藏。
+ */
+export function reportStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    report_ready: '报告就绪',
+    blocked: '已阻塞',
+  };
+  return labels[status] ?? status;
+}
+
+/**
  * 来源可信度的语义色。
  *
  * **它只表达证据等级，不表达相关性**（§8.6：`trust_level` 不参与排序评分，除人工决策与
