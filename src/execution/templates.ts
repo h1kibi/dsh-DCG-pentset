@@ -9,14 +9,17 @@
  *   - **范围闸门**：目标只来自选择器，端口按声明记账（`portSource`）；
  *   - **计划摘要与幂等**：命令 + 目标 + 端口 + 预算派生 `plan_hash`，同一动作不会执行两次；
  *   - **证据关联**：`tool_runs` 按模板实例记录命令原文与产出；
- *   - **放行类别**：类别来自模板注册信息——这是「哪些动作要人批」的唯一可信来源
+ *   - 类别来自模板注册信息，**并叠加会话阶段的提升**（自由命令通道：④ `exploit_validation`、
+ *     ⑤ `lateral_movement`，见契约的 `effectiveActionClass`）——这是「哪些动作要人批」的唯一可信来源
  *     （让 Agent 自报风险等级等于没有风险分级）。
  *
  * 因此仍然保留的硬约束：
  *   - 目标只能来自选择器注入：命令里的目标由服务端从已裁决的规范化目标写入；
  *   - 端口是必填整数，用于范围闸门记账（自由命令实际可打该主机的任意端口，这一点如实写在 carries 里）；
  *   - 命令文本长度、超时、输出都有上限；
- *   - 类别固定 `exploit_validation` ⇒ **每条命令都要人类逐次放行**（契约下限，不可下调）。
+ *   - 类别按会话阶段判定：①②③ 的自由命令是 `active_probing`（预设内 ⇒ 免批）；
+ *     **④ 提升为 `exploit_validation`、⑤ 提升为 `lateral_movement`** ⇒ 这两个阶段每条命令都要人类放行
+ *     （auto 档的 `exploit_validation` 仍按既有豁免自放行；`lateral_movement` 任何模式都要人批）。
  */
 
 import type {
@@ -27,6 +30,7 @@ import type {
   ToolError,
 } from '../contracts.ts';
 import { targetLiteral } from './idempotency.ts';
+import { FREE_COMMAND_TEMPLATE_ID } from '../contracts.ts';
 
 /** 参数取值：模板声明的取值范围只允许标量（字符串或整数）。 */
 type ParamValue = string | number;
@@ -61,8 +65,9 @@ export interface ActionTemplateSpec {
    * **跳过 `FORBIDDEN_PAYLOAD_RULES`** 的显式开关（默认 false）。
    *
    * 只有「自由命令」这一类模板会打开它——它的参数**就是要携带任意命令文本**，黑名单对它没有意义。
-   * 代价与补偿写在 `direct_command` 的注册说明里；关键补偿是它属于 `exploit_validation` 类，
-   * 因而本部署**每条命令都要人类逐次放行**。除它以外的模板一律不许打开（评审与测试都盯着这一条）。
+   * 代价与补偿写在 `direct_command` 的注册说明里；关键补偿是它的**有效类别随会话阶段提升**：
+   * ④ 是 `exploit_validation`、⑤ 是 `lateral_movement`，因而这两个阶段**每条命令都要人类放行**。
+   * 除它以外的模板一律不许打开（评审与测试都盯着这一条）。
    */
   readonly allowFreeForm?: boolean;
   /**
@@ -479,26 +484,30 @@ export function createRegistry(specs: readonly ActionTemplateSpec[]): TemplateRe
  * 手段**——它们只能读记忆、写报告。真实渗透需要「在目标上跑命令」，所以这里用三条约束
  * 换取自由：
  *
- *   1. **类别是 `exploit_validation`**：本部署对这类强制**逐次人工放行**，放行卡上显示的就是
- *      将要执行的命令原文（base64 解码后的回显也落 `tool_runs`）。机器无法自己批准。
+ *   1. **类别随会话阶段**：①②③ 是 `active_probing`（免批）；**④ `exploit_validation`、⑤ `lateral_movement`**
+ *      ——这两个阶段逐次人工放行，放行卡上显示的就是将要执行的命令原文（base64 解码后的回显也落
+ *      `tool_runs`），机器无法自己批准。
  *   2. **仍然只跑在沙箱里**（2026-10-04 放开权限、2026-10-05 放开出口后的实际形状）：
  *      `--cap-drop ALL` + 仅 `NET_RAW`、容器内 root（NET_RAW 只对 root 生效）、可写根、
  *      限额 2 CPU/2G/512 pids ⇒ 命令能到达的**主机**由沙箱所在网络与宿主的路由决定
  *      （本部署该网络非 internal，故与宿主可达范围一致——网络层不再是范围边界）。
  *   3. **文本与预算都有上限**：命令 ≤8k 字符、按模板超时、输出受 `PENTEST_MAX_OUTPUT_BYTES` 约束。
  *
- * **它放宽了什么（必须说清）**：端口粒度不再可强制（代理按主机放行，命令可打该主机的任意端口——
+ * **它放宽了什么（必须说清）**：端口粒度不再可强制（命令可打该主机的任意端口——
  * `port` 参数只用于范围闸门记账）；参数黑名单对它不生效（`allowFreeForm`），因此**审批卡是唯一的
- * 内容闸门**，人类必须真的读那条命令。要恢复「只能跑白名单动作」，把这个模板从注册表移除即可。
+ * 内容闸门**，人类必须真的读那条命令——这也是为什么 ④⑤ 按阶段提升类别（免批就等于这条闸门失效）。
+ * 要恢复「只能跑白名单动作」，把这个模板从注册表移除即可。
  */
 const DIRECT_COMMAND_SPEC: ActionTemplateSpec = {
   template: {
-    id: 'direct_command',
-    // **免批（2026-10-07 操作者裁定：直接"任意命令免批"）**：类别由 `exploit_validation` 改为
-    // `active_discovery`（预设内且不在 `PER_ACTION_APPROVAL_CLASSES` 里 ⇒ 不再逐条人批）。
-    // 代价已登记在设计文档：这一档从此**不再有人看命令原文**，审批卡对它的闸门失效；
-    // 范围裁决与沙箱加固仍在（只打已裁决地址、容器隔离不变）。改这一处必须与镜像里那些
-    // "逐条人批"的措辞同轮更新，否则会再生产一处"信息面↔执行面不一致"。
+    id: FREE_COMMAND_TEMPLATE_ID,
+    // 基类 `active_probing`（预设内 ⇒ ①②③ 免批）。**④⑤ 的有效类别由会话阶段提升**：
+    // `effectiveActionClass(FREE_COMMAND_TEMPLATE_ID, …)` 在 exploitation 给出 `exploit_validation`、
+    // 在 post-exploitation 给出 `lateral_movement` ⇒ 那两个阶段逐条人批（auto 档对
+    // `exploit_validation` 仍有既有豁免，`lateral_movement` 任何模式都要人看）。
+    // 2026-10-09 操作者裁定，背景与取舍记在设计文档 §10.2.1。
+    // 改这里必须与提示词（`sandbox-brief.ts` / worker 工具描述）和技能措辞同轮更新，
+    // 否则会再生产一处"信息面↔执行面不一致"。
     actionClass: 'active_probing',
     tool: 'shell_exec',
     parameters: [
@@ -584,8 +593,9 @@ const LOCAL_COMMAND_SPEC: ActionTemplateSpec = {
  * 这一族把**只读/低风险动作**按 `active_probing`（四档预设全部启用，且不在逐次放行下限内）
  * 与 `passive_collection` 记账，于是：
  *
- *   - 人审模式下，侦察类动作**不需要逐条放行**，由范围 + 租约 + pacing（stealth 1rps / standard 5rps / deep 10rps）约束；
- *   - 危险动作仍然只能走 `direct_command`（`exploit_validation`，永远逐条人批）。
+ *   - 人审模式下，侦察类动作**不需要逐条放行**，由范围 + 租约 + pacing（stealth 1rps / standard 5rps / fast 10rps）约束；
+ *   - 危险动作仍然只能走 `direct_command`（**④ 记 `exploit_validation`、⑤ 记 `lateral_movement`**，
+ *     按阶段提升类别 ⇒ 逐条人批）。
  *
  * 与它们一一对应的是沙箱分发器里的同名动词（`docker/tools/pentest-tool`）——那些动词
  * **只打宿主注入的已裁决地址**（`PENTEST_RESOLVED_ADDRESSES`），这是 `shell_exec` 做不到的。

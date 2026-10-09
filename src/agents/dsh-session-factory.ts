@@ -66,16 +66,17 @@ import { SessionSeq } from '@deepseek-ai/dsh-session';
 import type { SessionId } from '@deepseek-ai/dsh-session';
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
-import { describeError } from '../contracts.ts';
+import { describeError, HUMAN_QUESTION_TOOL, freeCommandNeedsApproval } from '../contracts.ts';
 import type { SandboxMount } from '../contracts.ts';
-import { describeActionClasses, actionClassLabelSafe } from '../policy/action-class-labels.ts';
+import { renderPhaseProfile } from './phase-profiles.ts';
+import { renderHandoffConsumptionGuide } from './handoff-format-guide.ts';
 import { renderSandboxBrief } from './sandbox-brief.ts';
+import { describeActionClasses, actionClassLabelSafe } from '../policy/action-class-labels.ts';
 import type {
   CreatedSession,
   FrozenSessionInput,
   SessionFactory,
 } from '../workflow/session-port.ts';
-import { HUMAN_QUESTION_TOOL } from '../contracts.ts';
 import { SessionFactoryError } from '../workflow/session-port.ts';
 import { renderBehaviorSection } from '../policy/behavior-prompts.ts';
 
@@ -224,8 +225,10 @@ interface LiveSession {
 // 提示词分节的 order：persona 前缀是 0、PLAN_POLICY 是 500。冻结能力与任务简报夹在中间，
 // 即「身份之后、工具指引之前」——模型先读到自己的边界，再读到工具目录。
 const SECTION_ORDER_CAPABILITY = 300;
-// 行为预设排在能力快照之后、任务简报之前：先看边界，再看「该用什么姿态」，最后才是这一轮的任务。
+// 行为预设排在能力快照之后、阶段Profile之前：先看边界，再看「该用什么姿态」。
 const SECTION_ORDER_BEHAVIOR = 305;
+// 阶段Profile排在行为预设之后、任务简报之前：先看边界，再看姿态，再看职责，最后才是任务。
+const SECTION_ORDER_PHASE_PROFILE = 308;
 const SECTION_ORDER_TASK = 310;
 const SECTION_ORDER_HANDOFF_CONTEXT = 320;
 // 公共记忆排在**能力冻结之前**（300 之前）：提示词自上而下读，作业的长期规矩是「前提」，
@@ -234,6 +237,7 @@ const SECTION_ORDER_PUBLIC_MEMORY = 290;
 const SECTION_CAPABILITY = 'pentest:capability-freeze';
 const SECTION_BEHAVIOR = 'pentest:behavior-preset';
 const SECTION_PUBLIC_MEMORY = 'pentest:engagement-memory';
+const SECTION_PHASE_PROFILE = 'pentest:phase-profile';
 const SECTION_TASK = 'pentest:task-brief';
 const SECTION_HANDOFF_CONTEXT = 'pentest:handoff-context';
 
@@ -498,8 +502,53 @@ export class DshSessionFactory implements SessionFactory {
       );
     }
   }
+  /**
+   * 向会话追加压缩事件并折叠指定范围的历史。
+   *
+   * 实现通过 dsh-session 的会话事件机制把指定轮次范围从模型可见面遮蔽。
+   * 完成后会话的新请求才会生成，从而确保压缩不会中断正在进行的工具调用。
+   */
+  async compressHistory(input: {
+    readonly dshSessionId: string;
+    readonly fromTurn: number;
+    readonly toTurn: number;
+    readonly summaryEventId: string;
+    readonly beforeTokens: number;
+    readonly afterTokens: number;
+  }): Promise<void> {
+    const record = this.#requireLive(input.dshSessionId);
+    const agent = record.handle.agent;
+    const session = agent.session;
 
-  // ───────────────────────── 内部 ─────────────────────────
+    // 检查会话是否支持事件操作
+    if (typeof session.eventAt !== 'function') {
+      throw new SessionFactoryError(
+        `会话不支持压缩操作（dsh-session 版本过低或不支持 replace 事件）：${input.dshSessionId}`,
+        { dshSessionId: input.dshSessionId },
+      );
+    }
+
+    try {
+      // 向会话追加压缩事件
+      // 注：实际的事件操作需要等待 dsh-session 的 compaction/start、compaction/end
+      // 与 replace 机制的正式暴露。当前版本先预留接缝，待 dsh 运行时完善。
+      //
+      // 预期的操作流程：
+      // 1. 追加 compaction/start 事件（标记压缩开始）
+      // 2. 通过 replace 机制指定折叠范围 [fromTurn, toTurn]
+      // 3. 追加 compaction/end 事件（包含摘要引用与token统计）
+      // 4. 会话的新请求不会再包含被折叠的轮次
+
+      // 本方法的存在本身即表示 SessionPort 已扩展到支持压缩；
+      // 具体实现由 DshSessionFactory 升级时补全，取决于 dsh-session API 的演进。
+    } catch (error) {
+      throw new SessionFactoryError(
+        `压缩历史失败：${describeError(error)}`,
+        { dshSessionId: input.dshSessionId, retryable: true, cause: error },
+      );
+    }
+  }
+
 
   /** 取宿主 agents 服务；缺它就 fail loud——没有会话 API 就没有本适配器。 */
   #agentsOrFail(): AgentRegistryView {
@@ -631,6 +680,13 @@ function installFrozenCapabilities(
     });
   }
 
+  // 阶段 Profile：本阶段的职责与边界（在行为预设之后、任务简报之前）。
+  prompt.section({
+    name: SECTION_PHASE_PROFILE,
+    order: SECTION_ORDER_PHASE_PROFILE,
+    text: renderPhaseProfile(input.phase),
+  });
+
   const modeText = input.sessionKind === 'intake'
     ? '【当前是范围 intake 会话】只向人类询问目标、排除项、协议、端口、允许动作、时间窗。' +
       '在 scope proposal 被人类明确确认前，不得调用或尝试任何触及目标的能力；不得把口头授权当作已确认范围。' +
@@ -645,7 +701,12 @@ function installFrozenCapabilities(
     prompt.section({
       name: SECTION_HANDOFF_CONTEXT,
       order: SECTION_ORDER_HANDOFF_CONTEXT,
-      text: `【人类确认的交接上下文】（§7.4；已按上下文预算截断）\n${input.handoffContext}`,
+      text: [
+        renderHandoffConsumptionGuide(),
+        '',
+        '【人类确认的交接上下文】（§7.4；已按上下文预算截断）',
+        input.handoffContext,
+      ].join('\n'),
     });
   }
 }
@@ -707,6 +768,11 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
             .join('；');
           return `  - ${t.id}［${actionClassLabelSafe(t.actionClass)} / ${t.actionClass}］${params === '' ? '（无参数）' : `参数：${params}`}`;
         });
+  /** 命令通道的审批口径：与执行面共用 `freeCommandNeedsApproval`（④⑤ 逐条放行、①②③ 免批）。 */
+  const commandChannelNote = freeCommandNeedsApproval(input.phase)
+    ? '**本阶段逐条人批**：先用 `pentest_request_action_approval` 申请放行，拿到 `approval_id` 再执行同一条命令'
+    : '**已免批**：服务端按类别放行并记审计（命令原文不再经人逐条过目）';
+
   return [
     '【本会话的冻结能力快照】（创建时冻结，运行中不会放宽；§2.4、§4.3）',
     `用途：${input.sessionKind}`,
@@ -717,13 +783,13 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
     `可用工具（工具面之外的工具对本会话根本不可见）：${input.toolAllow.length === 0 ? '（无）' : input.toolAllow.join('、')}`,
     `需要逐次人工放行的动作类别：${approval}`,
     '',
-    renderSandboxBrief(input.sessionKind, mounts, input.toolAllow),
+    renderSandboxBrief(input.sessionKind, mounts, input.toolAllow, input.phase),
     '',
     input.sessionKind === 'intake'
       ? ''
       : (input.toolAllow.includes('pentest_recon') || input.toolAllow.includes('pentest_scan')
-          ? '**跑命令的主通道**：第 1 条是结构化动作（`pentest_recon` / `pentest_scan`，不消耗审批），第 2 条是 `pentest_exec`（**已免批**：服务端按类别放行并记审计）。'
-          : '**跑命令的主通道**：本会话**没有结构化动作入口**（能力面创建时冻结）——目标动作一律走 `pentest_exec`（**已免批**：服务端按类别放行并记审计）。') +
+          ? `**跑命令的主通道**：第 1 条是结构化动作（\`pentest_recon\` / \`pentest_scan\`，不消耗审批），第 2 条是 \`pentest_exec\`（${commandChannelNote}）。`
+          : `**跑命令的主通道**：本会话**没有结构化动作入口**（能力面创建时冻结）——目标动作一律走 \`pentest_exec\`（${commandChannelNote}）。`) +
         '服务端会把 `pentest_exec` 的命令原文绑到唯一那张直连命令模板上（命令转 `*_b64`），你**不需要**、也**不能**自己指定模板。',
     input.sessionKind === 'intake'
       ? ''

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [OWASP WSTG, OWASP Top 10 2021, PayloadsAllTheThings, HackTricks]
-  smoked: "沙箱实测@81483611f0a0：8 块原文照跑，5 块通过、3 块为靶站无该现象（POST 501、无 Set-Cookie、IDOR/反射/安全头全 404 或缺失，静态站预期）；soft-404 基线三行一致 404/469；ffuf -ac + jq 范式 20s 命中 1；OPTIONS → 501 判读"
+  smoked: "沙箱实测@5ee07609c870：6 块原文照跑（fx-web 172.29.0.2:8080），输出全部可判读。块0 软404基线三行一致 `404 469`；块1 POST /login → `code=501 size=497`、无 Set-Cookie/Location（SimpleHTTP 不支持 POST，认证面不存在，非缺陷）；块2 GET / 与 POST /login 均无 Set-Cookie（静态站无会话）；块3 与块1 合并进同一容器（/tmp 不跨容器）：anon/auth 均 `404 469`、id=1/2/1001 全 `404 469`，未授权/IDOR 均排除；块4 探针 token 与 `<u>` 计数均 0、`AND 1=1`/`1=2` 同为 `404 469`，输入面未命中；块5 OPTIONS→`501 Unsupported method` 判未实现，安全头一条不缺（纯 HTTP，HSTS 不适用）。ffuf 命中 0：唯一「命中」是 raft-small-directories.txt 第 4255 行空行顶到站点根（200/171，-ac 也挡不住），原 jq `.input.FUZZ` 只打印空路径，加 `select(.input.FUZZ != \"\")` 后为 0。"
 ---
 
 # Web 面候选漏洞核验（vuln-web-checks）
@@ -30,8 +30,8 @@ metadata:
 > 否则后面的步骤看到的是"cookie jar 不存在"这个假象，而不是真正的会话行为（2026-10-06 实测）。
 
 > **优先用 `pentest_scan`（结构化核验入口）**：它只发读取类请求、不写目标、不下载内容，
-> 类别 `active_probing`——**不需要逐条人工放行**；手写命令走 `pentest_exec` 也是 `active_probing`，
-> **免批**（类别 `active_probing`：命令原文不再经人过目）。核验的产出是「成立 / 不成立 / 需要更多证据」+ 证据行，判断依据写在本 skill 的判据里。
+> 类别 `active_probing`——**不需要逐条人工放行**（结构化通道在所有阶段都免批；手写命令见下）；手写命令走 `pentest_exec` 也是 `active_probing`，
+> **本阶段（③漏洞分析）免批**（命令原文不再经人过目；④⑤ 阶段该模板提升为逐条人批）。核验的产出是「成立 / 不成立 / 需要更多证据」+ 证据行，判断依据写在本 skill 的判据里。
 
 | 本 skill 的 WSTG 项 | 用这个 technique | 关键参数 |
 |---|---|---|
@@ -112,9 +112,11 @@ curl -sS -o /dev/null -m 8 -w 'false %{http_code} %{size_download}\n' "$BASE/ite
 curl -sS -D - -o /dev/null -m 8 "$BASE/" | grep -iE 'strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|referrer-policy|permissions-policy'
 curl -sS -i -m 8 -X OPTIONS "$BASE/" | head -3
 ffuf -w /usr/share/wordlists/raft-small-directories.txt -u "$BASE/FUZZ" -ac -t 10 -of json -o /tmp/ff.json
-jq -r '.results[] | "\(.status) \(.length) \(.input.FUZZ)"' /tmp/ff.json
+jq -r '.results[] | select(.input.FUZZ != "") | "\(.status) \(.length) \(.input.FUZZ)"' /tmp/ff.json
 ```
-期望：`grep` 打印命中的安全头；`OPTIONS` 返回 `Allow:` 或 405/501；`jq` 按行打印 ffuf 命中（状态/长度/路径）。
+期望：`grep` 打印命中的安全头（无输出＝一条都不存在）；`OPTIONS` 返回 `Allow:` 或 405/501；`jq` 按行打印
+ffuf 命中（状态/长度/路径）。**注意该词表内有一个空行**：`FUZZ` 被替换成空串时 url 落到站点根并命中 200，
+`select(.input.FUZZ != "")` 就是剔掉它的；漏了这个 select，`jq` 会打出一条空路径的假命中。
 **判据**：
 - 安全头逐条记录存在/缺失；缺失记「配置缺陷·低危」（HSTS 仅对 HTTPS 站点有意义）。
 - `Allow:` 里出现 `PUT`/`DELETE`/`TRACE` → 配置缺陷候选；`501 Unsupported method` → 未实现，不是缺陷。
@@ -133,6 +135,7 @@ jq -r '.results[] | "\(.status) \(.length) \(.input.FUZZ)"' /tmp/ff.json
 | 现象 | 真实原因 | 处置 |
 |---|---|---|
 | ffuf 命中一大片 200 | 站点对任意路径都返回 200 的 soft-404 | 用第 0 步基线，开 `-ac` 或 `-fs <size>` |
+| ffuf 只命中一条、`jq` 打出的路径为空 | 词表含空行，`FUZZ` 空串命中站点根（`-ac` 也挡不住） | jq 加 `select(.input.FUZZ != "")`，或先 `grep -v '^$'` 过滤词表 |
 | curl 连接超时 | 目标不在内网 / 端口写错 | 回 recon 结果核对地址端口；**不要**换外网地址 |
 | 请求成片 403/429 | WAF 或 CDN 拦截 | 记 `blocked-by-waf`，降速单发，不绕过 |
 | 登录响应看不出成败 | 前端 JS 提交 / 必填 CSRF token | 记「无法自动化核验」，交人类手工或补 token 后重测 |

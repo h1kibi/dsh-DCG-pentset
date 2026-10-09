@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-CRYP-01, RFC 5280, RFC 9309, MITRE ATT&CK T1590.002/T1596.003]
-  smoked: "沙箱实测@81483611f0a0：7 块原文照跑（解析器选定 127.0.0.11、A/AAAA、记录类型循环、PTR 反解出容器名 fx-tls.pentest-lab-internal、证书字段 CN=smoke.local、链校验 self-signed 预期、退化探测）；退化块本轮修掉——dig … | head -3; echo $? 取的是 head 的退出码恒为 0，改成单独捕获后 exit=124/9 才可用；非 A/PTR 类型在内嵌 DNS 下超时属环境行为。2026-10-06 又补两步并实测：⑧区域传送——对实验室 bind9（docker/dns-lab，zone lab-zone.test 故意 allow-transfer any）拿到完整传送（11 条记录，含只应内网的 internal-only A 10.42.0.9），对同服务器的 hardened.test 与 AD DC 的内嵌 DNS 都得 `Transfer failed.`（正常配置的否定结论）；⑨whois——whois example.com 取到注册局/创建/到期/NS，结构化 whois_query kind=domain|ip 返回 whois_registrar / whois_inetnum / whois_netname。另实测：结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）只支持 system/public 解析器，对内网 zone 返回 records=0、labels=4989 found=0（跑了约 7 分钟）——已写入判读与去噪。2026-10-06 再补第 10 步（子域枚举）并实测：subfinder -d example.com 得 m.example.com / dev.example.com / products.example.com；dnsx 解析出该域两条 A 记录"
+  smoked: "沙箱实测@5ee07609c870：10 块原文照跑（2026-10-09）。①选定解析器：/etc/resolv.conf=nameserver 127.0.0.11，dig A fx-tls→172.29.0.3(exit=0)；②A/AAAA：A=172.29.0.3、AAAA 空(exit=0)；③记录类型循环：CNAME/NS/TXT/SOA 均 `communications error to 127.0.0.11#53: timed out`+`no servers could be reached`，仅 MX 空——非 A/PTR 类型在内嵌 DNS 下超时/无应答属环境行为；④PTR：-x 172.29.0.3→fx-tls.pentest-lab-internal.；⑤证书：subject/issuer=CN=smoke.local、notBefore=Oct 8 23:36:11 2026 GMT、notAfter=Oct 9 23:36:11 2026 GMT、SAN DNS:smoke.local；⑥链校验：原文 `2>&1 >/dev/null | grep` 只留 stderr，拿到 `verify error:num=18:self-signed certificate`，但期望的 `Verify return code:` 在 stdout 被吞——本轮最小修正为 `2>&1 | grep`（去掉 >/dev/null），实测同时拿到 `verify error:num=18:self-signed certificate` 与 `Verify return code: 18 (self-signed certificate)`；⑦退化探测：可达解析器 exit=0、不可达 172.29.0.99 exit=124（timeout，本轮非旧记的 9）；⑧AXFR：lab-zone.test @172.29.0.5 完整传送（XFR size 12 records，含只应内网的 internal-only A 10.42.0.9），硬化的 hardened.test @同一服务器得 `; Transfer failed.`——成功/被拒两分支都拿到；`dig +short NS lab-zone.test` 经内嵌 DNS 返回空，内网 zone 的权威地址须由范围给出；⑨whois：whois example.com 取到 Registrar/Creation/Registry Expiry/NS，whois 1.1.1.1 取到 inetnum 1.1.1.0-1.1.1.255 / netname APNIC-LABS，whois 8.8.8.8 本轮超时(exit=124，该 whois 服务器间歇)；⑩子域枚举：subfinder -d example.com→dev/products/support/m/www.example.com，dnsx 解析 example.com→2 条 A（172.66.147.243/104.20.23.154）。结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）本轮不在范围。"
 ---
 
 # DNS 与证书面清点（recon-dns-cert）
@@ -32,7 +32,7 @@ metadata:
 > ② IP 目标校验主机名用 `-verify_ip`，**不要**用 `-verify_hostname`（证书 SAN 为 `IP Address:…` 时后者报
 > `hostname mismatch`，看着像证书问题，其实只是校验方式选错了）。
 > 通配处理都做成枚举参数，类别是 `passive_collection`/`active_probing`——**不需要逐条人工放行**；
-> 手写 `dig`/`openssl` 走 `pentest_exec` 属 `active_probing`，**免批**（命令原文不再经人过目）。
+> 手写 `dig`/`openssl` 走 `pentest_exec` 属 `active_probing`，**免批**（命令原文不再经人过目；**此口径只属 ①②③**——④⑤ 阶段同一模板提升为逐条人批）。
 > 注意：DNS 类 technique 在服务端按 `udp` 记账，**范围条目要声明 udp**，否则会被范围闸门拒绝。
 
 | 本 skill 的步骤 | 用这个 technique | 关键参数 |
@@ -105,7 +105,7 @@ X509v3 Subject Alternative Name:
 
 ### 6. 链校验与有效期判读
 ```bash
-echo | openssl s_client -connect <目标>:<端口> -servername <SNI名> 2>&1 >/dev/null \
+echo | openssl s_client -connect <目标>:<端口> -servername <SNI名> 2>&1 \
   | grep -Ei 'verify (return code|error)'
 ```
 期望：`Verify return code: 0 (ok)`。

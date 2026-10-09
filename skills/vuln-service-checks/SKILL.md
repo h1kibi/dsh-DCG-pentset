@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [Nmap NSE 官方文档, OpenSSL s_client 文档, OWASP WSTG-CONF]
-  smoked: "沙箱实测@81483611f0a0：5 块原文照跑通过（nmap -sV 认出 SimpleHTTPServer 0.6 与 OpenSSL s_server；http-headers/http-methods 输出 Server 与 Supported Methods: GET HEAD；ssl-* 打在非 TLS 端口无输出；openssl s_client 与 ssl-cert 互证；OPTIONS/TRACE 501）。2026-10-06 补 3b「TLS 专项」并实测（fx-tls 自签靶）：testssl --protocols 给出 `TLS 1.2 offered (OK)` 与 1.0/1.1 not offered；sslscan 给出 `TLSv1.2 enabled`、1.0/1.1 disabled；sslyze 给出 Mozilla 合规判定 `FAILED - Not compliant` 并逐项列出（证书路径校验失败、弱套件、多余曲线）"
+  smoked: "沙箱实测@5ee07609c870：6 块原文照跑（含块 3b TLS 专项），全部产出可判读结论。块1 nmap -sV 认出 `SimpleHTTPServer 0.6 (Python 3.10.21)`（8080）与 `OpenSSL s_server -www httpd`（8443，命令行 s_server -quiet -accept 8443 -cert/-key -www）；块2 http-* 在 8080 给出 `Server: SimpleHTTP/0.6`、`Supported Methods: GET HEAD`、http-enum 两条（/robots.txt、/.git/HEAD，curl 复核 200）、http-security-headers/http-cookie-flags/http-auth-finder 无输出；块3 ssl-* 在 8443：ssl-cert CN/SAN=smoke.local、RSA 2048、自签且有效期仅 1 天（notAfter 2026-10-09T23:36:11），ssl-enum-ciphers 仅 TLSv1.2/1.3、全 A、least strength A（无 SSLv2/3、无 1.0/1.1、无 RC4/3DES），ssl-dh-params/heartbleed/poodle 无输出；块3b testssl `TLS 1.2 offered (OK)`+`TLS 1.3 offered (OK): final`、1.0/1.1 not offered（107s），sslscan `TLSv1.2/1.3 enabled`、1.0/1.1 disabled，sslyze `FAILED - Not compliant`（certificate_path_validation + 14 个 CBC/TLS_RSA 套件 + 多余曲线 secp521r1/X448）；块4 openssl s_client 证书字段与 ssl-cert 互证（notBefore/notAfter/CN 一致），-tls1_1 握手失败（`alert internal error`、`Cipher is (NONE)`，但同段仍打印 `Protocol : TLSv1.1`），-tls1_2 协商 ECDHE-RSA-AES256-GCM-SHA384；块5 OPTIONS/TRACE 在 8080 均 `501 Unsupported method`，判未实现非缺陷。"
 ---
 
 # 服务面候选漏洞核验（vuln-service-checks）
@@ -27,8 +27,8 @@ metadata:
 
 > **优先用 `pentest_scan`**：`nse_handshake` 走只读 NSE 白名单（`smtp-commands`/`ftp-anon`/`ssh-auth-methods`/
 > `rdp-ntlm-info`/`ssl-enum-ciphers`/`smb-os-discovery`/`smb-security-mode`），`tls_weakness` 枚举协议与套件；
-> 类别 `active_probing`，**不需要逐条人工放行**。手写 `nmap --script` 走 `pentest_exec` 是
-> `active_probing`——**免批**（命令原文不再经人过目），且沙箱侧同样只放行白名单脚本。
+> 类别 `active_probing`，**不需要逐条人工放行**（结构化通道在所有阶段都免批；手写命令见下）。手写 `nmap --script` 走 `pentest_exec` 是
+> `active_probing`——**本阶段（③漏洞分析）免批**（命令原文不再经人过目；④⑤ 阶段该模板提升为逐条人批），且沙箱侧同样只放行白名单脚本。
 
 | 本 skill 的核验项 | 用这个 technique | 关键参数 |
 |---|---|---|
@@ -38,6 +38,11 @@ metadata:
 | SSH 认证方式 | `nse_handshake` | `port=22`、`scripts=ssh-auth-methods` |
 | RDP NTLM 信息 | `nse_handshake` | `port=3389`、`scripts=rdp-ntlm-info` |
 | SMB 系统/签名 | `nse_handshake` | `port=445`、`scripts=smb-os-discovery,smb-security-mode` |
+
+> **容器是一次性的**（`--rm`）：`/tmp/svc_ver.txt`、`/tmp/http_scripts.txt`、`/tmp/ssl_scripts.txt`
+> **只在那一条命令内存在**。第 4 步的「与 `/tmp/ssl_scripts.txt` 的 `ssl-cert` 互证」要读第 3 步落的文件，
+> **必须和第 3 步写进同一条命令**（`nmap … -oN /tmp/ssl_scripts.txt && echo | openssl s_client …`）；
+> 分两条命令跑，第 4 步看到的是"文件不存在"这个假象，而不是真实的证书比对（2026-10-08 实测：分容器跑时该文件读不到）。
 
 ### 1. 固定服务版本（后续判据的输入）
 ```bash
@@ -56,7 +61,7 @@ nmap -Pn -p <http 端口> \
 - `http-methods`：`Supported Methods` 含 `PUT`/`DELETE`/`TRACE` → 配置缺陷候选，须用第 5 步单发确认。
 - `http-cookie-flags`：cookie 缺 `HttpOnly`/`Secure` → 记录 cookie 名与缺失属性。
 - `http-enum`：列出的「可能存在路径」**每条都要 curl 复核**，它常把 soft-404 当命中。
-- `http-security-headers`：缺失的安全头逐条列出。
+- `http-security-headers`：只列出**存在**的安全头；整节没有输出＝一条都不存在，用 `curl -D -` 的原文兜底核对。
 证据统一引用 `/tmp/http_scripts.txt` 的小节原文，并附端口。
 
 ### 3. TLS 类服务核验（ssl-* 只读脚本）
@@ -97,8 +102,10 @@ echo | openssl s_client -connect <目标>:<端口> -tls1_2 2>&1 | grep -E 'Proto
 期望：第一条打印 `notBefore`/`notAfter`/`subject`/`issuer`/SHA256 指纹；后两条打印协商结果。
 **判据**：
 - 证书字段与 `/tmp/ssl_scripts.txt` 的 `ssl-cert` 一致 → 互证；不一致以 s_client 的原始证书为准。
-- 旧协议能**完成握手**（出现 `Protocol : TLSv1.1` 且无 handshake failure）才记弱协议命中；
-  出现 `wrong version number`/`handshake failure`/`no protocols available` → 协商失败，记为未命中。
+- 旧协议能**完成握手**才记弱协议命中；**只看到 `Protocol : TLSv1.1` 不算**——协商失败时 s_client 也会
+  先打这一行，必须同时确认 `New, TLSv1.x, Cipher is <套件>` 且 `Cipher` 不是 `0000`。
+  出现 `wrong version number`/`handshake failure`/`no protocols available`/`alert internal error`/
+  `SSL alert number`/`Cipher is (NONE)`/`New, (NONE)` → 协商失败，记为未命中。
 
 ### 5. 单发复核（只对前几步命中的项）
 ```bash
@@ -129,6 +136,8 @@ curl -sS -i -m 8 -X TRACE   "http://<目标>:<端口>/" | head -5
 | http-enum 命中一堆路径但 body 相同 | soft-404 | 用 `vuln-web-checks` 第 0 步的基线过滤 |
 | `--script=` 里混入 intrusive/brute | 选错脚本分类 | 移除，只保留 safe/info 类 |
 | 脚本对 8443 无输出 | 缺 SNI 或端口非 HTTP | 补 `--script-args http.host=<主机名>` 或换端口 |
+| `http-security-headers` 整节无输出 | 该脚本只报**存在**的头，无输出＝一条都不存在 | 不是故障；用 `curl -D -` 原文兜底 |
+| `-tls1_1` 打出 `Protocol : TLSv1.1` 却仍失败 | s_client 先打协议行再报错 | 看同一段的 `Cipher is (NONE)`/`New, (NONE)`/`SSL alert number`，判未命中 |
 
 ## 不做的事
 - 不改目标状态：不跑 `--script=exploit`，不跑 `brute`/`dos`/`intrusive` 分类。

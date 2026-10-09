@@ -122,20 +122,35 @@ describe('沙箱环境声明 ↔ 提示词：渲染出来的东西必须真的�
     assert.ok(brief.includes('用法：'), '分组必须带用法（只列名字等于没介绍）');
   });
 
-  it('两条命令通道与各自的审批语义都写清楚了', () => {
-    assert.ok(brief.includes('pentest_recon'), '简报必须点名结构化侦察入口');
-    assert.ok(brief.includes('pentest_scan'), '简报必须点名结构化核验入口');
-    assert.ok(brief.includes('pentest_exec'), '简报必须点名自由命令通道');
-    assert.match(brief, /不消耗人类审批/, '必须说明结构化通道不需要逐条人批（这是选它的理由）');
-    // 2026-10-07 免批裁定：这条锁改成钉**当前事实**（自由命令不再逐条人批）；
-    // 它反过来防的是"有人偷偷改回逐条人批却不改简报"这类口径漂移。
-    assert.match(brief, /自由命令[^\n]*免批/, '必须说明自由命令已免批（裁定：任意命令免批）');
-    assert.match(brief, /不再有人逐条过目/, '必须说明命令原文不再经人过目（这是免批的代价，要写在简报里）');
+  it('两条命令通道与各自的审批语义都写清楚了（免批阶段）', () => {
+    const free = renderSandboxBrief('phase', [], undefined, 'intelligence-gathering');
+    assert.ok(free.includes('pentest_recon'), '简报必须点名结构化侦察入口');
+    assert.ok(free.includes('pentest_scan'), '简报必须点名结构化核验入口');
+    assert.ok(free.includes('pentest_exec'), '简报必须点名自由命令通道');
+    assert.match(free, /不消耗人类审批/, '必须说明结构化通道不需要逐条人批（这是选它的理由）');
+    // 2026-10-09 起审批口径**按阶段**分叉，因此锁的是两套措辞各自出现在对的阶段：
+    // ①②③ 免批（代价照旧写明：命令原文不再经人过目）；④⑤ 逐条人批（写明先申请再执行）。
+    assert.match(free, /免批/, '①②③ 的自由命令仍然免批，简报必须这么说');
+    assert.match(free, /不再有人逐条过目/, '免批的代价要写在简报里（命令原文没人看过）');
     for (const technique of Object.keys(RECON_TECHNIQUES)) {
-      assert.ok(brief.includes(technique), `简报缺侦察 technique ${technique}`);
+      assert.ok(free.includes(technique), `简报缺侦察 technique ${technique}`);
     }
     for (const technique of Object.keys(VULN_TECHNIQUES)) {
-      assert.ok(brief.includes(technique), `简报缺核验 technique ${technique}`);
+      assert.ok(free.includes(technique), `简报缺核验 technique ${technique}`);
+    }
+  });
+
+  it('④⑤ 的简报必须写明逐条人批（否则模型会以为命令没人看）', () => {
+    for (const phase of ['exploitation', 'post-exploitation'] as const) {
+      const brief = renderSandboxBrief('phase', [], undefined, phase);
+      assert.match(brief, /逐条人批/, `${phase}：必须写明自由命令要人批`);
+      assert.match(brief, /pentest_request_action_approval/, `${phase}：必须给出申请放行的入口`);
+      assert.match(brief, /approval_id/, `${phase}：必须说明拿到凭证再执行`);
+      assert.doesNotMatch(
+        brief,
+        /自由命令[^\n]*免批/,
+        `${phase}：不得再对自由命令声称免批（执行面在该阶段逐条放行）`,
+      );
     }
   });
 

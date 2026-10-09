@@ -37,16 +37,20 @@
 
 import type { Classification } from '../contracts.ts';
 import {
+  ASSET_KINDS,
   FINDING_STATUSES,
   REPORT_SECTIONS,
+  SCOPE_DECISIONS,
   SEVERITIES,
 } from '../contracts.ts';
 import type {
+  AssetKind,
   ExportRequest,
   ExportResult,
   Finding,
   FindingDisposition,
   FindingStatus,
+  NetworkAsset,
   PentestReportService,
   RedactionRequest,
   ReportDraft,
@@ -55,6 +59,7 @@ import type {
   ReportSection,
   ReportSignatureSnapshot,
   ReportVersionRef,
+  ScopeDecision,
   Severity,
 } from '../contracts.ts';
 import { sha256Hex } from '../memory/chunks.ts';
@@ -81,6 +86,8 @@ export class ReportServiceError extends Error {
 const FINDING_STATUS_SET: ReadonlySet<string> = new Set<string>(FINDING_STATUSES);
 const SEVERITY_SET: ReadonlySet<string> = new Set<string>(SEVERITIES);
 const SECTION_SET: ReadonlySet<string> = new Set<string>(REPORT_SECTIONS);
+const ASSET_KIND_SET: ReadonlySet<string> = new Set<string>(ASSET_KINDS);
+const SCOPE_DECISION_SET: ReadonlySet<string> = new Set<string>(SCOPE_DECISIONS);
 /** §11.3 的字段分类取值域。`artifacts.classification` 列没有 CHECK 约束，越界值按「未知」处理。 */
 const CLASSIFICATION_SET: ReadonlySet<string> = new Set<string>([
   'public',
@@ -141,6 +148,20 @@ interface FindingRow {
   readonly accepted_by: string | null;
   readonly accepted_at: Date | string | null;
   readonly created_at: Date | string;
+}
+
+interface AssetRow {
+  readonly id: string;
+  readonly canonical_target: string;
+  readonly kind: string;
+  readonly labels: unknown;
+  readonly first_seen_iteration: number | string;
+  readonly discovered_in_session_id: string | null;
+  readonly discovered_from_asset_id: string | null;
+  readonly evidence_refs: unknown;
+  readonly created_at: Date | string;
+  readonly scope_decision: string | null;
+  readonly finding_ids: unknown;
 }
 
 interface ArtifactRow {
@@ -302,6 +323,32 @@ const SQL_LATEST_DECISIONS = `select distinct on (subject_id) subject_id, decisi
 const SQL_ARTIFACTS = `select id, kind, media_type, byte_size, classification, truncated
        from pentest.artifacts
       where engagement_id = $1 and id = any($2::uuid[])`;
+
+/**
+ * 资产清单（§5.5）。当前范围版本 = `max(scope_versions.version)`（`currentScopeVersion` 同口径）。
+ *
+ * `left join` 保留**没有该版本裁决行**的资产；`finding_ids` 用 lateral 聚合避免
+ * 「一条结论影响 N 个资产」时的行重复。顺序与 `listCandidateAssets` 同口径
+ * （`first_seen_iteration, canonical_target`），两处列表并排看不会互相矛盾。
+ */
+const SQL_ASSETS = `select a.id, a.canonical_target, a.kind, a.labels, a.first_seen_iteration,
+              a.discovered_in_session_id, a.discovered_from_asset_id, a.evidence_refs, a.created_at,
+              asv.decision as scope_decision,
+              coalesce(hit.finding_ids, '{}') as finding_ids
+       from pentest.assets a
+       left join pentest.asset_scope_versions asv
+              on asv.asset_id = a.id
+             and asv.scope_version = (
+                   select max(version) from pentest.scope_versions where engagement_id = $1
+                 )
+       left join lateral (
+              select array_agg(f.id) as finding_ids
+                from pentest.findings f
+               where f.engagement_id = a.engagement_id
+                 and a.id = any(f.affected_asset_ids)
+            ) hit on true
+      where a.engagement_id = $1
+      order by a.first_seen_iteration, a.canonical_target`;
 
 /** §14.4「五阶段时间线 / 每次阶段切换与重做记录」。 */
 const SQL_TRANSITIONS = `select resulting_version, from_phase, to_phase, transition_type, forced, reason, created_at
@@ -1100,6 +1147,27 @@ export class PgReportService implements PentestReportService {
     return this.#undisposedFindings(this.#db, engagementId);
   }
 
+  /**
+   * 资产清单（控制台「资产」面板）。
+   *
+   * 源表是 `pentest.assets`（资产只由范围修订登记，§5.5）：这里**只读**，不创建资产——
+   * 「Agent 看到一个地址就自动登记成资产」会让范围面被凭空扩大，那是 §10.2.2 明令禁止的。
+   *
+   * 两个附加事实各用一条确定性的读：
+   *
+   *   - `scopeDecision`：当前范围版本（`max(scope_versions.version)`）下的裁决。用
+   *     `left join` 而不是 inner join——**没有该版本裁决行的资产要出现在列表里**，
+   *     否则人类看不到「有资产但没进这一版范围」。这与 §10.2.2 的资产标签展开口径一致
+   *     （那里刻意只认登记过决策的资产），区别是本端点给人看全貌、那里给判定用。
+   *   - `findingIds`：`findings.affected_asset_ids` 命中该资产的结论。用 lateral 聚合
+   *     而不是 join：一条结论可以影响多个资产，join 会让资产行重复。
+   */
+  async listAssets(engagementId: string): Promise<readonly NetworkAsset[]> {
+    await this.#engagement(this.#db, engagementId);
+    const found = await this.#db.query<AssetRow>(SQL_ASSETS, [engagementId]);
+    return found.rows.map(toNetworkAsset);
+  }
+
   async #undisposedFindings(db: DbClient, engagementId: string): Promise<readonly Finding[]> {
     const findings = await this.#findingRows(db, engagementId);
     const dispositions = await this.#dispositions(db, engagementId);
@@ -1358,5 +1426,38 @@ function toFinding(row: FindingRow): Finding {
     confidence: asOptionalNumber(row.confidence, `findings.${row.id}.confidence`),
     acceptedBy: row.accepted_by,
     acceptedAt: row.accepted_at === null ? null : toIso(row.accepted_at, `findings.${row.id}.accepted_at`),
+  };
+}
+
+function parseAssetKind(value: string, assetId: string): AssetKind {
+  if (!ASSET_KIND_SET.has(value)) {
+    throw new ReportServiceError(`assets.kind 取值非法：${JSON.stringify(value)}（资产 ${assetId}）`);
+  }
+  return value as AssetKind;
+}
+
+function parseScopeDecision(value: string | null, assetId: string): ScopeDecision | null {
+  if (value === null) return null;
+  if (!SCOPE_DECISION_SET.has(value)) {
+    throw new ReportServiceError(
+      `asset_scope_versions.decision 取值非法：${JSON.stringify(value)}（资产 ${assetId}）`,
+    );
+  }
+  return value as ScopeDecision;
+}
+
+function toNetworkAsset(row: AssetRow): NetworkAsset {
+  return {
+    id: row.id,
+    identifier: row.canonical_target,
+    kind: parseAssetKind(row.kind, row.id),
+    labels: asStringArray(row.labels, `assets.${row.id}.labels`),
+    firstSeenIteration: asNumber(row.first_seen_iteration, `assets.${row.id}.first_seen_iteration`),
+    scopeDecision: parseScopeDecision(row.scope_decision, row.id),
+    discoveredInSessionId: row.discovered_in_session_id,
+    discoveredFromAssetId: row.discovered_from_asset_id,
+    evidenceRefs: asStringArray(row.evidence_refs, `assets.${row.id}.evidence_refs`),
+    findingIds: asStringArray(row.finding_ids, `assets.${row.id}.finding_ids`),
+    createdAt: toIso(row.created_at, `assets.${row.id}.created_at`),
   };
 }

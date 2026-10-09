@@ -193,8 +193,29 @@ export interface SessionFactory {
 
   /** 关闭会话。之后任何 deliver 都必须失败。 */
   close(dshSessionId: string, reason: string): Promise<void>;
+  /**
+   * 向会话追加压缩事件并折叠指定范围的历史（§8.10）。
+   *
+   * 实现应通过 dsh-session 的 `compaction/start`、`compaction/end` 事件与 `replace`
+   * 折叠机制，把指定轮次范围从模型可见面遮蔽，同时追加压缩摘要事件供后续检索。
+   *
+   * 调用时序：当会话运行中检测到上下文使用率达到 60% 阈值时，在**回合边界**
+   * （即将投递下一条消息之前）调用。压缩是同步操作，完成后会话的新请求才会生成。
+   */
+  compressHistory(input: {
+    readonly dshSessionId: string;
+    /** 压缩覆盖的轮次范围开始（包含）。 */
+    readonly fromTurn: number;
+    /** 压缩覆盖的轮次范围结束（包含）。 */
+    readonly toTurn: number;
+    /** 压缩摘要的事件 ID（从模型侧获得）。 */
+    readonly summaryEventId: string;
+    /** 压缩前的估算请求令牌数。 */
+    readonly beforeTokens: number;
+    /** 压缩后的估算请求令牌数。 */
+    readonly afterTokens: number;
+  }): Promise<void>;
 }
-
 /**
  * 会话工厂失败的统一错误。
  *

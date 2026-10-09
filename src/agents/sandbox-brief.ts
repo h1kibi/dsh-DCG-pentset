@@ -10,8 +10,9 @@
  *   2. **以为能力随心**：不知道装了什么、不知道限额（超时就以为"目标不可达"，
  *      输出被截断就以为"命令没跑"）。
  *   3. **不知道两条通道的区别**：明明有不需要逐条人批的结构化动作（`pentest_recon` /
- *      `pentest_scan`），却去手写 `nmap`/`curl` 命令 —— 后者属逐次放行类别，
- *      人类要在放行卡上一条条读，侦察吞吐直接被人审预算拖死。
+ *      `pentest_scan`），却去手写 `nmap`/`curl` 命令 —— 在需要人批的阶段（④利用验证 /
+ *      ⑤后渗透）后者每一条都要人类在读命令原文，吞吐直接被人审预算拖死；
+ *      而在免批的阶段（①②③）它又没人过目，命令与目的必须写清楚。
  *
  * 因此这份简报按「**它是什么 → 限额 → 两条通道 → 有什么工具（分组 + 用法）→ 字典与模板 →
  * 退出码 → 边界**」的顺序写：先给世界模型，再给操作细节。
@@ -27,11 +28,12 @@ import {
   SANDBOX_TEMPLATE_DIR,
   SANDBOX_TOOL_GROUPS,
   SANDBOX_WORDLISTS,
+  freeCommandNeedsApproval,
 } from '../contracts.ts';
-import type { SandboxMount, SessionKind } from '../contracts.ts';
+import type { Phase, SandboxMount, SessionKind } from '../contracts.ts';
 import { SANDBOX_TMPFS_SIZE, DEFAULT_SANDBOX_LIMITS, HOST_OUTPUT_BUFFER_LIMIT_BYTES } from '../execution/docker-sandbox.ts';
 import { RECON_TECHNIQUES, VULN_TECHNIQUES } from '../execution/techniques.ts';
-
+import { renderTechniqueParamsGuide } from './technique-params-guide.ts';
 /** 字节数转成人读的形式（提示词里出现 262144 这种数字没有意义）。 */
 function humanBytes(bytes: number): string {
   if (bytes % (1024 * 1024) === 0) return `${String(bytes / (1024 * 1024))}MiB`;
@@ -47,6 +49,12 @@ export function renderSandboxBrief(
   mounts: readonly SandboxMount[] = [],
   /** 本会话的工具面。用来**只宣传真实存在的通道**（默认全给，便于单独渲染与测试）。 */
   toolAllow: readonly string[] = ['pentest_recon', 'pentest_scan', 'pentest_exec'],
+  /**
+   * 本会话的阶段。**决定自由命令通道要不要人批**（④⑤ 逐条放行、①②③ 免批）——
+   * 判定与执行面共用 `freeCommandNeedsApproval`，因此提示词不会与闸门说两套话。
+   * 省略（`null`）时按最严措辞渲染：那种调用只出现在单独渲染与测试里。
+   */
+  phase: Phase | null = null,
 ): string {
   if (sessionKind === 'intake') {
     return [
@@ -54,6 +62,10 @@ export function renderSandboxBrief(
       '你的产出是待人类确认的范围方案（`pentest_request_scope_confirmation`）与状态便签。',
     ].join('\n');
   }
+  const commandNeedsApproval = freeCommandNeedsApproval(phase);
+  const commandApprovalNote = commandNeedsApproval
+    ? '**逐条人批**：先申请放行，拿到 `approval_id` 再执行，放行卡上显示的就是命令原文'
+    : '**已免批**（2026-10-07 裁定：命令原文不再经人逐条过目）';
   const reconTechniques = Object.keys(RECON_TECHNIQUES).join('、');
   const vulnTechniques = Object.keys(VULN_TECHNIQUES).join('、');
   // 只宣传**本会话真的有**的通道（见下方"命令通道"那一段的说明）。
@@ -78,7 +90,7 @@ export function renderSandboxBrief(
     '手写命令必须自己带），跑完**抽一台已知开放的主机做单台交叉验证**——' +
     '不做交叉验证，漏报会以"有输出、rc=0、有端口行"的形态骗过你。';
 
-  return [
+  const sections = [
     '【沙箱环境】（每次会话都会注入；动手前先读完这一节，它决定你的命令怎么写）',
     '',
     '**它是什么**：每条命令都在一个**一次性容器**里跑（`--rm`），跑完即销毁。',
@@ -130,7 +142,7 @@ export function renderSandboxBrief(
     `- 资源：CPU ${DEFAULT_SANDBOX_LIMITS.cpus} 核 / 内存 ${DEFAULT_SANDBOX_LIMITS.memory} / 进程数 ${String(DEFAULT_SANDBOX_LIMITS.pidsLimit)}`,
     `- 临时空间：\`/tmp\` 上限 ${SANDBOX_TMPFS_SIZE}（大字典与中间结果要留意）`,
     `- 输出：单条命令 stdout 上限约 ${humanBytes(TYPICAL_OUTPUT_CAP)}（宿主侧另有 ${humanBytes(HOST_OUTPUT_BUFFER_LIMIT_BYTES)} 缓冲上限，超了尾部被丢弃）`,
-    '- 单条命令正文 ≤ 8192 字符（`pentest_exec`）；速率按行为预设限速（stealth 1 请求/秒、standard 5、deep 10）',
+    '- 单条命令正文 ≤ 8192 字符（`pentest_exec`）；速率按行为预设限速（stealth 1 请求/秒、standard 5、fast 10）',
     '**长输出先落盘再筛**：`<命令> > /tmp/out.json 2>/tmp/err` 然后用 `jq`/`grep`/`head` 取字段——直接把上万行倒进输出等于自截断。',
     '',
     // ── 通道宣传必须与**本会话的工具面**一致（2026-10-07）──
@@ -146,11 +158,13 @@ export function renderSandboxBrief(
         ]
       : [
           '**命令通道**：本会话的工具面里**没有结构化动作入口** —— 端口指纹、DNS 查询这类只能走下面的',
-          '   自由命令（已免批，2026-10-07 起不再逐条人批）。这是会话创建时冻结的能力面决定的，**不是临时故障**：',
+          `   自由命令（${commandApprovalNote}）。这是会话创建时冻结的能力面决定的，**不是临时故障**：`,
           '   不要去找 `pentest_recon` / `pentest_scan`（本会话没有它们），直接走自由命令。',
         ]),
-    '**自由命令 `pentest_exec`（**已免批** —— 2026-10-07 操作者裁定"任意命令免批"）**：`command` 写命令原文、`port` 填主要端口、`purpose` 写清目的。',
-    '   注意：**命令原文不再有人逐条过目**（放行卡这条闸门对它失效）。仅剩的闸门是服务端范围裁决（只打已裁决地址、端口记账）与沙箱加固（容器隔离）；所以**命令写清楚、目的写明白**，出事时账本里只有它。',
+    `**自由命令 \`pentest_exec\`**（${commandApprovalNote}）：\`command\` 写命令原文、\`port\` 填主要端口、\`purpose\` 写清目的。`,
+    commandNeedsApproval
+      ? '   注意：**本阶段每条命令都要人类先放行**（放行卡上显示的就是命令原文，所以命令要写得让人类读得懂、purpose 要写清为什么）。流程：`pentest_request_action_approval` → 人类点批准 → 带返回的 `approval_id` 执行**同一条**命令（一次一条，等人类处理完再提下一条）。'
+      : '   注意：**命令原文不再有人逐条过目**（放行卡这条闸门对它失效）。仅剩的闸门是服务端范围裁决（只打已裁决地址、端口记账）与沙箱加固（容器隔离）；所以**命令写清楚、目的写明白**，出事时账本里只有它。',
     '',
     '**镜像里装了什么**（按用途分组；`which <name>` 可自查）：',
     '⚠ **解压一律用 `unzip`（已装），不要用 `python -c "zipfile…"`**：`zipfile.extractall()` **不还原 zip 内的符号链接** ——',
@@ -174,5 +188,13 @@ export function renderSandboxBrief(
     '',
     '**边界（不可协商）**：可达 ≠ 授权——只对已授权目标动作；不尝试持久化/留后门/改目标配置；',
     '不做爆破与喷洒（单账号 ≤5 次、间隔 ≥1s，且要人类逐条放行）；不把数据批量外传；范围外地址一律不打。',
-  ].join('\n');
+  ];
+
+  // 结构化动作参数指南：各个 technique 的参数表（在两条通道对比表与工具分组之后）
+  if (toolAllow.includes('pentest_recon') || toolAllow.includes('pentest_vuln_check')) {
+    sections.push('', renderTechniqueParamsGuide());
+  }
+
+  return sections.join('\n');
 }
+

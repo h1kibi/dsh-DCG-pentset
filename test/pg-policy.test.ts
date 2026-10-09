@@ -817,6 +817,23 @@ describe('集成：真实 PostgreSQL', { skip: DATABASE_URL === undefined ? '未
     assert.equal(binding.lease?.workerSessionId, sessionId);
   });
 
+  it('binding 带回会话阶段（④⑤ 的自由命令按它提升类别，因此必须从会话行读）', async () => {
+    assert.ok(pool !== null, '夹具池未建立');
+    const session = randomUUID();
+    // 阶段是**冻结列**（§9.5 的触发器：首次写入后不可修改），所以只能新建一行来考察，
+    // 不能改夹具里那条（实测会撞 `23001`）。
+    await pool.query(
+      `insert into pentest.worker_sessions
+         (id, engagement_id, dsh_session_id, phase, profile_id, profile_revision, scope_version,
+          task_prompt, tool_filter, skill_ids, model_route, status)
+       values ($1, $2, $3, 'exploitation', 'p', 'r1', 1, 'tp', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'closed')`,
+      [session, engagementId, `dsh-${session}`],
+    );
+    const binding = await sessions.binding(session);
+    assert.ok(binding);
+    assert.equal(binding.phase, 'exploitation', '阶段必须来自会话行（阶段决定 ④⑤ 是否逐条放行）');
+  });
+
   it('租约被吊销后 binding 的 lease 为 null（不复活旧世代）', async () => {
     const binding = await sessions.binding(revokedLeaseSessionId);
     assert.ok(binding);

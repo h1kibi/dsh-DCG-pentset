@@ -223,7 +223,6 @@ export function RunControls(props: RunControlsProps): ReactNode {
   const [extraBudget, setExtraBudget] = useState<StartBudgetForm>(EMPTY_BUDGET);
 
   const [abortConfirmed, setAbortConfirmed] = useState(false);
-  const [interjection, setInterjection] = useState('');
 
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ readonly code: string; readonly message: string } | null>(null);
@@ -524,28 +523,6 @@ export function RunControls(props: RunControlsProps): ReactNode {
           </div>
         </div>
 
-        <Field
-          label="插话内容"
-          hint="在步骤边界送达；只改判断，不改范围与权限"
-        >
-          <TextArea value={interjection} onChange={setInterjection} placeholder="例如：跳过那个端口，它属于客户的生产系统" />
-        </Field>
-        <Button
-          label="发送插话"
-          onClick={() => {
-            const sessionId = state?.activeWorkerSessionId;
-            if (sessionId === null || sessionId === undefined) return;
-            settle(props.controller.interject(sessionId, interjection.trim()), () => {
-              setInterjection('');
-              setNotice('插话已投递。');
-            });
-          }}
-          disabled={!availability.canInterject || interjection.trim() === '' || busy}
-          reason={
-            availability.interjectReason ??
-            (interjection.trim() === '' ? '插话内容必填' : busy ? '正在提交' : undefined)
-          }
-        />
 
         <div className="pentest-runcontrols__zone pentest-runcontrols__zone--danger">
           <p className="pentest-runcontrols__zone-title">不可撤销</p>

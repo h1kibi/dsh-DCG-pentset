@@ -106,6 +106,9 @@ function binding(over: Partial<SessionBinding> = {}): SessionBinding {
     scopeVersion: 1,
     policyEpoch: 1,
     lease: lease(),
+    // 默认阶段：自由命令在这里维持基类 `active_probing`（预设内 ⇒ 免批），
+    // 因此本文件的既有用例考的是别的闸门。要考「④⑤ 逐条放行」的用例**显式覆盖** phase。
+    phase: 'intelligence-gathering',
     ...over,
   };
 }

@@ -696,7 +696,7 @@ export class WorkflowCore {
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const profile = row.behavior_profile;
-    if (profile !== 'stealth' && profile !== 'standard' && profile !== 'deep' && profile !== 'custom') {
+    if (profile !== 'stealth' && profile !== 'standard' && profile !== 'fast' && profile !== 'custom') {
       return undefined;
     }
     const raw = row.pacing;

@@ -159,6 +159,44 @@ export class HandoffFlow {
       recentMaterial.push(text.slice(0, COMPRESSION_RECENT_EVENT_MAX_CHARS));
     }
     recentMaterial.reverse(); // 查询是倒序取最近 N 条；材料按时间正序给模型
+
+    // ── 召回前序阶段思考链（2026-10-09 新增）──
+    // 从 reasoning 分类的分块中召回最近 3 条，展示"当时为什么这么做"的推理链片段。
+    // 失败不阻塞起草，只是让 reasoningSummary 为空。
+    //
+    // 列名以**库为准**（`001_init.sql`）：分块主键是 `memory_chunks.id`（没有 `chunk_id` 列，
+    // 那是 `retrieval_hits.chunk_id` 这个**外键**的列名，曾据此写错过）；分块的种类在
+    // `classification`（没有 `kind` 列，`kind` 在 `memory_items` 上）；阶段在
+    // `memory_chunks.phase`（`context_events` 没有 `phase` 列）。
+    // 这三处曾让 `beginHandoff` 直接以 `column mc.chunk_id does not exist` 失败——
+    // 交接根本起不了稿，而错误只报列名不报意图。
+    const reasoningChunks =
+      context === undefined
+        ? []
+        : (
+            await this.#core.deps.db.query<{
+              chunk_id: string;
+              content: string;
+              occurred_at: string;
+            }>(
+              `select mc.id as chunk_id,
+                      mc.content,
+                      e.occurred_at
+                 from pentest.memory_chunks mc
+                 join pentest.context_events e on e.event_id = mc.source_event_id
+                where e.engagement_id = $1::uuid
+                  and mc.classification = 'reasoning'
+                  and mc.phase = $2
+                order by e.occurred_at desc, mc.id
+                limit 3`,
+              [context.engagement_id, session.phase],
+            )
+          ).rows;
+
+    // ── 交接压缩（2026-10-07）──
+    // 交接的本质是压缩转发：便签（≤600 字符）与报告摘要只是两份人/Agent 写的摘要，
+    // 没有对上一阶段材料做压缩。这里用**源会话的模型**压一次（操作者裁定），
+    // PINNED 的人类原话原样进材料、要求原样转述。任何失败都退回拼接（不抛、不阻塞起草）。
     const compression = this.#core.deps.compression;
     const compressionModel = compression?.model ?? sessionModel ?? '';
     const compressed =
@@ -181,6 +219,7 @@ export class HandoffFlow {
               recent: recentMaterial,
             },
           );
+
     const seeded = seedHandoffContent({
       fromPhase: session.phase,
       toPhase,
@@ -202,12 +241,20 @@ export class HandoffFlow {
             .filter((value) => (ACTION_CLASSES as readonly string[]).includes(value)) as readonly ActionClass[]
         : [],
     });
+    const draftJson = {
+      ...seeded.draftJson,
+      reasoningSummary: reasoningChunks.map((chunk) => ({
+        memoryId: `chunk:${chunk.chunk_id}`,
+        content: chunk.content.slice(0, 600), // 截断到 600 字符
+        timestamp: chunk.occurred_at,
+      })),
+    };
 
     const handoffId = this.#core.id();
     // 草稿哈希 = 对落库 `draft_json` 的真摘要（REQ-9）：此前是 base64url 前缀——可逆，
     // 等于把草稿正文（含提示词）编码后放回哈希列。人类确认页显示的「内容哈希」必须是
     // 能自证来源的指纹，可逆前缀做不到（见 `computeDraftHash` 的说明）。
-    const contentHash = computeDraftHash(seeded.draftJson);
+    const contentHash = computeDraftHash(draftJson);
     await this.#core.tx(async () => {
       const engagement = await this.#core.lockEngagement(
         session.engagement_id,
@@ -260,7 +307,7 @@ export class HandoffFlow {
           session.id,
           toPhase,
           JSON.stringify(seeded.suggestedSkillIds),
-          JSON.stringify(seeded.draftJson),
+          JSON.stringify(draftJson),
           contentHash,
         ],
       );
@@ -293,6 +340,11 @@ export class HandoffFlow {
       revision: 1,
       // 与刚写进库里那一行是同一个值：人类拿到草稿的同时就能看到权威哈希（REQ-9）。
       contentHash,
+      reasoningSummary: reasoningChunks.map((chunk) => ({
+        memoryId: `chunk:${chunk.chunk_id}`,
+        content: chunk.content.slice(0, 600),
+        timestamp: chunk.occurred_at,
+      })),
     };
   }
 
@@ -356,6 +408,7 @@ export class HandoffFlow {
       revision: toInt(row.revision, 'revision'),
       // 库里那一行的哈希（草稿期由 `computeDraftHash` 写入）——UI 展示的必须是它。
       contentHash: row.content_hash,
+      ...(stored.reasoningSummary !== undefined ? { reasoningSummary: stored.reasoningSummary } : {}),
     };
   }
 
@@ -707,6 +760,7 @@ function narrowStoredDraft(value: unknown): {
   readonly excludedRefs: readonly string[];
   readonly toolCapabilitySuggestion: { readonly allowed: readonly string[]; readonly approvalRequired: readonly ActionClass[] };
   readonly limitations: readonly string[];
+  readonly reasoningSummary?: readonly { readonly memoryId: string; readonly content: string; readonly timestamp: string }[];
 } | null {
   if (value === null || typeof value !== 'object') return null;
   const draft = value as Record<string, unknown>;
@@ -718,6 +772,8 @@ function narrowStoredDraft(value: unknown): {
   if (!Array.isArray(draft['excludedRefs'])) return null;
   if (!Array.isArray(draft['limitations'])) return null;
   if (typeof draft['toolCapabilitySuggestion'] !== 'object' || draft['toolCapabilitySuggestion'] === null) return null;
+  const reasoningSummary = draft['reasoningSummary'];
+  if (reasoningSummary !== undefined && !Array.isArray(reasoningSummary)) return null;
   return {
     suggestedToPhase: draft['suggestedToPhase'] as Phase | null,
     suggestedSkillIds: draft['suggestedSkillIds'] as readonly string[],
@@ -727,6 +783,7 @@ function narrowStoredDraft(value: unknown): {
     excludedRefs: draft['excludedRefs'] as readonly string[],
     toolCapabilitySuggestion: draft['toolCapabilitySuggestion'] as { readonly allowed: readonly string[]; readonly approvalRequired: readonly ActionClass[] },
     limitations: draft['limitations'] as readonly string[],
+    ...(reasoningSummary !== undefined ? { reasoningSummary: reasoningSummary as readonly { readonly memoryId: string; readonly content: string; readonly timestamp: string }[] } : {}),
   };
 }
 

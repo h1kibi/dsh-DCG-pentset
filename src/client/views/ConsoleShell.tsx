@@ -10,7 +10,7 @@
  * ① 运行总览条      始终可见
  * ② 阶段轨道        状态机的空间表达
  * ③ 会话时间轴      长链任务的主视图
- * ④ 主面板          会话正文 / 报告审阅 / 记忆浏览器 / 放行队列（按需切换）
+* ④ 主面板          控制台 / 日志记录 / 放行队列 / Skill库 / 范围管理 / 公共记忆（按需切换）
  * ```
  *
  * ⓪ 在总览条**之前**：总览条说的是「当前这个作业怎么样了」，而入口决定「当前是哪个
@@ -44,11 +44,11 @@ import { Badge, Card, Empty, ErrorBar } from '../ui.tsx';
 
 /** 主面板可显示的视图。 */
 export const CONSOLE_PANELS = [
-  'overview',
-  'report',
-  'memory',
+  'console',
+  'logs',
   'approvals',
-  'handoff',
+  'vulnerabilities',
+  'assets',
   'skills',
   'scope',
   'publicmemory',
@@ -56,11 +56,11 @@ export const CONSOLE_PANELS = [
 export type ConsolePanel = (typeof CONSOLE_PANELS)[number];
 
 const PANEL_LABELS: Readonly<Record<ConsolePanel, string>> = {
-  overview: '总览与时间轴',
-  report: '报告审阅',
-  memory: '记忆浏览器',
+  console: '控制台',
+  logs: '日志记录',
   approvals: '放行队列',
-  handoff: '交接编辑',
+  vulnerabilities: '漏洞列表',
+  assets: '资产清单',
   skills: 'Skill 库',
   scope: '范围管理',
   publicmemory: '公共记忆',
@@ -110,7 +110,7 @@ export interface ConsoleShellProps {
 }
 
 export function ConsoleShell(props: ConsoleShellProps): ReactNode {
-  const panel = props.activePanel ?? 'overview';
+  const panel = props.activePanel ?? 'console';
   const { snapshot } = props;
 
   /**
@@ -233,19 +233,22 @@ export function ConsoleShell(props: ConsoleShellProps): ReactNode {
             <Card title="范围未确认时被锁的面板">
               <Empty
                 title={`${CONSOLE_PANELS.filter((c) => lockReasonOf(c) !== null).map((c) => PANEL_LABELS[c]).join(' / ')} 暂不可用`}
-                reason={lockReasonOf('overview') ?? ''}
+                reason={CONSOLE_PANELS.map((candidate) => lockReasonOf(candidate)).find((r) => r !== null) ?? ''}
               />
             </Card>
           </>
-        ) : panel === 'overview' ? (
+        ) : panel === 'console' ? (
           <>
             {props.runControls}
-            {props.agentTrace}
             <PhaseTrack
               sessions={snapshot.sessions}
               {...(props.now === undefined ? {} : { now: props.now })}
             />
             {props.diagnosticsCard}
+          </>
+        ) : panel === 'logs' ? (
+          <>
+            {props.agentTrace}
             <SessionTimeline
               sessions={snapshot.sessions}
               filter={props.timelineFilter ?? {}}

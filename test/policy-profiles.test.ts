@@ -3,7 +3,7 @@
  *
  * 这一组用例锁的是四条硬要求，任何一条退化都会让「隐蔽性测试」变成一句标签：
  *
- *   1. 四个预设的展开结果稳定，且 stealth 确实比 deep 慢；
+ *   1. 四个预设的展开结果稳定，且 stealth 确实比 fast 慢；
  *   2. 覆盖不能突破硬上限（只能收紧，不能放宽）；
  *   3. 默认禁用类别只有**显式确认**才被开启，并因此带上 dualConfirmed；
  *   4. 哈希覆盖完整输入：只改排除项、授权引用或版本都会产生不同哈希；
@@ -49,7 +49,7 @@ function expand(
 }
 
 describe('行为预设展开（§6.2.0.5）', () => {
-  it('四个预设都有稳定默认节奏，且 stealth 严格慢于 deep', () => {
+  it('四个预设都有稳定默认节奏，且 stealth 严格慢于 fast', () => {
     const pacingOf = (profile: (typeof BEHAVIOR_PROFILES)[number]) =>
       expandBehaviorProfile({ behaviorProfile: profile, targets: TARGETS, exclusions: [] }).pacing;
 
@@ -59,8 +59,8 @@ describe('行为预设展开（§6.2.0.5）', () => {
       assert.ok(pacing.concurrency >= 1, `${profile} 的 concurrency 至少为 1`);
       assert.ok(pacing.jitter >= 0 && pacing.burst >= 1 && pacing.retry >= 0);
     }
-    assert.ok(pacingOf('stealth').rate < pacingOf('deep').rate, 'stealth 必须比 deep 慢');
-    assert.ok(pacingOf('stealth').concurrency < pacingOf('deep').concurrency);
+    assert.ok(pacingOf('stealth').rate < pacingOf('fast').rate, 'stealth 必须比 fast 慢');
+    assert.ok(pacingOf('stealth').concurrency < pacingOf('fast').concurrency);
     assert.ok(pacingOf('stealth').rate <= pacingOf('standard').rate);
   });
 
@@ -152,12 +152,12 @@ describe('行为预设展开（§6.2.0.5）', () => {
 
   it('自由命令（free_command 的 exploit_validation）随模式变可用性，逐动作放行的下限不随模式下调', () => {
     // §10.2.1 + §10.3：**模式决定「这一类在不在启用集合里」，契约基线决定「要不要逐次放行」**。
-    // stealth/standard 只做被动读取与主动发现；deep 纳入 exploit_validation；custom 默认同 stealth，
+    // stealth/standard 只做被动读取与主动发现；fast 纳入 exploit_validation；custom 默认同 stealth，
     // 只有人类显式 `allowedActions` 才开。自由度随模式变，下限不随模式变。
     const enabledByProfile: Readonly<Record<(typeof BEHAVIOR_PROFILES)[number], boolean>> = {
       stealth: false,
       standard: false,
-      deep: true,
+      fast: true,
       custom: false,
     };
     for (const profile of BEHAVIOR_PROFILES) {
@@ -205,9 +205,9 @@ describe('行为预设展开（§6.2.0.5）', () => {
       );
       assert.ok(text.includes('不得先做后报'), `${profile}: 必须明确禁止先做后报`);
     }
-    assert.notEqual(sections[0], sections[2], 'stealth 与 deep 的姿态不能是同一段话');
-    // 场景差异的锚点（文案即产品）：隐蔽档强调"少发请求"，深挖档强调"穷尽并记录"。
-    assert.ok(sections[0]!.includes('少发一个请求') && sections[2]!.includes('穷尽尝试并记录'));
+    assert.notEqual(sections[0], sections[2], 'stealth 与 fast 的姿态不能是同一段话');
+    // 场景差异的锚点（文案即产品）：隐蔽档强调"少发请求"，快速档强调"追求速度"。
+    assert.ok(sections[0]!.includes('少发一个请求') && sections[2]!.includes('追求速度'));
     assert.ok(sections[1]!.includes('速率 5/s'), '节奏上限必须写进提示词');
     assert.ok(
       !renderBehaviorSection({ profile: 'custom' }).includes('速率'),
@@ -236,12 +236,12 @@ describe('计划摘要与策略绑定（§10.2）', () => {
     policyEpoch: 0,
   };
   const stealth = expandBehaviorProfile({ behaviorProfile: 'stealth', targets: TARGETS, exclusions: [] }).pacing;
-  const deep = expandBehaviorProfile({ behaviorProfile: 'deep', targets: TARGETS, exclusions: [] }).pacing;
+  const fast = expandBehaviorProfile({ behaviorProfile: 'fast', targets: TARGETS, exclusions: [] }).pacing;
 
   it('pacing 进 plan_hash：只改节奏就得到不同摘要', () => {
     assert.notEqual(
       derivePlanHash({ ...base, policyVersion: 1, pacing: stealth }),
-      derivePlanHash({ ...base, policyVersion: 1, pacing: deep }),
+      derivePlanHash({ ...base, policyVersion: 1, pacing: fast }),
     );
   });
 
@@ -370,7 +370,7 @@ describe('行为预设：必选、场景差异与自定义指引（2026-10-05）
     // 差异化的锚点：每档必须写出自己那条最关键的纪律（文案是产品本体，锁它是有意的）。
     assert.match(renderBehaviorSection({ profile: 'stealth' }), /少发一个请求/);
     assert.match(renderBehaviorSection({ profile: 'standard' }), /失败也要记录/);
-    assert.match(renderBehaviorSection({ profile: 'deep' }), /穷尽尝试并记录/);
+    assert.match(renderBehaviorSection({ profile: 'fast' }), /覆盖最大化/);
   });
 
   it('custom 逐字注入人类写的指引；没有指引时给出可执行的兜底而不是空白', () => {
@@ -389,7 +389,7 @@ describe('行为预设：必选、场景差异与自定义指引（2026-10-05）
       behaviorProfile: 'custom',
       customGuidance: '只读。',
     });
-    assert.throws(() => requireBehaviorSelection({ behaviorProfile: 'deep', customGuidance: 'x' }), /只能配 custom/);
+    assert.throws(() => requireBehaviorSelection({ behaviorProfile: 'fast', customGuidance: 'x' }), /只能配 custom/);
     assert.throws(
       () => expandBehaviorProfile({ behaviorProfile: 'stealth', targets: TARGETS, overrides: { customGuidance: 'x' } }),
       /只能配 custom/,
@@ -417,19 +417,19 @@ describe('行为预设：必选、场景差异与自定义指引（2026-10-05）
 });
 
 describe('审批模式：高权限的自我放行边界（2026-10-05）', () => {
-  const deepAuto = {
+  const fastAuto = {
     approvalMode: 'auto' as const,
     enabledActionClasses: ['passive_collection', 'active_probing', 'exploit_validation', 'persistence'] as const,
   };
 
   it('auto 档放行集合 = 预设启用 ∪ {命令类}，再减去默认禁用类别', () => {
-    assert.equal(shouldSelfApprove(deepAuto, 'passive_collection'), true);
-    assert.equal(shouldSelfApprove(deepAuto, 'exploit_validation'), true, '预设内的利用验证自行放行');
+    assert.equal(shouldSelfApprove(fastAuto, 'passive_collection'), true);
+    assert.equal(shouldSelfApprove(fastAuto, 'exploit_validation'), true, '预设内的利用验证自行放行');
     // 默认禁用类别**即使人类逐类别确认开启过**也不自放行：后果不可逆，必须有人看过命令。
-    assert.equal(shouldSelfApprove(deepAuto, 'persistence'), false);
-    assert.equal(shouldSelfApprove(deepAuto, 'exfiltration'), false);
+    assert.equal(shouldSelfApprove(fastAuto, 'persistence'), false);
+    assert.equal(shouldSelfApprove(fastAuto, 'exfiltration'), false);
     // 横向移动跨主机：不在任何预设的启用集合里 ⇒ 永远转人工。
-    assert.equal(shouldSelfApprove(deepAuto, 'lateral_movement'), false);
+    assert.equal(shouldSelfApprove(fastAuto, 'lateral_movement'), false);
 
     // **命令类特例**（2026-10-05）：本部署只有 `direct_command` 一张动手模板，若严格要求
     // 「只在预设内」，stealth/standard 下每条命令都算越界 ⇒ 高权限退化成「每条都问人」。
@@ -446,10 +446,10 @@ describe('审批模式：高权限的自我放行边界（2026-10-05）', () => 
   });
 
   it('模式进快照可读回；缺键的旧快照按 human；值不认识即拒绝', () => {
-    const auto = expandBehaviorProfile({ behaviorProfile: 'deep', approvalMode: 'auto', targets: TARGETS, exclusions: [] });
+    const auto = expandBehaviorProfile({ behaviorProfile: 'fast', approvalMode: 'auto', targets: TARGETS, exclusions: [] });
     assert.equal((auto.snapshot['action_policy'] as Record<string, unknown>)['approval_mode'], 'auto');
     assert.equal(actionPolicyFromSnapshot(auto.snapshot).approvalMode, 'auto');
-    const legacy = expandBehaviorProfile({ behaviorProfile: 'deep', targets: TARGETS, exclusions: [] });
+    const legacy = expandBehaviorProfile({ behaviorProfile: 'fast', targets: TARGETS, exclusions: [] });
     assert.equal((legacy.snapshot['action_policy'] as Record<string, unknown>)['approval_mode'], 'human', '缺省必须是最保守的一档');
     assert.equal(actionPolicyFromSnapshot({ action_policy: {} }).approvalMode, undefined);
     assert.throws(() => requireApprovalMode('yolo'), /必须显式选择审批模式/);

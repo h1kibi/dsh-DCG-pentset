@@ -552,8 +552,10 @@ export const missingSessionFactory: SessionFactory = {
   async close(dshSessionId: string): Promise<void> {
     throw new SessionFactoryError(`未注入会话工厂，无法关闭 ${dshSessionId}`, { dshSessionId });
   },
+  async compressHistory(input: { dshSessionId: string }): Promise<void> {
+    throw new SessionFactoryError(`未注入会话工厂，无法压缩 ${input.dshSessionId}`, { dshSessionId: input.dshSessionId });
+  },
 };
-
 
 /**
  * 建立连接池（读写共用）。

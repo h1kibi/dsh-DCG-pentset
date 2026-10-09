@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Threat Modeling, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@81483611f0a0：7 块原文照跑通过（台账校验、入口/出口清单、待判定入口、一次只读核验（靶上 404 属未判定）、数据流登记、缺引用跨界流计数、自检计数 flows=3 with_evid=1）；本阶段工具面口径本轮对齐——原写的 http_read/http_get/tcp_connect/udp_probe 都是已删模板名，现改为 recon_http_probe 与 direct_command 两条现行路径"
+  smoked: "沙箱实测@5ee07609c870：7 块原文照跑全通过（台账按正文结构先铺：2 条 0 引用、1 条缺 boundary、1 条 auth=unknown）：步骤 1 按 kind/ref/引用数计数并暴露 0 引用记录；步骤 2 入口/出口六列，缺列走 ?/unknown；步骤 3 列出 memory:1002/1003 待判定，只读核验原文 curl 打 fx-web 172.29.0.2:8080/index.html 得 HTTP/1.0 200 OK（exit 0），按判据 200 只证该路径匿名可达、不判入口免认证；步骤 4 数据流列出 boundary=?；步骤 5 点名 `svc:fx-api -> db:pg [boundary=?]`；步骤 6 自检 flows=2 with_evid=1（差额=1，与假设清单一致）；台账混入日志行复现 jq parse error（exit 4）"
 ---
 
 # 信任边界与数据流（model-trust-boundaries）
@@ -54,8 +54,8 @@ jq -r '.[] | select(.kind=="entry") | select((.auth//"unknown")=="unknown") | .r
 **期望**：待判定入口的 `ref` 列表。
 **判据**：为空则跳过本节；非空时**先翻证据里已有的响应**（状态码、跳转、`WWW-Authenticate`、跳登录）。**仍无法判定**才允许一次只读核验：
 ```bash
-# 这条 curl 走 pentest_exec:direct_command（类别 active_probing）⇒ **免批**：命令原文不再经人过目，
-# 范围裁决与沙箱加固仍在（2026-10-07 裁定）；
+# 这条 curl 走 pentest_exec:direct_command（类别 active_probing ⇒ **①②③ 阶段免批**：命令原文不再经人过目；
+# ④利用验证/⑤后渗透阶段同一模板会提升为逐条人批）。范围裁决与沙箱加固仍在（2026-10-07 裁定）；
 # 首选的等价模板是 recon_http_probe（http_probe target=… port=… scheme=… follow_redirects=0 collect=headers）；
 curl -sS -D - -o /dev/null --max-time 10 http://<已裁决地址>:<端口><路径>
 ```

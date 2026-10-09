@@ -1084,6 +1084,14 @@ const REPORT_METHOD_TABLE: Record<keyof PentestReportService, ConsoleMethodSpec>
     fields: [f('engagementId', 'string')],
     invoke: call('report', 'listUndisposed', { scalar: 'engagementId' }),
   },
+  listAssets: {
+    kind: 'read',
+    lock: 'none',
+    operator: false,
+    reason: false,
+    fields: [f('engagementId', 'string')],
+    invoke: call('report', 'listAssets', { scalar: 'engagementId' }),
+  },
 };
 
 /** 记忆检索面（§8.7）。全是读——检索不改任何事实。 */

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@81483611f0a0：12 块原文照跑，11 块通过；第 6 块本轮修掉——主配方原用 raft-small-directories.txt（纯目录字典，20116 行），产生不了文档声称的 /robots.txt、/index.html 命中（只有空行匹配 /），换成 common.txt + -fs 469 后实测命中 /.git/HEAD、/robots.txt、/index.html；同时修正「镜像没有 whatweb/httpx」的过时前提（两者都在）与两份字典行数（20116 / 4723）。2026-10-06 补工具取舍并实测：dirb 命中 `/.env`、`/.git`、`/.git/HEAD`；katana `-d 2` 抓到 `/` 与 `/page2.html`；wfuzz 跑通（过滤 2561 请求；其 `-f` 输出语法本次未验成，故只写进取舍说明、没写进步骤）"
+  smoked: "沙箱实测@5ee07609c870：按 fx-web 172.29.0.2:8080 逐块跑正文 12 段原文配方（占位符换真值，第 6/7/7b 块因 /tmp 不跨容器合并进同一条 -c），12 段全部实测执行、无一因配方缺陷失败。①第1块可达性 curl 得 code=200 size=171 type=text/html redirect=（正文样例 size=484 是别的夹具，2xx 判据成立）；②第2块 GET -D 得 HTTP/1.0 200 OK、Server: SimpleHTTP/0.6 Python/3.10.21、Content-type: text/html、Content-Length: 171；③第2b块 OPTIONS 得 501 Unsupported method ('OPTIONS')、无 Allow 头——正合正文「SimpleHTTP 不支持 OPTIONS，501 不代表端点不存在」；④第3块取到 <title>fixture</title>，第3b块页面 sha256=05a7e484143388ea8dcb76aae72bc83030e937fab39b45e0585dbf51b4f48501；⑤第4块 robots.txt=200/34，sitemap.xml、sitemap_index.xml、.well-known/security.txt 均 404/469；第4b块 robots 正文 User-agent: */Disallow: /private/，而实测 /private/ =404/469，印证「Disallow 只是声明」；⑥第5块 4 条随机路径全为 404 469，软 404 签名成立、-fs 469 可用；⑦第6块 ffuf -w common.txt -t 5 -p 0.2 -fs 469 命中 /.git(301→/.git/)、/.git/HEAD(200/21)、/index.html(200/171)、/robots.txt(200/34)，合正文「形如 /.git/HEAD、/robots.txt、/index.html」，耗时约 203s；⑧第7块 jq 复核逐条输出 URL+code/size/redirect，第7b块标题富化把 index.html 认成 <title>fixture</title>、其余命中无标题；⑨第8块 http://example.invalid/ 解析失败 exit=6，退化判据成立。附带同镜像核实：ffuf 1.1.0、whatweb 0.5.5、httpx、dirb/katana/wfuzz/gospider/dirsearch 全部在；common.txt 4723 行、raft-small-directories.txt 20116 行；common.txt 实测不含 .env/page2.html/swagger.json，故第6块未命中这三条是字典覆盖使然而非靶标缺失；dirb 默认字典（4612 词）命中 /.git/HEAD、/index.html、/robots.txt（本轮未命中 .env 或 /.git，与正文 2026-10-06 记录的 dirb 命中列表不同）；katana -d 2 抓到 / 与 /page2.html；wfuzz 跑通（4723 请求、exit 0）"
 ---
 
 # Web 面清点（recon-web-surface）
@@ -30,7 +30,7 @@ metadata:
 > （`ffuf … -o /tmp/web-ffuf.json && jq … /tmp/web-ffuf.json`），否则复核那一步会拿到空文件（实测）。
 
 > **优先用 `pentest_recon`，不要手写 curl/ffuf。** 它把命令形态固定在服务端、参数只有枚举与整数、
-> 只打**已裁决地址**，类别 `active_probing`——**不需要逐条人工放行**；手写命令走 `pentest_exec`
+> 只打**已裁决地址**，类别 `active_probing`——**不需要逐条人工放行**（**① 阶段的阶段性事实**：④⑤ 阶段同一模板提升为逐条人批）；手写命令走 `pentest_exec`
 > 是 `active_probing`，**免批**（命令原文不再经人过目）。本 skill 只在需要未覆盖选项时才落到 ```bash 形态。
 
 | 本 skill 的步骤 | 用这个 technique | 关键参数 |

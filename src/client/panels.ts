@@ -24,67 +24,31 @@ import type { ReactNode } from 'react';
 
 import type {
   ApprovalDetail,
-  HandoffDraft,
-  ReportDraft,
   AssetScopeDecision,
   CandidateAsset,
+  EngagementMemory,
   Finding,
-  MemorySearchHit,
-  MemoryWatermark,
+  NetworkAsset,
   ScopeDetail,
   ScopeTarget,
   SkillSummary,
 } from '../contracts.ts';
 import type { ConsoleController, ConsoleSnapshot } from './controller.ts';
-import type {
-  MemoryExpandRef,
-  MemoryHitView,
-  MemoryQueryForm,
-  MemorySearchParams,
-} from './views/MemoryExplorer.tsx';
-import { MemoryExplorer } from './views/MemoryExplorer.tsx';
 import { ApprovalQueue, approvalItemOf } from './views/ApprovalQueue.tsx';
-import { ReportReview } from './views/ReportReview.tsx';
 import { ScopeManager } from './views/ScopeManager.tsx';
 import { SkillLibrary } from './views/SkillLibrary.tsx';
 import { PublicMemoryPanel } from './views/PublicMemoryPanel.tsx';
-import type { DispositionAction, DispositionInput, DispositionOutcome } from './views/ReportReview.tsx';
+import { VulnerabilityList } from './views/VulnerabilityList.tsx';
+import { AssetList } from './views/AssetList.tsx';
 import type {
   SkillAddInput,
   SkillRemoveInput,
   SkillUpdateInput,
 } from './views/SkillLibrary.tsx';
-import { HandoffPanel } from './views/HandoffPanel.tsx';
-import { ReportExport } from './views/ReportExport.tsx';
-import type { ExportFormat, ExportOutcome } from './views/ReportExport.tsx';
 import type { CandidateAsset as CandidateAssetView } from './views/ScopeManager.tsx';
 import type { ConsolePanel } from './views/ConsoleShell.tsx';
-import type { EngagementMemory } from '../contracts.ts';
 
 // ───────────────────────── 契约 → 视图 ─────────────────────────
-
-/**
- * 检索命中的映射。
- *
- * 两个字段名不同，必须显式映射而不是靠结构化类型：
- *
- *   - 契约叫 `memoryId`（记忆条目的标识），视图叫 `chunkId`（分块的标识）——
- *     同一个东西的两种叫法。分开命名是有意的：契约层说的是「一条记忆」，
- *     而检索实现说的是「一个分块」，映射点就是两者的翻译处。
- *   - 契约的 `kind` 是 `string`，视图也是 `string`（视图侧查表兜底），因此原样传递。
- */
-export function toMemoryHits(hits: readonly MemorySearchHit[]): readonly MemoryHitView[] {
-  return hits.map((hit) => ({
-    chunkId: hit.memoryId,
-    kind: hit.kind,
-    excerpt: hit.excerpt,
-    score: hit.score,
-    trustLevel: hit.trustLevel,
-    citation: hit.citation,
-    occurredAt: hit.occurredAt,
-    reasoningLabel: hit.reasoningNote ?? null,
-  }));
-}
 
 /**
  * 候选资产的映射。
@@ -154,105 +118,30 @@ export interface BuildPanelsInput {
   readonly snapshot: ConsoleSnapshot;
   readonly now: Date;
 
-  /** 报告审阅。 */
-  /** 全部结论；`null` = 尚未成功读取（还没读，或读失败）。读失败的原因在快照的 `lastError`。 */
-  readonly findings: readonly Finding[] | null;
-  /**
-   * `findingId` → 最近一次处置动作（§8.9）。
-   *
-   * 契约的 `Finding` **不含**处置记录（它落在 `human_decisions`），而审阅页的四节分节
-   * 依赖它——缺了就只能一律显示「从未处置」，于是「未处置候选」这一节永远虚高、
-   * 签字前置也就永远看起来没满足。
-   */
-  readonly dispositions: Readonly<Record<string, DispositionAction>>;
-  /** 处置结论的回调（§8.9 三选一）。 */
-  readonly onDispose: (input: DispositionInput) => DispositionOutcome | Promise<DispositionOutcome> | void;
+  /** 放行队列。 */
+  readonly approvals: readonly ApprovalDetail[] | null;
 
-  /**
-   * skill 库的写回调（§2.2 可添加）。
-   *
-   * 端点（`addSkill`/`updateSkill`/`removeSkill`）一直在方法表里，但此前**没有客户端封装、
-   * 也没有接线**——Skill 库面板的增/改/删三个按钮因此全部禁用。
-   */
+  /** 范围版本（`history` 只在请求过历史时有值）。 */
+  readonly scope: ScopeDetail | null;
+  readonly candidateAssets: readonly CandidateAsset[] | null;
+
+  /** skill 库。 */
+  readonly skills: readonly SkillSummary[] | null;
   readonly onAddSkill: (input: SkillAddInput) => void;
   readonly onUpdateSkill: (input: SkillUpdateInput) => void;
   readonly onRemoveSkill: (input: SkillRemoveInput) => void;
-  /** 放行队列。 */
-  readonly approvals: readonly ApprovalDetail[] | null;
-  /** 范围版本（`history` 只在请求过历史时有值）。 */
-  readonly scope: ScopeDetail | null;
+
   /**
    * 公共记忆；`null` = 尚未成功读取。
-   *
-   * 与 `skills`/`scope` 一样按需加载：它可能很长，首屏不该顺带拉。
    */
   readonly publicMemory: EngagementMemory | null;
-  /** 保存公共记忆的回调（写操作只在这一条路径上）。 */
   readonly onSavePublicMemory: (content: string, reason: string) => Promise<void> | void;
-  readonly candidateAssets: readonly CandidateAsset[] | null;
-  /** skill 库。 */
-  readonly skills: readonly SkillSummary[] | null;
 
-  /**
-   * 交接草稿。`null` = 还没有（人类尚未请求生成，§6.3）。
-   *
-   * 由调用方持有而不是面板自己拉：草稿生成是**写操作**，且人类编辑后的内容要跨渲染保留。
-   */
-  readonly handoffDraft: HandoffDraft | null;
-  /** 草稿产生或清空时回调（调用方保存它）。 */
-  readonly onHandoffDraft: (draft: HandoffDraft | null) => void;
-  /**
-   * 回环（后渗透 → 情报收集）的前置状态（§5.4 步骤 4）。
-   *
-   * 由调用方从**会话绑定版本**与**当前范围版本**推出，与 `planPhaseMove` 的判据同源；
-   * 服务端在 `confirmTransition` 里用同一条件复核（那是权威）。
-   * 界面用它提前把闸门显示出来，而不是等提交后被打回。
-   */
-  readonly scopeAmendment: { readonly completed: boolean; readonly newVersion: number | null };
+  /** 结论（控制台「漏洞列表」面板；`null` = 尚未成功读取）。 */
+  readonly findings: readonly Finding[] | null;
 
-  /** 报告草稿（签字与导出的输入）。`null` = Host 还没生成。 */
-  readonly reportDraft: ReportDraft | null;
-  /**
-   * 未处置结论数。**必须来自 Host**（`listUndisposed`）——它是签字硬前置的判据（§8.9），
-   * 由界面从已加载的结论推算会在条目未加载完时给出错误的「可以签字」。
-   */
-  readonly undisposedCount: number | null;
-  /**
-   * 待签字的内容哈希。**`undefined`（调用方没有这个信息）与 `null`（确认还没有哈希）
-   * 是两件事**：前者不传 `contentHash`，后者让签字闸门如实报出「尚无内容哈希」。
-   * 两种情况下导出都不受影响——`ReportExport` 的 `wired` 只看 `onExport` 在不在。
-   */
-  readonly reportContentHash?: string | null;
-  /**
-   * 报告的导出接线点。
-   *
-   * 与 `findings` 等数据不同，它是**能力**而不是事实：`ReportExport` 的 `wired` 就是
-   * `onExport !== undefined`，因此「没接线」与「接了线但当前没选中作业」必须分开表达
-   * ——后者由 `ReportExport` 自己按 `snapshot.selectedEngagementId` 报 `engagement-missing`。
-   * 用「无 engagement 时不传 onExport」去表达前者会让按钮显示成「缺少接线」，那是假原因。
-   */
-  readonly onExport?: (format: ExportFormat) => ExportOutcome | Promise<ExportOutcome> | void;
-
-  /** 记忆检索：命中、水位、以及人类上次的检索参数。 */
-  readonly memoryHits: readonly MemoryHitView[] | null;
-  readonly memoryWatermark: MemoryWatermark | null;
-  readonly memorySearched: boolean;
-  /**
-   * 最近一次检索的失败（null = 没有失败）。
-   *
-   * 与 `memoryHits` 分开传：命中为空有两种原因（真的没有匹配 / 这次没查成），
-   * 面板的空态文案必须据此分岔——把失败说成「没有匹配」会让人以为记忆是空的（§6.2.1）。
-   */
-  readonly memoryError?: { readonly code: string; readonly message: string } | null;
-  readonly memoryInitialForm: MemoryQueryForm | null;
-  readonly memoryDetails: Readonly<Record<string, string>>;
-
-  // ── 意图出口 ──
-
-  /** 人类提交检索表单。 */
-  readonly onMemorySearch: (params: MemorySearchParams) => void;
-  /** 人类点开一条命中的原文。 */
-  readonly onMemoryExpand: (ref: MemoryExpandRef) => void;
+  /** 资产清单（控制台「资产」面板；`null` = 尚未成功读取）。 */
+  readonly assets: readonly NetworkAsset[] | null;
 }
 
 /**
@@ -266,51 +155,11 @@ export function buildPanels(input: BuildPanelsInput): Partial<Readonly<Record<Co
 
   const panels: Partial<Record<ConsolePanel, ReactNode>> = {};
 
-  // 报告审阅：只有读到结论才渲染列表。读失败或还没读时不渲染，
-  // 让外壳的「尚未接入」提示承担说明责任——避免面板自己发明一套空状态文案。
-  if (input.findings !== null) {
-    panels.report = createElement(
-      'div',
-      { className: 'pentest-report-panel' },
-      createElement(ReportReview, {
-        controller,
-        snapshot,
-        findings: input.findings,
-        dispositions: input.dispositions,
-        onDispose: input.onDispose,
-        now,
-      }),
-      input.undisposedCount === null
-        ? null
-        : createElement(ReportExport, {
-            controller,
-            snapshot,
-            draft: input.reportDraft,
-            undisposedCount: input.undisposedCount,
-            // 两个可选 prop 都用条件展开：`undefined` 表示「调用方没有这个信息」，
-            // 与显式的 `null`（确认还没有内容哈希）含义不同，不能一并写成 `?? null`。
-            ...(input.reportContentHash === undefined ? {} : { contentHash: input.reportContentHash }),
-            ...(input.onExport === undefined ? {} : { onExport: input.onExport }),
-          }),
-    );
-  }
-
-  panels.handoff = createElement(HandoffPanel, {
-    controller,
-    snapshot,
-    draft: input.handoffDraft,
-    onDraft: input.onHandoffDraft,
-    scopeAmendment: input.scopeAmendment,
-    // 草稿内容哈希由读端点带回（REQ-9）：编辑器**不自己算**——客户端手里那份副本
-    // 与服务端库里那一行可能已经不是同一份内容，显示的值必须来自权威来源。
-    ...(input.handoffDraft === null ? {} : { contentHash: input.handoffDraft.contentHash }),
-  });
 
   if (input.approvals !== null) {
     panels.approvals = createElement(ApprovalQueue, {
       controller,
       snapshot,
-      // 证据行由队列模块导出：会话卡片渲染同一份字段（见 `approvalItemOf`）。
       items: input.approvals.map(approvalItemOf),
       now,
     });
@@ -364,19 +213,18 @@ export function buildPanels(input: BuildPanelsInput): Partial<Readonly<Record<Co
     now,
   });
 
-  panels.memory = createElement(MemoryExplorer, {
-    controller,
-    snapshot,
-    hits: input.memoryHits ?? [],
-    watermark: input.memoryWatermark,
-    searched: input.memorySearched,
-    error: input.memoryError ?? null,
-    initialForm: input.memoryInitialForm ?? undefined,
-    details: input.memoryDetails,
-    onSearch: input.onMemorySearch,
-    onExpand: input.onMemoryExpand,
-    now,
-  });
+  if (input.findings !== null) {
+    panels.vulnerabilities = createElement(VulnerabilityList, {
+      findings: input.findings,
+    });
+  }
+
+  if (input.assets !== null) {
+    panels.assets = createElement(AssetList, {
+      assets: input.assets,
+      now,
+    });
+  }
 
   return panels;
 }

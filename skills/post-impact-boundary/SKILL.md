@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, MITRE ATT&CK Discovery/Collection, NIST SP 800-115]
-  smoked: "沙箱实测@81483611f0a0：nc -z 判定 open（172.29.0.3:8443 exit=0）；curl 200；范围限读 `-r 0-255` 得 200/171B（服务端忽略 Range 返回全文，如实记录）；handoff/scope 的 jq 读取"
+  smoked: "沙箱实测@5ee07609c870：对 fx-tls（172.29.0.3:8443，openssl s_server -www 自签）与 fx-web（172.29.0.2:8080）逐块跑原文配方。①handoff/scope 的 jq 读取——scope 块通过（fx-web 8080 / fx-tls 8443 逐条对齐）；步骤 1 对**对象元素**的台账报 `object is not valid in a csv row` exit=5（只有字符串台账才过），已最小修成 `map(if type == \"object\" then (.id // .asset // .name // tostring) else . end)`，两种台账均 exit=0。②`nc -z` 判定 open（8443 exit=0、8080 exit=0）；但原文硬编码 `http://` 打在 TLS 端口是 curl exit=52/状态码 000（会被「状态码漂移」误判成访问失效），改成 `<协议>://` 占位后 `https -k` 得 200、不加 `-k` 是 exit=60 自签报错，fx-web 明文 200。③范围限读 `-r 0-255`：fx-web 200/171B、fx-tls 200/5133B，两靶都忽略 Range 返回全文（用 469B 的 404 体复验仍 469B），已写进步骤 4。另：镜像里 `ss`/`ps` 现已存在（`netstat` 仍缺），与本技能「前提」里「ps/ss/netstat 不存在」的旧说法不符"
 ---
 
 # 影响边界核查（post-impact-boundary）
@@ -21,37 +21,38 @@ metadata:
 - **不横向移动**：不在新主机上复用已获取的凭据，不扫内网、不枚举同网段。内网侦察属于下一轮情报收集。
 - **不持久化**：不建账号、不写 key、不留后门、不开监听。
 - **不批量收集**：证明「可读」用最小样本（单条、单页、单对象）；「内容是什么」留给下一轮在授权下核对，本阶段只记可见性与位置。
-- 沙箱读取工具是 `curl`/`nc`/`openssl`/`jq`；**`ps`/`ss`/`netstat` 不存在**（清理技能里有替代）。
+- 沙箱读取工具是 `curl`/`nc`/`openssl`/`jq`；镜像里 **`ss`、`ps` 存在，`netstat` 不存在**（2026-10-09 冒烟确认；遗留监听用 `ss -tlnp` 查，见清理技能）。
 - 出网可达（2026-10-05 起）：第三方回调、在线比对这些需要把目标数据送出授权范围的动作，**须先经人类明确批准且落在 RoE 内**；没有批准就改用不引入外部通道的验证方式。
 
 ## 步骤
 
 ### 1. 从交接材料取访问上下文与范围
 ```bash
-jq -r '.handoff | [.approved_actions[], .targets[], .credentials[], .scope_version] | @tsv' /tmp/handoff.json
+jq -r '.handoff | [.approved_actions[], .targets[], .credentials[], .scope_version] | map(if type == "object" then (.id // .asset // .name // tostring) else . end) | @tsv' /tmp/handoff.json
 ```
 期望：已放行的动作、目标、凭据/会话标识与绑定的范围版本。判据：**能指出这条访问对应哪一条人类放行记录与哪个范围版本**；指不出来就停，先向人类补齐——没有放行记录的访问不能继续核查。
 
 ### 2. 复核访问仍然有效（一次，成本最低）
 ```bash
 nc -z -w2 <目标> <端口>; echo "exit=$?"
-curl -sS -o /dev/null -w '%{http_code}\n' --max-time 5 http://<目标>:<端口>/<已知路径>
+curl -sS -o /dev/null -w '%{http_code}\n' --max-time 5 <协议>://<目标>:<端口>/<已知路径>
 ```
+（`<协议>` 按阶段一已知的协议填；自签 TLS 用 `https` 须加 `-k`——不加 `curl` exit=60，而硬编码 `http://` 打在 TLS 端口是 exit=52/状态码 000：两者都**不是**「访问失效」。）
 期望：端口连通（`exit=0`）且状态码与利用阶段一致。判据：出现连接被拒（`nc` `exit=1` 或 `curl` 退出码 7）或状态码漂移 → 记为「访问已失效/环境已变」，报告后停；**不要为了恢复访问去重放利用动作**。
 
 ### 3. 确认访问的身份与它自述的权限（读自己的元数据）
 ```bash
-curl -sS --max-time 5 -H 'Cookie: <已放行的会话 Cookie>' http://<目标>:<端口>/<whoami 或 /me 或权限端点>
+curl -sS --max-time 5 -H 'Cookie: <已放行的会话 Cookie>' <协议>://<目标>:<端口>/<whoami 或 /me 或权限端点>
 ```
 期望：一份关于「我是谁、我能做什么」的 JSON/文本。判据：把身份与其声明权限作为**访问的属性**记录；**不要**用声明权限逐项去访问对应资源（那是枚举，属于下一轮）。
 
 ### 4. 记录「可读 / 可连」边界条目（逐条最小取样）
 ```bash
 curl -sS -o /tmp/probe-<n>.body -w '%{http_code} %{size_download}\n' --max-time 5 \
-  -r 0-255 'http://<目标>:<端口>/<资源>'
+  -r 0-255 '<协议>://<目标>:<端口>/<资源>'
 nc -z -w2 <目标> <端口>; echo "<目标>:<端口> exit=$?"
 ```
-（`-r 0-255` 只取前 256 字节，避免批量拉取；GET 只读。）
+（`<协议>` 同步骤 2（自签 TLS 加 `-k`）；`-r 0-255` 只取前 256 字节，避免批量拉取；GET 只读。注意服务端可能忽略 Range 返回全文——本实验室两靶（python `http.server` 与 `openssl s_server -www`）都如此，此时 `size_download` 是全文大小，别读成「只取了 256 字节」。）
 期望：状态码/字节数与「存在且可读」一致。判据：**只有能给出原样证据行（状态码、大小、banner 截断）的条目才算「已确认可见」**；无法复现或只能推断的写「未确认」。
 
 ### 5. 与授权范围逐条对齐

@@ -23,6 +23,9 @@ import {
   DEFAULT_DISABLED_CLASSES,
   PER_ACTION_APPROVAL_CLASSES,
   PHASES,
+  FREE_COMMAND_TEMPLATE_ID,
+  PHASE_COMMAND_ACTION_CLASS,
+  effectiveActionClass,
 } from '../src/contracts.ts';
 import { defaultRegistry, validateParams } from '../src/execution/templates.ts';
 import { PROFILE_DEFAULTS } from '../src/policy/behavior-profile.ts';
@@ -94,7 +97,7 @@ describe('结构化动作模板族：注册表与类别', () => {
   });
 
   it('四档行为预设都启用这些类别（否则会落 beyondPreset → 转人工放行）', () => {
-    for (const profile of ['stealth', 'standard', 'deep', 'custom'] as const) {
+    for (const profile of ['stealth', 'standard', 'fast', 'custom'] as const) {
       for (const actionClass of ['passive_collection', 'active_probing'] as const) {
         assert.ok(PROFILE_DEFAULTS[profile].enabled.includes(actionClass), `${profile} 预设未启用 ${actionClass}`);
       }
@@ -351,3 +354,64 @@ function validateForTest(id: string, params: Readonly<Record<string, string | nu
   assert.ok(spec !== undefined, `模板 ${id} 未注册`);
   return validateParams(spec.template, { ...params }, { allowFreeForm: spec.allowFreeForm === true });
 }
+
+// ─────────────────── 阶段提升类别（自由命令通道，2026-10-09 裁定） ───────────────────
+
+/**
+ * 「④⑤ 逐条放行」这条闸门由**两处**共同决定：契约里的提升规则（`effectiveActionClass`）
+ * 与受理闸门（`classificationGate` 用会话阶段算有效类别）。这里锁规则本身的三条性质：
+ *
+ *   1. **只作用于自由命令通道那一张模板**——注册表里其它模板的有效类别恒等于声明类别。
+ *      少了这条，将来新增一张自由表单模板（或改 id）会让规则悄悄漏到别的动作上，或**失效**
+ *      （改 id 后提升不再匹配 ⇒ 命令退回免批，而界面上看不出少了闸门）。
+ *   2. **只提升不降低**：提升后的类别必须都在逐次放行集合里——否则「提升」只是换了个名字，
+ *      人还是不会被叫来。
+ *   3. **阶段读不回来按最严处理**（`null` ⇒ `lateral_movement`）。
+ */
+describe('阶段提升类别：只作用自由命令通道，只提升不降低', () => {
+  it('自由命令：①②③ 保持基类，④ 升为 exploit_validation，⑤ 升为 lateral_movement', () => {
+    const spec = registry.get(FREE_COMMAND_TEMPLATE_ID);
+    assert.ok(spec !== undefined, `注册表里必须有 ${FREE_COMMAND_TEMPLATE_ID}`);
+    const declared = spec.template.actionClass;
+    assert.equal(declared, 'active_probing', '基类必须是预设内的 active_probing——①②③ 的免批靠它');
+
+    for (const phase of ['intelligence-gathering', 'threat-modeling', 'vulnerability-analysis'] as const) {
+      assert.equal(effectiveActionClass(FREE_COMMAND_TEMPLATE_ID, declared, phase), declared);
+    }
+    assert.equal(effectiveActionClass(FREE_COMMAND_TEMPLATE_ID, declared, 'exploitation'), 'exploit_validation');
+    assert.equal(effectiveActionClass(FREE_COMMAND_TEMPLATE_ID, declared, 'post-exploitation'), 'lateral_movement');
+  });
+
+  it('阶段读不回来（null）按最严处理：自由命令视为 ⑤ 的 lateral_movement', () => {
+    assert.equal(effectiveActionClass(FREE_COMMAND_TEMPLATE_ID, 'active_probing', null), 'lateral_movement');
+  });
+
+  it('除自由命令通道外，任何注册模板的有效类别恒等于声明类别', () => {
+    for (const spec of registry.list()) {
+      if (spec.template.id === FREE_COMMAND_TEMPLATE_ID) continue;
+      for (const phase of PHASES) {
+        assert.equal(
+          effectiveActionClass(spec.template.id, spec.template.actionClass, phase),
+          spec.template.actionClass,
+          `${spec.template.id} 不应被阶段提升规则影响`,
+        );
+      }
+      assert.equal(
+        effectiveActionClass(spec.template.id, spec.template.actionClass, null),
+        spec.template.actionClass,
+        `${spec.template.id} 在阶段读不回来时也不应被提升`,
+      );
+    }
+  });
+
+  it('提升后的类别都在逐次放行集合里（提升必须真换来一次人批）', () => {
+    const entries = Object.entries(PHASE_COMMAND_ACTION_CLASS);
+    assert.ok(entries.length > 0, '提升表不能是空的——空了就等于把闸门撤了');
+    for (const [phase, actionClass] of entries) {
+      assert.ok(
+        (PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(actionClass),
+        `${phase} 提升到 ${String(actionClass)}，但它不在 PER_ACTION_APPROVAL_CLASSES 里`,
+      );
+    }
+  });
+});

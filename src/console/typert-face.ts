@@ -682,6 +682,22 @@ export class ConsoleTypertService extends TypertRemoteService {
   }
 
   /**
+   * `listAssets` —— 转发到 {@link ConsoleRpc.handle}。
+   *
+   * 参数名 `request` 是**线协议的一部分**：SRC 模式从函数源码解析参数名，网关据此校验
+   * `payload.args` 的字段是否与之匹配（`assertExactArguments`），因此这个标识符不能随意改，
+   * 也不能用解构/默认值/rest（会以 `gateway/signature-invalid` 被拒）。
+   *
+   * 注意有两层 `args`：**外层**是网关固定的 `payload = { args: … }` 容器，
+   * **内层**才是本方法的具名参数表 `{ request: <信封> }`。实测踩过一次——
+   * 只写一层时网关报 `args fields do not match the descriptor: unexpected "method", …`。
+   */
+  @Remote
+  async listAssets(request: ConsoleRequest): Promise<ConsoleResponse> {
+    return this.rpcImpl.handle(request, this.contextOf());
+  }
+
+  /**
    * `searchMemory` —— 转发到 {@link ConsoleRpc.handle}。
    *
    * 参数名 `request` 是**线协议的一部分**：SRC 模式从函数源码解析参数名，网关据此校验

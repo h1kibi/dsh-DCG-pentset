@@ -66,15 +66,16 @@ class FakeSessionFactory implements SessionFactory {
     this.delivered.push({ dshSessionId, message });
   }
 
-  /** 记录每次草稿请求的目标阶段（用于断言「省略时按状态机」）。 */
-
   async interrupt(): Promise<void> {}
 
   async close(dshSessionId: string): Promise<void> {
     this.closed.push(dshSessionId);
   }
-}
 
+  async compressHistory(): Promise<void> {
+    // 假工厂不做真实压缩
+  }
+}
 describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENTEST_DATABASE_URL' : false }, () => {
   let pool: Pool;
   /** 夹具里的租户标识（与直接写库的 fixtures `tenant_id = 't'` 一致）。 */
@@ -2473,7 +2474,7 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
 
   test('审批模式：运行中可切（新策略版本 + policy epoch 推进 + 人类决策留痕）', async () => {
     const created = await service.createEngagement({
-      behaviorProfile: 'deep',
+      behaviorProfile: 'fast',
       approvalMode: 'human',
       operatorId: 'op',
       reason: 'r',

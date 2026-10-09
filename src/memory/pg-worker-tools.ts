@@ -639,24 +639,163 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     // 零命中时**必须解释原因**（2026-10-07 加；3/6 份实测报告撞到）：此前静默返回 `[]` + `indexWatermark: 0`，
     // Agent 据此判断"这是空作业"，转而手工读了 150KB+ 归档 markdown。空结果有两种截然不同的含义 ——
     // **索引里没有这个作业的内容** vs **有内容但这次查询没命中** —— 不区分开，猜错的代价是整轮上下文。
+    // 2026-10-09 增强：详细诊断为什么没命中 + 备选查询建议。
     let note: string | undefined;
     if (hits.length === 0) {
-      const counted = await this.#db.query<{ n: number }>(
-        `select count(*)::int as n
-           from pentest.memory_chunks mc
-           join pentest.context_events e on e.event_id = mc.source_event_id
-          where e.engagement_id = $1::uuid`,
-        [session.engagement_id],
-      );
-      const chunks = counted.rows[0]?.n ?? 0;
-      note =
-        chunks === 0
-          ? '本作业记忆索引为空（0 个分块）：这不是"没找到"，是"库里还没有可检索的内容"。' +
-            '作业资料请用 pentest_workdir 读 —— 它读的是人类挂进来的作业目录，不经过索引'
-          : `本作业索引有 ${String(chunks)} 个分块，但本次查询没有命中：换线索再试` +
-            '（实体名、路径、端口、版本号、错误原文、时间窗），或先用 pentest_workdir 列出作业目录';
+      const diagnostics = await this.#diagnoseZeroHits(session.engagement_id, query);
+      
+      if (diagnostics.isEmpty) {
+        note =
+          '本作业记忆索引为空（0 个分块）：这不是"没找到"，是"库里还没有可检索的内容"。' +
+          '作业资料请用 pentest_workdir 读 —— 它读的是人类挂进来的作业目录，不经过索引';
+      } else {
+        note =
+          `本作业索引有 ${String(diagnostics.totalChunks)} 个分块，但本次查询没有命中。\n` +
+          `可能原因：${diagnostics.reason}\n` +
+          `建议尝试：${diagnostics.suggestions.join(' / ')}`;
+        
+        // 补充：若有其他阶段数据，提示可能需要跨阶段检索
+        if (query.phase !== undefined) {
+          note += `\n提示：当前过滤 phase=${query.phase}，若需跨阶段检索请移除 phase 参数`;
+        }
+      }
     }
     return { hits, indexWatermark, ...(note === undefined ? {} : { note }) };
+  }
+
+  /**
+   * 诊断零命中查询：分析为什么没有命中并生成备选查询建议。
+   *
+   * 分析维度：
+   * - 总分块数 vs 过滤后数量（phase/kinds/trust_levels）
+   * - 可用阶段分布（当前作业有哪些阶段的数据）
+   * - 查询词长度与复杂度
+   * - 建议备选查询策略
+   */
+  async #diagnoseZeroHits(
+    engagementId: string,
+    query: MemoryQuery,
+  ): Promise<{
+    isEmpty: boolean;
+    totalChunks: number;
+    reason: string;
+    suggestions: readonly string[];
+  }> {
+    // 1. 统计总分块数和过滤维度的分布
+    const stats = await this.#db.query<{
+      total: number;
+      in_phase: number | null;
+      matching_kinds: number | null;
+      matching_trust: number | null;
+      available_phases: readonly string[];
+      available_kinds: readonly string[];
+      available_trust_levels: readonly string[];
+    }>(
+      `SELECT 
+         count(*)::int as total,
+         count(*) FILTER (WHERE phase = $2) as in_phase,
+         count(*) FILTER (WHERE $3::text[] IS NULL OR kind::text = ANY($3::text[])) as matching_kinds,
+         count(*) FILTER (WHERE $4::text[] IS NULL OR trust_level::text = ANY($4::text[])) as matching_trust,
+         array_agg(DISTINCT phase ORDER BY phase) FILTER (WHERE phase IS NOT NULL) as available_phases,
+         array_agg(DISTINCT kind::text ORDER BY kind) as available_kinds,
+         array_agg(DISTINCT trust_level::text ORDER BY trust_level) as available_trust_levels
+       FROM pentest.memory_chunks mc
+       JOIN pentest.context_events e ON e.event_id = mc.source_event_id
+       WHERE e.engagement_id = $1::uuid`,
+      [
+        engagementId,
+        query.phase ?? null,
+        query.kinds && query.kinds.length > 0 ? query.kinds : null,
+        query.trustLevels && query.trustLevels.length > 0 ? query.trustLevels : null,
+      ],
+    );
+
+    const row = stats.rows[0];
+    const totalChunks = row?.total ?? 0;
+
+    if (totalChunks === 0) {
+      return {
+        isEmpty: true,
+        totalChunks: 0,
+        reason: '索引为空',
+        suggestions: [],
+      };
+    }
+
+    // 2. 分析过滤器是否过严
+    const availablePhases = (row?.available_phases ?? []) as string[];
+    const availableKinds = (row?.available_kinds ?? []) as string[];
+    const availableTrustLevels = (row?.available_trust_levels ?? []) as string[];
+    const inPhase = row?.in_phase ?? 0;
+    const matchingKinds = row?.matching_kinds ?? 0;
+    const matchingTrust = row?.matching_trust ?? 0;
+
+    const reasons: string[] = [];
+    const suggestions: string[] = [];
+
+    // 检查 phase 过滤
+    if (query.phase !== undefined && inPhase === 0) {
+      reasons.push(`phase=${query.phase} 过滤后为空`);
+      if (availablePhases.length > 0) {
+        suggestions.push(`移除 phase 过滤或改用：${availablePhases.slice(0, 3).join('/')}`);
+      }
+    }
+
+    // 检查 kinds 过滤
+    if (query.kinds !== undefined && query.kinds.length > 0 && matchingKinds === 0) {
+      reasons.push(`kinds=[${query.kinds.join(',')}] 过滤后为空`);
+      if (availableKinds.length > 0) {
+        suggestions.push(`移除 kinds 过滤或改用：${availableKinds.slice(0, 3).join('/')}`);
+      }
+    }
+
+    // 检查 trust_levels 过滤
+    if (query.trustLevels !== undefined && query.trustLevels.length > 0 && matchingTrust === 0) {
+      reasons.push(`trust_levels=[${query.trustLevels.join(',')}] 过滤后为空`);
+      if (availableTrustLevels.length > 0) {
+        suggestions.push(`移除 trust_levels 过滤或改用：${availableTrustLevels.slice(0, 3).join('/')}`);
+      }
+    }
+
+    // 3. 分析查询词
+    const queryText = query.query.trim();
+    const queryTokens = queryText.split(/\s+/).filter((t) => t.length > 0);
+
+    if (queryTokens.length === 0) {
+      reasons.push('查询词为空');
+      suggestions.push('输入具体实体名、路径、端口号、版本号或错误信息');
+    } else if (queryTokens.length === 1 && (queryTokens[0]?.length ?? 0) <= 2) {
+      reasons.push('查询词过短');
+      suggestions.push('使用更具体的关键词（至少3个字符）或组合多个关键词');
+    } else if (queryTokens.length > 10) {
+      reasons.push('查询词过长或过于复杂');
+      suggestions.push('提取核心关键词（实体名、路径、端口、版本号）重新查询');
+    }
+
+    // 4. 通用备选策略
+    if (suggestions.length === 0) {
+      // 过滤器没问题，可能是查询词不匹配
+      suggestions.push('尝试同义词或相关术语');
+      suggestions.push('使用更通用的关键词（如服务名而非版本号）');
+      suggestions.push('按时间范围缩小（传入 from/to 参数）');
+      
+      // 检查是否有 asset_ids 过滤
+      if (query.assetIds !== undefined && query.assetIds.length > 0) {
+        suggestions.push(`移除 asset_ids 过滤（当前限定了 ${query.assetIds.length} 个资产）`);
+      }
+    }
+
+    const reason =
+      reasons.length > 0
+        ? reasons.join('；')
+        : '查询词与索引内容不匹配';
+
+    return {
+      isEmpty: false,
+      totalChunks,
+      reason,
+      suggestions: suggestions.slice(0, 3), // 最多返回 3 条建议
+    };
   }
 
   /** 工具入参 → 检索层入参（§8.7 的字段名）。越界取值一律拒绝，不做静默忽略（§10.2.1）。 */

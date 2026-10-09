@@ -44,6 +44,13 @@ export const PANELS_CSS = `
 .pentest-approval__target{display:inline-block;max-width:100%;padding:2px 7px;border:1px solid var(--pt-hairline);background:var(--pt-bg-well);color:var(--pt-info);font:400 12px/1.5 var(--pt-font-mono);overflow-wrap:anywhere}
 .pentest-approval__command-block{display:flex;flex-direction:column;gap:5px;min-width:0}
 
+
+/* 命令展开/折叠控制：默认显示摘要，点击展开完整 */
+.pentest-approval__command-details{cursor:pointer;width:100%;margin:0;padding:0;border:none;background:none}
+.pentest-approval__command-details>summary{padding:2px 5px;border:1px solid var(--pt-hairline);background:var(--pt-bg-well);color:var(--pt-info);font:400 12px/1.5 var(--pt-font-mono);list-style-position:inside;user-select:none}
+.pentest-approval__command-details>summary:hover{background:var(--pt-line);color:var(--pt-accent)}
+.pentest-approval__command-details[open]>summary{border:1px solid var(--pt-line);background:var(--pt-accent-wash)}
+.pentest-approval__command-details[open]>pre{margin-top:5px}
 /* 命令：**完整折行显示**（人类要逐字核对这条命令，横向滚动等于让他漏读尾部）。
    折行会破坏"原样"的视觉，但比"看不全"安全；等宽字体与 pre-wrap 保证字符不被改写。 */
 .pentest-approval__command{margin:0;max-width:100%;padding:9px 10px;border:1px solid var(--pt-line);background:var(--pt-bg-well);color:var(--pt-fg);font:400 12.5px/1.55 var(--pt-font-mono);white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:visible;box-shadow:var(--pt-well-shadow)}
@@ -83,6 +90,8 @@ export const PANELS_CSS = `
 .pentest-report-review__block{margin:0;padding:8px 10px;border:1px solid var(--pt-danger-line);border-left-width:3px;background:var(--pt-danger-wash);color:var(--pt-danger);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
 .pentest-report-review__superseded{margin:0;padding-left:9px;border-left:2px solid var(--pt-line);color:var(--pt-fg-faint);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
 .pentest-report-review__note{color:var(--pt-fg-dim)}
+.pentest-report-review__agent-report{margin-top:9px;padding:8px 10px;border:1px solid var(--pt-line);background:var(--pt-bg-well);font-size:11.5px;line-height:1.65;overflow-wrap:anywhere}
+.pentest-report-review__agent-report-head{margin:0 0 6px;color:var(--pt-fg-dim);font:400 11px/1.5 var(--pt-font-mono)}
 
 .pentest-finding{display:flex;flex-direction:column;gap:8px;min-width:0}
 .pentest-finding>.pentest-field{margin-bottom:0}

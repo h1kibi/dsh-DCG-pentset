@@ -50,6 +50,7 @@ class RecordingSessionFactory implements SessionFactory {
   async deliver(): Promise<void> {}
   async interrupt(): Promise<void> {}
   async close(): Promise<void> {}
+  async compressHistory(): Promise<void> {}
 }
 
 describe('集成：openTask 幂等恢复（真实 PostgreSQL）', {

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Risk Rating, MITRE ATT&CK T0040]
-  smoked: "沙箱实测@81483611f0a0：5 块原文照跑（业务标签 @tsv、四维 python 打分 [3,2,2,1]、影响×可行性排序、影响陈述、priority.json）；步骤 5 本轮修掉——跨边界边缺 feasibility/impact_total 时 sort_by(-(.impact_total*.feasibility)) 报 number (3) and null (null) cannot be multiplied 且 priority.json 不生成，改成 //0 兜底后缺字段输入 exit=0、输出 3 条"
+  smoked: "沙箱实测@5ee07609c870：5 块原文照跑（业务标签 @tsv、四维 python 打分、影响×可行性排序、影响陈述、priority.json），逐块 exit=0；步骤 2 复现 fx-api=[3,2,2,1]、deep-svc 因缺 *_basis 被判「缺依据」；步骤 3 本轮修掉——python 每行 split 后末列仍含行尾换行、print 再加一换行使每行后多一空行（cat -A 实测 ^I3$ 后跟 $），改成先去掉行尾换行再 split 后输出干净 3 行、高影响但 feasibility=0 的 ad-dc 仍排末位；步骤 5 的 //0 兜底对缺 impact_total/feasibility 的边 exit=0、排序不受影响（投影字段仍为 null，非缺陷）"
 ---
 
 # 业务影响与优先级（business-impact）
@@ -56,7 +56,7 @@ PY
 ```bash
 jq -r '.edges[] | select(.crosses_boundary==true) | [.to, (.impact_total // 0), (.feasibility // 0)] | @tsv' /tmp/graph.json \
   | python3 -c "import sys
-rows=[l.split('\t') for l in sys.stdin if l.strip()]
+rows=[l.rstrip('\n').split('\t') for l in sys.stdin if l.strip()]
 for r in sorted(rows, key=lambda r: -(int(r[1])*int(r[2]))): print('\t'.join(r))"
 ```
 **期望**：按 `影响 × 可行性` 降序的边界清单。

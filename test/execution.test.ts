@@ -232,6 +232,9 @@ function binding(overrides: Partial<SessionBinding> = {}): SessionBinding {
     scopeVersion: 1,
     policyEpoch: 1,
     lease: lease(),
+    // 默认阶段：自由命令在 ①②③ 维持基类 `active_probing`（免批）。
+    // 考「④⑤ 按阶段提升类别 ⇒ 逐条放行」的用例显式覆盖 phase。
+    phase: 'intelligence-gathering',
     ...overrides,
   };
 }
@@ -1977,4 +1980,64 @@ test('免批裁定的行为锁：默认 human 档下裸命令直接 admitted，�
   });
   assert.equal(decision.kind, 'admitted', '免批类别在人审档下不应停在等待人类');
   assert.equal(h.store.requests.length, 0, '免批 ⇒ 不生成放行凭证（账本里只有 policy_allow 与执行记录）');
+});
+
+test('按阶段提升类别的行为锁（2026-10-09 裁定）：④⑤ 的自由命令逐条放行，①②③ 仍免批', async () => {
+  // 为什么要有这条：`effectiveActionClass` 按**会话阶段**提升自由命令通道的类别，
+  // 于是「人类看不看得到命令原文」这件事重新与阶段挂钩。四条事实必须一起钉住——
+  // 任何一条单独回退都不会有别的用例发现：
+  //   ① ①②③ 的裸命令仍然免批（免批的吞吐收益不能被这次改动吃掉）；
+  //   ② ④ 走 `exploit_validation`：human 档逐条放行，放行凭证记的是提升后的类别；
+  //   ③ ④ 的 auto 档仍由服务端自放行（`shouldSelfApprove` 对 `exploit_validation` 的既有豁免）；
+  //   ④ ⑤ 走 `lateral_movement`：**auto 档也要人批**（它不在任何预设的启用集合里，也没有豁免）。
+  const commandB64 = Buffer.from('id', 'utf8').toString('base64');
+  const intent = {
+    templateId: 'direct_command',
+    targetSelector: `https://${HOST}/`,
+    params: { port: 443, command_b64: commandB64 },
+    purpose: '按阶段提升类别的行为锁',
+  } as const;
+  const policy = {
+    perActionApprovalClasses: ['exploit_validation', 'lateral_movement'],
+    enabledActionClasses: ['passive_collection', 'active_probing', 'credentialed_access', 'exploit_validation'],
+  } as const;
+
+  for (const phase of ['intelligence-gathering', 'threat-modeling', 'vulnerability-analysis'] as const) {
+    const h = makeHarness();
+    h.setPolicy({ ...policy });
+    h.sessions.binding = binding({ phase });
+    const decision = await h.admit(intent);
+    assert.equal(decision.kind, 'admitted', `${phase}：①②③ 的自由命令应仍免批`);
+    assert.equal(h.store.requests.length, 0, `${phase}：免批不应产生放行凭证`);
+  }
+
+  const exploit = makeHarness();
+  exploit.setPolicy({ ...policy });
+  exploit.sessions.binding = binding({ phase: 'exploitation' });
+  assert.equal(
+    (await exploit.admit(intent)).kind,
+    'needs_approval',
+    '④ 的自由命令必须停在人类放行——放行卡是唯一的内容闸门',
+  );
+  assert.equal(exploit.store.requests[0]?.actionClass, 'exploit_validation');
+  assert.equal(exploit.store.requests[0]?.templateId, 'direct_command', '提升的是类别，不是模板');
+
+  const exploitAuto = makeHarness();
+  exploitAuto.setPolicy({ ...policy, approvalMode: 'auto' });
+  exploitAuto.sessions.binding = binding({ phase: 'exploitation' });
+  assert.equal(
+    (await exploitAuto.admit(intent)).kind,
+    'self_approved',
+    'auto 档对 exploit_validation 仍有既有豁免（人类建作业时选的高权限，凭证由服务端自铸）',
+  );
+
+  const post = makeHarness();
+  post.setPolicy({ ...policy, approvalMode: 'auto' });
+  post.sessions.binding = binding({ phase: 'post-exploitation' });
+  assert.equal(
+    (await post.admit(intent)).kind,
+    'needs_approval',
+    '⑤ 的自由命令在任何审批模式下都要人批（lateral_movement 没有豁免）',
+  );
+  assert.equal(post.store.requests[0]?.actionClass, 'lateral_movement');
 });

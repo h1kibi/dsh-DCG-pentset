@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, MITRE ATT&CK Impact/Cleanup, NIST SP 800-115]
-  smoked: "沙箱实测@81483611f0a0：/proc/net/tcp 十六进制解析（镜像无 ss/ps/netstat）读出监听口 5599 与 127.0.0.11:37273；nc -z exit=0；上传/临时路径探活 404；jq 清理清单管线读出 actions 表"
+  smoked: "沙箱实测@5ee07609c870：逐块跑原文配方。①jq 清理清单（对象台账 .id/.kind/.target/.approved_at）读出 actions 表 exit=0。②上传/临时路径探活：`/uploads/x.txt` 与 `/tmp/x.txt` 都 404。③`nc -z`：对无监听口 exit=1、对同容器起的 `nc -l -k -p 5599` exit=0。④回连自检按原文在同容器 `timeout 5 nc -l -p 4444` + curl 回连：`/tmp/cb.txt` 得 78 字节（判「回连仍活」成立），curl 自身 timeout(28)/状态码 000 属预期（裸 nc 不回 HTTP）。⑤本地侧：`ls -la /tmp` 与 `find -xdev -newer` 正常；/proc/net/tcp 十六进制解析（只过滤 0A 监听态）在**全新容器**里就已读出 127.0.0.11 的 Docker 内嵌 DNS 监听（表不是空的，无需先建连接），同容器再起监听会另列出 0.0.0.0:5599——原文照跑即成立。另：本轮实测镜像有 `ss`/`ps`、缺 `netstat`（旧「前提」写三者都不存在，已改正）→ 步骤 5 新增 `ss -tlnp` 直读路径并实跑：同容器起 `nc -l -k -p 5599` 后 `ss -tlnp` 列出 `LISTEN 0 1 0.0.0.0:5599 users:((\"nc\",pid=7,fd=3))`，`kill` 后归 0 行；与 `/proc/net/tcp` 的 `:15DF` 十六进制解析互为对照（两条路径同容器内结果一致）"
 ---
 
 # 清理核查（post-cleanup-verify）
@@ -19,7 +19,7 @@ metadata:
 - **只读核验**：本技能只**确认现状**，不执行删除/断开/还原（那是人类在控制台或下一轮里做的动作）。发现残留 → 报告并请人类处置。
 - 所有核验都必须**留在范围内**；范围外主机不测。
 - 沙箱是 `--rm` 的一次性容器：容器内 `/tmp` 与前台进程随容器销毁，本就不构成残留——**要核查的残留主要在目标侧**（上传物、账号、会话、监听端口）。
-- 沙箱里 **`ss` / `ps` / `netstat` 不存在**；用 `/proc`、`nc -z`、`curl` 替代。
+- 沙箱镜像里 **`ss`（iproute2）与 `ps`（procps）存在**，**`netstat` 不存在**（2026-10-09 逐项 `command -v` 冒烟确认）；`netstat` 的位置用 `ss -tlnp`，`ss` 也没有的旧镜像才退回 `/proc` 十六进制解析。
 - **`curl` 回连自检要慎用**：它会产生一次真实的出站连接到你自己起的监听。只在「必须确认某隧道/回连是否仍活」且人类知情时用；优先用不建立业务连接的 `nc -z`。
 
 ## 步骤
@@ -60,6 +60,11 @@ curl -sS -o /dev/null -w '%{http_code}\n' --max-time 5 \
 期望：与清理前已知状态一致。判据：若「本应失效的凭据仍可使用」→ 记为**残留凭据**；报告里列凭据标识（不贴明文），请人类轮换/吊销。
 
 ### 5. 核查本地侧残留（容器内，通常随 `--rm` 消失）
+先直读监听（有 `ss` 就用它，进程与 pid 都在输出里）：
+```bash
+ss -tlnp
+```
+没有 `ss` 的旧镜像再退回下面这套（`/proc/net/tcp` 十六进制解析）：
 ```bash
 ls -la /tmp 2>/dev/null
 find / -xdev -newer /etc/hostname -type f -not -path '/proc/*' -not -path '/sys/*' 2>/dev/null | head -50
@@ -86,7 +91,7 @@ PY
 ## 常见失败
 | 现象 | 真实原因 | 处置 |
 |---|---|---|
-| `ss`/`ps` command not found | 镜像里没有 | 用 `/proc/net/tcp`、`nc -z`、`curl` 替代，不要试图安装 |
+| `netstat` command not found（本镜像缺 `net-tools`） | 该工具未装 | 用 `ss -tlnp`（本镜像有）；`ss` 也没有的旧镜像用 `/proc/net/tcp`、`nc -z`、`curl` 替代，不要试图安装 |
 | 所有核验项都超时 | 目标已下线或不再可达 | 记为「无法核验」，不是「已清理」；请人类确认目标状态 |
 | 回连自检把会话「打活」了 | 触发路径仍有效且监听仍活 | 立即停，报告「仍可回连」，请人类按预案断开 |
 | 上传物返回 403 | 存在但访问受限 | 记为「待人工确认」，不要尝试绕过 |

@@ -310,7 +310,7 @@ test('RunControls：未选中 engagement 时整块不渲染（不摆一排永远
   assert.equal(html, '');
 });
 
-test('RunControls：运行中渲染六个动作；**暂停不需要填理由**（2026-10-05 人类要求）', () => {
+test('RunControls：运行中渲染五个动作；**暂停不需要填理由**（2026-10-05 人类要求）', () => {
   const html = renderToStaticMarkup(
     createElement(RunControls, {
       controller: inertController(),
@@ -318,9 +318,12 @@ test('RunControls：运行中渲染六个动作；**暂停不需要填理由**�
       now: NOW,
     }),
   );
-  for (const label of ['启动 Agent', '暂停', '恢复', '发送插话', '终止', '结束技术测试']) {
+  // 「插话」已按 2026-10-09 的决定从 RunControls 移除：不再有「发送插话」按钮。
+  // 余下五个动作入口 = 启动 + 暂停 / 恢复 / 终止 + 结束技术测试。
+  for (const label of ['启动 Agent', '暂停', '恢复', '终止', '结束技术测试']) {
     assert.ok(html.includes(label), `应渲染「${label}」`);
   }
+  assert.ok(!html.includes('发送插话'), '插话入口已按 2026-10-09 的决定移除');
   // 理由输入框已按人类要求移除：不再有任何「必须填写…理由」的闸门。
   assert.ok(!html.includes('必须填写暂停理由'), '不该再要求填暂停理由');
   assert.ok(!html.includes('暂停理由'), '理由输入框必须删除');

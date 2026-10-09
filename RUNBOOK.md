@@ -917,8 +917,9 @@ CRLF 会让容器报 `/usr/bin/env: 'python3\r': No such file or directory`（�
 | `custom` | 自定义（人类写指引） | 逐字注入人类写的 `customGuidance`（≤2000 字），冲突时优先 | 同 stealth | 同 stealth |
 
 > **「默认节奏」只约束结构化动作**（`pentest_recon` 的模板：命令形态由服务端固定）。
-> 自由命令 `pentest_exec`（`direct_command`，自 2026-10-07 免批）**不经过这套限速**——
-> 它的实际速率取决于命令自身。2026-10-08 操作者实测：nmap 在网段上的实测约
+> 自由命令 `pentest_exec`（`direct_command`）**不经过这套限速**——它的实际速率取决于命令自身。
+> 另外它的**审批口径按阶段**（2026-10-09 裁定）：①②③ 免批、④⑤ 逐条人批（类别分别记成
+> `exploit_validation` / `lateral_movement`）。2026-10-08 操作者实测：nmap 在网段上的实测约
 > **ICMP 60 目标/秒、TCP 90–400 探测/秒**，远高于表里的 5/s；按 5/s 估算会得到
 > 「/16 普查要 3.6 小时、不可行」这种**错误结论**（实际是 10 分钟量级）。
 > 要限速就自己在命令里给 `--max-rate`。

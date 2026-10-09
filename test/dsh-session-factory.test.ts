@@ -27,6 +27,7 @@ import { SessionFactoryError } from '../src/workflow/session-port.ts';
 import {
   DshSessionFactory,
 } from '../src/agents/dsh-session-factory.ts';
+import { renderPhaseProfile } from '../src/agents/phase-profiles.ts';
 
 // ───────────────────────────── 假宿主 ─────────────────────────────
 
@@ -409,6 +410,8 @@ describe('DshSessionFactory.create', () => {
       // 顺序在这里有语义（提示词自上而下读），换位会让模型先看到工具清单再看到作业规矩。
       'pentest:engagement-memory',
       'pentest:capability-freeze',
+      // 阶段Profile夹在能力快照与任务简报之间（order 308）：先看边界，再看姿态，再看本阶段职责。
+      'pentest:phase-profile',
       'pentest:task-brief',
       'pentest:handoff-context',
     ]);
@@ -428,9 +431,14 @@ describe('DshSessionFactory.create', () => {
     assert.match(capability.text, /exploit_validation/);
     assert.match(capability.text, /memory_search、pentest_exec/);
 
-    const task = host.sections[2];
+    const phaseProfile = host.sections[2];
+    assert.ok(phaseProfile !== undefined);
+    // 正文与源码渲染器同源：不在这里再抄一份阶段职责，改文案时测试跟着源码走。
+    assert.equal(phaseProfile.text, renderPhaseProfile(INPUT.phase));
+
+    const task = host.sections[3];
     assert.match(task?.text ?? '', /验证 \/admin 的越权读取是否成立/);
-    const handoff = host.sections[3];
+    const handoff = host.sections[4];
     assert.match(handoff?.text ?? '', /范围版本 3/);
   });
 
@@ -462,14 +470,14 @@ describe('DshSessionFactory.create', () => {
     const host = makeHost();
     const factory = new DshSessionFactory(host.ctx);
 
-    await factory.create({ ...INPUT, behavior: { profile: 'deep', pacing: { rate: 10, concurrency: 4 } } });
+    await factory.create({ ...INPUT, behavior: { profile: 'fast', pacing: { rate: 10, concurrency: 4 } } });
 
     const behavior = host.sections.find((s) => s.name === 'pentest:behavior-preset');
     assert.ok(behavior !== undefined, '传了 behavior 就必须注册该分节');
     // 位置有语义：先看边界（能力快照），再看姿态（预设），最后才是这一轮任务。
     assert.ok(behavior.order > 300 && behavior.order < 310, '必须夹在能力快照与任务简报之间');
-    assert.match(behavior.text, /【行为预设：deep｜/);
-    assert.match(behavior.text, /尽量覆盖/);
+    assert.match(behavior.text, /【行为预设：fast｜/);
+    assert.match(behavior.text, /覆盖最大化/);
     assert.match(behavior.text, /速率 10\/s、并发 4/, '宿主实际生效的节奏上限必须写进去');
     assert.match(
       behavior.text,
@@ -530,7 +538,7 @@ describe('DshSessionFactory.create', () => {
       false,
     );
     // 其余分节不受影响。
-    assert.equal(host.sections.length, 3);
+    assert.equal(host.sections.length, 4);
   });
 
   it('创建后立即注入人类确认的任务（followup），消息来源标明由本插件投递', async () => {

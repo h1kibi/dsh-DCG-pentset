@@ -47,7 +47,7 @@ import type {
 } from '../../contracts.ts';
 import { isConsoleMethod } from '../../console/method-names.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatConfidence, formatCount, formatTimestamp, renderInlineMarkdown, reportStatusLabel, truncate } from '../format.ts';
+import { formatConfidence, formatCount, formatTimestamp, renderInlineMarkdown, reportStatusLabel, severityLabel, severityTone, truncate } from '../format.ts';
 import type { Tone } from '../format.ts';
 import { Badge, Button, Card, Empty, ErrorBar, Field, List, Stat, TextArea } from '../ui.tsx';
 
@@ -73,14 +73,6 @@ const SECTION_NOTES: Readonly<Record<ReportSection, string>> = {
   assessed_not_confirmed: '人类已评估并判定不成立，证据引用保留，不删除。',
   unverified_candidates: '人类已暂缓处置，未经确认：不得当作已证实的风险。',
   awaiting_review: '尚未处置：列在这里即表示签字前置条件未满足。',
-};
-
-const SEVERITY_LABELS: Readonly<Record<Severity, string>> = {
-  critical: '严重',
-  high: '高',
-  medium: '中',
-  low: '低',
-  info: '信息',
 };
 
 const STATUS_LABELS: Readonly<Record<FindingStatus, string>> = {
@@ -218,21 +210,6 @@ export function dispositionBlockers(input: DispositionGateInput): readonly GateB
     });
   }
   return blockers;
-}
-
-function severityTone(severity: Severity | null): Tone {
-  switch (severity) {
-    case 'critical':
-    case 'high':
-      return 'danger';
-    case 'medium':
-      return 'attention';
-    case 'low':
-    case 'info':
-      return 'neutral';
-    case null:
-      return 'attention';
-  }
 }
 
 function statusTone(status: FindingStatus): Tone {
@@ -580,7 +557,7 @@ function FindingReviewRow(props: {
         <span className="pentest-finding__title">{renderInlineMarkdown(finding.title)}</span>
         <Badge text={STATUS_LABELS[finding.status]} tone={statusTone(finding.status)} hint={finding.status} />
         <Badge
-          text={severity === null ? '严重度待人工确认' : `${SEVERITY_LABELS[severity]} · ${severity}`}
+          text={severity === null ? '严重度待人工确认' : `${severityLabel(severity)} · ${severity}`}
           tone={severityTone(severity)}
           hint="最终报告使用人工确认后的严重度"
         />
@@ -674,7 +651,7 @@ function FindingReviewRow(props: {
             <option value="">未确认</option>
             {SEVERITIES.map((candidate) => (
               <option key={candidate} value={candidate}>
-                {`${SEVERITY_LABELS[candidate]} · ${candidate}`}
+                {`${severityLabel(candidate)} · ${candidate}`}
               </option>
             ))}
           </select>

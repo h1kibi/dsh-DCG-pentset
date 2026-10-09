@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [MITRE ATT&CK T1090（Proxy）/ T1572（Protocol Tunneling）, chisel 官方文档, ligolo-ng 官方文档, socat 手册, proxychains-ng 手册, PTES Post-Exploitation]
-  smoked: "沙箱实测@81483611f0a0：对实验室双网拓扑（沙箱在 pentest-lab-internal；内网段在 --internal 的 pentest-lab-deep；跳板主机 dual-homed）逐块跑：①直连内网 172.30.0.2:8080 超时（direct=000）②socat 在跳板上 TCP-LISTEN:9999,fork,reuseaddr → 经跳板 curl = 200 ③chisel 服务端**必须带 --socks5**——漏了时客户端日志显示 Connected 而 SOCKS 请求全部 Connection reset by peer（实测踩到并写入常见失败）④沙箱侧 chisel client … socks 后：curl --socks5-hostname=200（987 字节真内容）、proxychains4 curl=200、proxychains4 nmap -sT -Pn -p 8080 得 8080/tcp open ⑤配对证据落在同一文件（direct=000 与 via=200）⑥收尾 pkill -x chisel 后 after_teardown=000。另实测本沙箱**无 /dev/net/tun 且无 NET_ADMIN** ⇒ ligolo-proxy 不可用（已写进前提与常见失败）"
+  smoked: "沙箱实测@5ee07609c870：对实验室双网拓扑（沙箱在 pentest-lab-internal；内网段在 pentest-lab-deep；跳板 pivot-host 172.29.0.6 / 172.30.0.3 dual-homed；deep-svc 172.30.0.2:8080）逐块跑：①沙箱直连内网 172.30.0.2:8080 超时（direct=000、curl exit=28、nc exit=1）②跳板 socat TCP-LISTEN:9999,fork,reuseaddr → 沙箱经 172.29.0.6:9999 curl=200（via_socat=200）③chisel 服务端**必须带 --socks5**——不带时（--port 9001）客户端日志仍 Connected(Latency…)、tun proxy#127.0.0.1:1080=>socks Listening，但业务请求 curl --socks5-hostname 报 Recv failure: Connection reset by peer（000、exit 97），实测踩到④沙箱侧 chisel client 172.29.0.6:9000 socks：日志 Connected + Listening；curl --socks5-hostname=200（size=987，真内容为 Python http.server 目录页）、proxychains4 -f pc.conf curl=200、proxychains4 nmap -sT -Pn -p 8080 得 8080/tcp open ⑤配对证据同一文件 /tmp/pivot/proof.txt：direct=000 与 via=200 ⑥收尾 pkill -x chisel;pkill -x socat 后沙箱侧 after_teardown=000，跳板侧进程与监听清零（ps/ss 均 NONE）。另确认 chisel server 实际监听落在 tcp6 的 ::(ss -f inet6 可见)；本沙箱**无 /dev/net/tun 且无 NET_ADMIN** ⇒ ligolo-proxy 不可用（已写进前提与常见失败）；跳板上 socat/chisel/curl/proxychains4/nmap 均已就位"
 ---
 
 # 跳板与隧道（post-lateral-pivot）
@@ -17,7 +17,8 @@ metadata:
 - 目标是把「够不到」变成「可核验」，为后续只读核验提供通道；不是"建个隧道长期挂在那"。
 
 ## 前提与边界
-- **类别是 `lateral_movement`：永远逐条人工放行**（这是本插件的默认策略，不因任何理由自动放行）。
+- **类别是 `lateral_movement`：永远逐条人工放行**（2026-10-09 起按**会话阶段**定类：后渗透阶段的每条命令都记成
+  `lateral_movement`，人工与高权限模式都不自放行）。
   每条命令经 `pentest_exec`，`purpose` 要写清「这条隧道通往哪个网段、用来干什么」——**这一句就是事后唯一的说明书**（账本里只有它）。
 - **方向约束（本部署特有）**：沙箱**没有入站端口**（`buildDockerArgs` 不发布端口），所以
   **隧道必须由沙箱主动连出**——跳板侧监听、沙箱侧做客户端。反过来（跳板回调沙箱）在这里不成立，

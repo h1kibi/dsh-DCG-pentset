@@ -31,6 +31,7 @@ import type {
   ExecutionPlan,
   MainStatus,
   NormalizedTarget,
+  Phase,
   PolicyService,
   PortRange,
   Protocol,
@@ -47,6 +48,7 @@ import {
   DEFAULT_DISABLED_CLASSES,
   MAIN_STATUSES,
   PER_ACTION_APPROVAL_CLASSES,
+  PHASES,
   RUN_MARKERS,
   SESSION_STATUSES,
 } from '../contracts.ts';
@@ -95,6 +97,11 @@ interface SessionRow {
   readonly engagement_id: string;
   readonly status: string;
   readonly scope_version: number | string;
+  /**
+   * 会话阶段。决定自由命令通道的有效类别（④⑤ 逐条放行，见 `effectiveActionClass`），
+   * 因此它与范围版本一样是**执行准入的事实**，必须随绑定一起读回来。
+   */
+  readonly phase: string;
   readonly policy_epoch: number | string;
   /** engagement 的运行标记（§5.1）。 */
   readonly engagement_status: string;
@@ -141,7 +148,7 @@ const SQL_ASSET_DECISIONS = `select a.canonical_target, a.kind, a.labels, d.deci
       order by a.canonical_target`;
 
 /** 会话绑定：会话冻结的范围版本（§10.2.2）+ engagement 的单调策略 epoch（§10.3.1）。 */
-const SQL_SESSION = `select s.engagement_id, s.status, s.scope_version, e.policy_epoch,
+const SQL_SESSION = `select s.engagement_id, s.status, s.scope_version, s.phase, e.policy_epoch,
               e.status as engagement_status, e.current_status as engagement_main_status
        from pentest.worker_sessions s
        join pentest.engagements e on e.id = s.engagement_id
@@ -303,6 +310,19 @@ function parseMainStatus(value: unknown): MainStatus {
     return value as MainStatus;
   }
   return 'auth_pending';
+}
+
+/**
+ * 解析会话阶段（`worker_sessions.phase`，001 有 CHECK）。
+ *
+ * 与运行标记同一条纪律：**读不回来也不抛错**——抛错会让整个 binding 读不回来，连
+ * 「拒绝并说明」都做不到。返回 `null` 表示读不懂，由 `effectiveActionClass` 按最严处理
+ * （自由命令通道视为 ⑤ 的 `lateral_movement`），因此这条分支只会更严，不会放宽。
+ */
+function parsePhase(value: unknown): Phase | null {
+  return typeof value === 'string' && (PHASES as readonly string[]).includes(value)
+    ? (value as Phase)
+    : null;
 }
 
 function parseRevocationReason(value: unknown): SessionLease['revokedReason'] {
@@ -1022,6 +1042,7 @@ export class PgSessionDirectory implements SessionDirectory {
       mainStatus: parseMainStatus(row.engagement_main_status),
       scopeVersion: toNumber(row.scope_version, 'scope_version'),
       policyEpoch: toNumber(row.policy_epoch, 'policy_epoch'),
+      phase: parsePhase(row.phase),
       lease: leaseRow === undefined ? null : toSessionLease(leaseRow),
     };
   }

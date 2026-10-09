@@ -535,15 +535,17 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
       case 'target':
         return <code className="pentest-approval__target">{row.normalizedTarget ?? MISSING}</code>;
 
-      case 'command':
+      case 'command': {
+        const command = row.displayCommand ?? row.normalizedCommand ?? MISSING;
         return (
           <div className="pentest-approval__command-block">
-            {/* §10.3.1：人类批准的是这条命令本身，因此原样展示、不截断成摘要。
-                优先显示 displayCommand（`*_b64` 参数已解码）——放开权限后放行卡是唯一的内容
-                闸门，把 base64 摆在这里等于让人类盲批；老记录没有该字段时才回落。 */}
-            <pre className="pentest-approval__command">
-              {row.displayCommand ?? row.normalizedCommand ?? MISSING}
-            </pre>
+            {/* 命令很长，默认显示摘要，点击展开完整内容 */}
+            <details className="pentest-approval__command-details">
+              <summary title="点击展开完整命令">
+                {command === MISSING ? MISSING : `${truncate(command.replace(/\n/g, ' '), 60)} …`}
+              </summary>
+              <pre className="pentest-approval__command">{command}</pre>
+            </details>
             <span className="pentest-approval__limits">
               {row.timeoutMs === null || row.maxOutputBytes === null
                 ? MISSING
@@ -551,6 +553,7 @@ export function ApprovalQueue(props: ApprovalQueueProps): ReactNode {
             </span>
           </div>
         );
+      }
 
       case 'class':
         return (

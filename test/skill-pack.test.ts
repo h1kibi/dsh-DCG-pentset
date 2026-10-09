@@ -66,11 +66,13 @@ async function loadPack(): Promise<Map<string, { text: string; parsed: ParsedSki
  * 理由与手工装法写在 `docker/tools/Dockerfile` 的"有意不装"清单里；
  * 本项目**有意不装**的探测类武器（amass/gau/waybackurls）、`telnet`/`ftp`（明文协议，改用 nc/openssl）、
  * C2（msfconsole）与 GPU 破解（hashcat，按提示词纪律交人类）；以及精简基础镜像里没有的
- * `ss`/`ps`/`netstat`（用 `/proc` 或 `nc -z` 替代）。
+ * `netstat`（`net-tools` 未装，用 `ss -tlnp` 或 `/proc/net/tcp` 替代）。
+ * **`ss`（iproute2）与 `ps`（procps）在镜像里**：2026-10-09 逐项 `command -v` 冒烟确认后
+ * 从名单里删掉——留着它们会让这条门禁去禁一条**其实跑得通**的命令。
  * 往镜像里加了工具，就把它从这份名单里删掉——这正是这条测试要逼人做的确认。
  */
 const ABSENT_IN_SANDBOX = [
-  'ss', 'ps', 'netstat', 'nikto', 'wpscan', 'medusa', 'nxc', 'netexec',
+  'netstat', 'nikto', 'wpscan', 'medusa', 'nxc', 'netexec',
   'telnet', 'ftp', 'amass', 'gau', 'waybackurls', 'searchsploit', 'msfconsole',
 ] as const;
 
@@ -175,8 +177,8 @@ test('skill 里写的速率必须与 PROFILE_DEFAULTS 一致（数字散在多�
   const pack = await loadPack();
   const offenders: string[] = [];
   for (const [name, { parsed }] of pack) {
-    for (const match of parsed.body.matchAll(/(stealth|standard|deep)\s*(\d+)\s*\/\s*s/g)) {
-      const profile = match[1] as 'stealth' | 'standard' | 'deep';
+    for (const match of parsed.body.matchAll(/(stealth|standard|fast)\s*(\d+)\s*\/\s*s/g)) {
+      const profile = match[1] as 'stealth' | 'standard' | 'fast';
       const claimed = Number(match[2]);
       const actual = PROFILE_DEFAULTS[profile].pacing.rate;
       if (claimed !== actual) offenders.push(`${name}: 写的是 ${profile} ${claimed}/s，实际 ${actual}/s`);
@@ -283,35 +285,26 @@ test('跨代码块依赖 /tmp 产物的 skill 必须写明「容器是一次性�
 /**
  * 防回流锁（2026-10-07 评审建议）：命令通道的 skill 正文不得再出现**已失效的审批措辞**。
  *
- * 背景：免批裁定后 `direct_command`（类别 `active_probing`）在四个出厂预设里都免批，
- * 而 12 份 skill 的正文早已写着"每条都要人类批准/逐条人工放行"，它们的冒烟戳还被刷新过
- * —— 文件看起来是新的，语义却是旧的。措辞与裁定漂移是这套系统里最常见的缺陷形态
- * （设计文档自己写着"改这一处必须与镜像里那些措辞同轮更新"），所以这里把它变成机器可判的：
+ * 背景：自由命令的审批口径**按会话阶段分叉**（2026-10-09 裁定）。
+ * `direct_command` 的基类仍是 `active_probing`（①②③ 免批），但 `exploitation` 阶段的有效类别是
+ * `exploit_validation`、`post-exploitation` 是 `lateral_movement` ⇒ 那两个阶段逐条人批。
  *
- *   **只要一行同时提到命令通道（`pentest_exec`/`direct_command`/自由命令）**
- *   **又写着"要人类逐条批"的措辞 ⇒ 红。**
+ * 于是**两个方向都会漂**：说"命令免批"漏掉 ④⑤，说"每条都要人批"漏掉 ①②③——
+ * 两种写法都会把作业指导写成一句过期的绝对话，而文件看起来是新的（冒烟戳刚打过）。
  *
- * 刻意不按"出现 `exploit_validation`"来判：那个类别名**仍然有效**（枚举、证据样例、
- * `lateral_movement` 那条真正逐条放行的策略都要用它），已失效的只是**命令通道**的措辞。
+ *   **规则：同一行里既提命令通道（`pentest_exec`/`direct_command`/自由命令）、又提审批语义的，
+ *   必须出现「哪个阶段」的指代**（阶段名/①..⑤/两个提升后的类别名），或者显式标注为历史。
+ *
+ * 刻意不按"出现某个类别名"来判（它们都仍然有效）：失效的不是名字，是**不带阶段的绝对话**。
  */
-test('skill 正文不得再对命令通道声称"逐条人批"（免批裁定的防回流锁）', () => {
-  // 规则从"短语黑名单"改成**必答项**（2026-10-07 评审的变异实验：黑名单漏掉最典型的回流写法——
-  // `逐条人批` 这个词本身、被字词隔开的「每条命令经 pentest_exec 都要人类批准」、以及命中词前
-  // 蹭到的无关否定词；同时对"引用旧措辞并声明作废"误报）。
-  // 现在：**凡同一行里既提命令通道、又提审批语义的，必须出现显式免批事实**，否则红。
+test('skill 提到命令通道的审批语义时必须说清"哪个阶段"（2026-10-09 口径分叉后的防漂移锁）', () => {
+  // 这条锁的前一版钉的是"命令通道一律免批"（2026-10-07）。口径分叉之后它必须跟着分叉：
+  // 单一方向的断言会放过另一半——把 ④⑤ 的指导写回"免批"同样是有害漂移。
   const CHANNEL = ['pentest_exec', 'direct_command', '自由命令'];
   const APPROVAL = /审批|放行|人批|批准|过目/;
-  const CLEARED = [
-    '免批',
-    '不再经人过目',
-    '不再逐条',
-    '不需要逐条',
-    '无需逐条',
-    '不需要人类放行',
-    '不消耗人类审批',
-    '服务端按类别放行',
-  ];
-  const HISTORY = /作废|历史|曾|此前|不再成立/; // 引用旧措辞并说明作废的行不算违规
+  /** 说清阶段即算合格：阶段名、编号，或两个提升后的类别名（它们各自唯一对应一个阶段）。 */
+  const PHASE_AWARE = /阶段|①②③|①|②|③|④|⑤|exploitation|exploit_validation|lateral_movement/;
+  const HISTORY = /作废|历史|此前|不再成立/; // 引用旧措辞并说明作废的行不算违规
 
   const files: string[] = readdirSync(SKILLS_DIR, { recursive: true })
     .map((entry) => join(SKILLS_DIR, String(entry)))
@@ -326,17 +319,18 @@ test('skill 正文不得再对命令通道声称"逐条人批"（免批裁定的
         if (!CHANNEL.some((token) => line.includes(token))) return;
         if (!APPROVAL.test(line)) return;
         if (HISTORY.test(line)) return;
-        if (CLEARED.some((phrase) => line.includes(phrase))) return;
+        if (PHASE_AWARE.test(line)) return;
         offenders.push(
-          `${file.slice(SKILLS_DIR.length + 1)}:${String(index + 1)} —— 提到命令通道与审批，却没说清"免批"：${line.trim().slice(0, 80)}`,
+          `${file.slice(SKILLS_DIR.length + 1)}:${String(index + 1)} —— 提到命令通道与审批，却没说清哪个阶段：${line.trim().slice(0, 80)}`,
         );
       });
   }
   assert.deepEqual(
     offenders,
     [],
-    '免批裁定后命令通道不再逐条人批：这一行要么补上"免批（命令原文不再经人过目）"，' +
-      `要么改成描述真正仍逐条放行的类别（如 lateral_movement）：\n${offenders.join('\n')}`,
+    '自由命令的审批口径按阶段分叉（①②③ 免批；④ exploit_validation 逐条人批；' +
+      '⑤ lateral_movement 永远逐条人批）：这一行要么补上阶段指代，要么标注为历史措辞：\n' +
+      offenders.join('\n'),
   );
 });
 

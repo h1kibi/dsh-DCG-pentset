@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, MITRE ATT&CK T1087.002 / T1069.002 / T1482 / T1201 / T1649, Microsoft AD 架构文档, Samba 官方文档]
-  smoked: "沙箱实测@81483611f0a0：对实验室 Samba AD DC（域 LAB.LOCAL）逐块跑：①enum4linux-ng -A 通过（SMB 445/139 可达、Domain/NetBIOS 段、SMB1=false）②LDAP 根 DSE 通过（namingContexts=DC=lab,DC=local）③ldapdomaindump **必须加 -at SIMPLE**——默认 NTLM 绑定被服务端掐断（LDAPSessionTerminatedByServerError），加 -at SIMPLE 后 Bind OK + Domain dump finished ③b rpcclient 通过（6 用户带 RID、6 组）⑤SPN/DONT_REQ_PREAUTH/委派三条 LDAP 过滤通过（svc-web HTTP/…、svc-sql MSSQLSvc/…；UAC 查询显示 4260352）⑧kerbrute userenum 通过（17 名字、2 valid）⑨端口面通过（53/88/135/139/389/445/464/636/3268/3269 open）。未通过并已写入常见失败：④bloodhound-python 的 Kerberos 路径报 dc1.lab.local:88 名字解析失败（容器 DNS 不解析域内名字）、NTLM 路径被拒；⑥certipy find 与 ⑦adidnsdump 分别因 KRB_AP_ERR_INAPP_CKSUM 与「只支持 NTLM」未通。两条夹具限制已记入 docker/ad-dc 与 RUNBOOK"
+  smoked: "沙箱实测@5ee07609c870：对实验室 Samba AD DC（域 LAB.LOCAL、dc1.lab.local/172.29.0.7）逐块跑：①enum4linux-ng -A 通过（SMB 445/139 可达、Domain LAB/lab.local、经 SMB 得 FQDN dc1.lab.local、SMB1=false、**SMB signing required=true**）②LDAP 根 DSE 通过（namingContexts=DC=lab,DC=local，dnsHostName=dc1.lab.local）③ldapdomaindump **必须加 -at SIMPLE**——不加时默认 NTLM 绑定被掐断（LDAPSessionTerminatedByServerError），加后 Bind OK+Domain dump finished，users=6/groups=39/computers=1/trusts=0 ③b rpcclient 通过（6 用户带 RID、13 个域组、3 个共享）⑤LDAP 过滤三条通过（SPN：svc-web HTTP/web.lab.local、svc-sql MSSQLSvc/sql.lab.local:1433、krbtgt kadmin/changepw；DONT_REQ_PREAUTH=nopreauth，UAC=4260352；委派 0 条）⑧kerbrute userenum 通过（KDC 172.29.0.7:88、17 名字、2 valid：administrator/guest）⑨端口面通过（53/88/135/139/389/445/464/636/3268/3269 open；593/3389/5985/5986 closed）。未通过并已写入常见失败：④bloodhound-python 加 /etc/hosts 后 TGT 过了、但 LDAP 阶段失败（Failed to resolve LDAP server IP——该工具走 -ns 自带解析器、不读 /etc/hosts，而夹具里 dc1.lab.local 的 A 记录是陈旧值 172.29.0.4；-dc 只收 FQDN 不收 IP），不加 hosts 则报 dc1.lab.local:88 名字解析失败，NTLM 路径同样卡在解析；⑥certipy find 默认 NTLM 被掐断（session terminated by server），Kerberos 路径在本镜像走不完（无 kinit，impacket getTGT 存 ccache 报 ASN.1 schema 错）；⑦adidnsdump 只支持 NTLM、被同一策略掐断。另测：Kerberoast（GetUserSPNs -request）对 svc-web/svc-sql 均报 KRB_AP_ERR_INAPP_CKSUM；GetNPUsers 仍报 nopreauth 未设 DONT_REQ_PREAUTH（与 LDAP UAC=4260352 冲突，按原文记入常见失败）"
 ---
 
 # AD 域面清点（recon-ad-surface）
@@ -20,7 +20,7 @@ metadata:
 
 ## 前提与边界
 - **本技能没有结构化通道**：`pentest_recon` 的 technique 是网络/Web 面，AD 面一个都没有。所以下面每条命令都经
-  `pentest_exec` 走 `direct_command` 模板，类别 `active_probing` —— **免批**（2026-10-07 裁定：命令原文不再经人过目）。
+  `pentest_exec` 走 `direct_command` 模板，类别 `active_probing` —— **免批**（2026-10-07 裁定：命令原文不再经人过目）。**该口径只属 ①②③**：④利用验证/⑤后渗透阶段同一模板提升为 `exploit_validation`/`lateral_movement` ⇒ 逐条人批。
   写法上因此要「一条命令一个目的」：免批后**没有人再替你读命令原文**，一条命令承担 8 步，
   出事时账本里只剩一行看不懂的记录——等于自己给自己制造风险。
 - 凭据来源必须记录：谁给的、什么权限、有没有过期时间。**不要在命令里写死口令**，用「凭据文件 + source」的方式注入
@@ -79,11 +79,13 @@ bloodhound-python -d <域名> -u '<域账号>' -p '<口令>' -ns <已裁决地�
 ```
 **期望**：`/tmp/bh/*.json` + 一个 zip；输出里会打印每类节点的计数。
 **判据**：节点/边计数写进产出；**图分析本身不在这一步**（谁到 Domain Admin 的最短路属于判断，交威胁建模/漏洞分析）。
-> **Kerberos 要名字，不只是地址**：这条命令会去连 `<域控主机名>.<域名>:88`，而容器里的 DNS 是宿主的、
+> **Kerberos 要名字，不只是地址**：这条命令先连 `<域控主机名>.<域名>:88` 取 TGT，容器 DNS 是宿主的、
 > 不解析域内名字（实测报 `Connection error (dc1.lab.local:88) Name or service not known`）。
-> 处理：确认地址已裁决后，在容器内临时补一条解析（`echo '<地址> <域控主机名>.<域名>' >> /etc/hosts`，
-> 容器一次性、`--rm` 即弃），或用 `--auth-method ntlm`（目标若拒 NTLM 则此路不通——见第 3 步的说明）。
-> 不要为此改 `/etc/resolv.conf`。
+> 容器内临时补 hosts（`echo '<地址> <域控主机名>.<域名>' >> /etc/hosts`，`--rm` 即弃）**只解决 TGT 这一步**：
+> 取到票之后 bloodhound 连 LDAP 用的是它自带的解析器（`-ns`，不读 `/etc/hosts`），拿不到正确 IP 就报
+> `Failed to resolve LDAP server IP`；而 `-dc` **只接受 FQDN、给 IP 直接退出**。所以这条要么让域控自己的
+> DNS 对它自己的 FQDN 返回正确 A 记录（实测夹具里该记录是陈旧值、指到了别的容器），要么在沙箱内走不通。
+> **不要**为此改 `/etc/resolv.conf`；`--auth-method ntlm` 救不了它（实测同样卡在解析，不是卡在 NTLM 被拒）。
 
 ### 5. 已认证：把「攻击面候选」用 LDAP 过滤出来（只读查询，不请求票据）
 ```bash
@@ -96,7 +98,7 @@ ldapsearch -x -H ldap://<已裁决地址> -D '<域账号>@<域名>' -w '<口令>
 ```
 **期望**：SPN 账号清单、不要求预认证的账号（`DONT_REQ_PREAUTH`=4194304）、委派配置项。
 **判据**：三类都只产出**候选清单**——「有 SPN」只说明可尝试 Kerberoast，「不要求预认证」只说明可尝试 AS-REP，
-**都不等于已证实可利用**；证实在 `vuln-ad-checks`，利用在 `exploit-*`（自由命令通道，免批）。
+**都不等于已证实可利用**；证实在 `vuln-ad-checks`，利用在 `exploit-*`（自由命令通道；**④利用验证阶段逐条人批**）。
 
 ### 6. 已认证：ADCS（证书服务）是否存在与模板清单
 ```bash
@@ -119,7 +121,7 @@ kerbrute userenum -d <域名> --dc <已裁决地址> /usr/share/wordlists/top-us
 ```
 **期望**：逐行 `VALID USERNAME` / `invalid username`，末尾给计数。
 **判据**：**只枚举、不喷洒**。`kerbrute passwordspray` 属爆破类，本技能不使用；要试口令必须走
-`exploit-auth-testing` 的纪律（单账号 ≤5 次、间隔 ≥1s；**免批后没人在逐条看命令**，速率纪律就是唯一约束）。
+`exploit-auth-testing` 的纪律（单账号 ≤5 次、间隔 ≥1s；**④阶段逐条人批，但节奏纪律仍是控制目标侧风险的唯一约束**）。
 
 ### 9. 服务面：域控与域成员对外的端口
 ```bash
@@ -140,16 +142,17 @@ nmap -Pn -p 53,88,135,139,389,445,464,593,636,3268,3269,5985,5986,3389 <已裁�
 ## 常见失败
 | 现象 | 真实原因 | 处置 |
 |---|---|---|
-| `LDAPSessionTerminatedByServerError` / `Strong(er) authentication required` | 目标拒绝**非 TLS 的简单绑定**，或拒绝 **NTLM** 的 LDAP 绑定 | 二选一：工具换认证方式（`ldapdomaindump -at SIMPLE`）、或走 LDAPS/签名；**这是目标策略事实，写进产出**，不要当成凭据错 |
-| `KRB_AP_ERR_INAPP_CKSUM` / `Kerberos SessionError` | Kerberos 校验和与某些 KDC 实现（含 Samba）互操作不合 | 换认证方式（LDAP 面用 SIMPLE、SMB 面用 NTLM/口令）；把「哪条路走通」写进产出，别把工具报错当目标结论 |
-| `Connection error (<域控主机名>.<域名>:88) Name or service not known` | 容器 DNS 是宿主的，不解析域内名字；而 Kerberos 必须用名字 | 容器内临时补 hosts 解析（见第 4 步）；不要改 `/etc/resolv.conf` |
+| `LDAPSessionTerminatedByServerError` / `Strong(er) authentication required` | 目标拒绝**非 TLS 的简单绑定**，或拒绝 **NTLM** 的 LDAP 绑定 | 二选一：工具换认证方式（`ldapdomaindump -at SIMPLE`）、或走 LDAPS/签名；**这是目标策略事实，写进产出**，不要当成凭据错。注意 `certipy find` / `adidnsdump` **只有 NTLM 一条路**（`adidnsdump -h` 没有 SIMPLE 选项），目标拒 NTLM 时这两条在沙箱内直接不通 |
+| `KRB_AP_ERR_INAPP_CKSUM` / `Kerberos SessionError` | Kerberos 校验和与某些 KDC 实现（含 Samba）互操作不合 | 换认证方式（LDAP 面用 SIMPLE、SMB 面用 NTLM/口令）；把「哪条路走通」写进产出，别把工具报错当目标结论（实测：`GetUserSPNs.py -request` 为 svc-web/svc-sql 请求服务票据时均报此错） |
+| `Connection error (<域控主机名>.<域名>:88) Name or service not known` | 容器 DNS 是宿主的，不解析域内名字；而 Kerberos 必须用名字 | 容器内临时补 hosts 解析（见第 4 步，**只对走系统解析器的工具有效**）；自带解析器的工具（bloodhound 的 `-ns`）不吃 `/etc/hosts`，会改报 `Failed to resolve LDAP server IP`——那要求域控 DNS 对它自己的 FQDN 有正确 A 记录。不要改 `/etc/resolv.conf` |
+| `certipy find -k` 报 `cannot access local variable 'ccache'` / `getTGT.py` 报 `Attempted "__str__" operation on ASN.1 schema object` | 工具镜像里没有 `kinit`/`klist`；impacket `getTGT.py` 从该 KDC 取到票后写不出 ccache | 记为目标互操作事实；本技能不申请证书，certipy 不是必经步骤，**别**为此改镜像或跳过第 5/8 步 |
 | `KRB_AP_ERR_SKEW` / `Clock skew too great` | 容器与域控时钟差 >5 分钟 | 先比对 `date -u` 与域控时间，把偏差记为环境事实；容器内**不要**自行改系统时钟（免批不等于可以为所欲为），需要校时就说清并让人类在宿主侧处理 |
 | `ldap_sasl_bind(SIMPLE): Can't contact LDAP server` | 端口没开 / 目标不是 DC / 被过滤 | 回到第 9 步确认端口；不要换协议硬试 |
 | 工具的判读与 LDAP 实测**不一致** | 工具自己的解析/版本差异（实测：`userAccountControl` 查询显示 `4260352`（含 0x400000），而某工具仍报「未设 DONT_REQ_PREAUTH」） | **以 LDAP 原始查询为准**，把冲突作为未决线索写进产出，不要二选一了事 |
 
 ## 不做的事
 - 不写域：不建/改用户、组、GPO、DNS 记录（本技能全程只读）。
-- 不请求票据（roast）、不申请证书、不中继、不横向——那是验证/利用阶段，且**免批**（命令原文不再经人过目）。
+- 不请求票据（roast）、不申请证书、不中继、不横向——那是验证/利用阶段（**那两档逐条人批**，本技能不做）。
 - 不做口令喷洒与爆破（`kerbrute` 只用来枚举用户名）。
 - 不投载荷、不留后门、不改目标配置。
 

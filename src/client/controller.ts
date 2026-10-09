@@ -69,6 +69,7 @@ import type { WorkerReportView, PurgePreview,
   ConfirmScopeProposalInput,
   RejectScopeProposalInput,
   OpenTaskResult,
+  NetworkAsset,
 } from '../contracts.ts';
 
 /** 控制器对外暴露的只读快照。 */
@@ -626,6 +627,14 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
     return Array.isArray(value) ? value : null;
   }
 
+  /** 资产清单（控制台「资产」面板）。 */
+  async refreshAssets(): Promise<readonly NetworkAsset[] | null> {
+    const id = this.#snapshot.selectedEngagementId;
+    if (id === null) return null;
+    const value = await this.#fetch<readonly NetworkAsset[]>('listAssets', { engagementId: id });
+    return Array.isArray(value) ? value : null;
+  }
+
   /**
    * 检索记忆（§8.6）。
    *
@@ -869,8 +878,11 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
 
   /** 彻底删除作业内容（不可恢复）。`confirmName` 必须与作业名完全一致——人类防手滑的栏杆。 */
   purgeEngagement(input: Omit<PurgeEngagementInput, 'operatorId' | 'expectedStateVersion'>): Promise<ConsoleCallResult> {
-    const { reason, ...params } = input;
-    return this.mutate('purgeEngagement', params, reason ?? '');
+    const { params, reason } = this.#splitActor(input);
+    // 从 engagement 列表中查出该作业的版本（列表页点清理时，该作业可能未被 select）
+    const engagement = this.#snapshot.engagements.find((e) => e.id === input.engagementId);
+    const version = engagement?.stateVersion ?? this.#snapshot.state?.stateVersion ?? 0;
+    return this.mutate('purgeEngagement', params, reason, { expectedStateVersion: version });
   }
 
   /**

@@ -85,6 +85,7 @@ export const CONSOLE_METHOD_NAMES = [
   'redactPreview',
   'exportReport',
   'listUndisposed',
+  'listAssets',
   'searchMemory',
   'readMemory',
   'memoryWatermark',

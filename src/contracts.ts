@@ -329,6 +329,73 @@ export const PER_ACTION_APPROVAL_CLASSES = [
 ] as const satisfies readonly ActionClass[];
 
 /**
+ * 自由命令通道的模板名。**单一来源**。
+ *
+ * 为什么必须抽成常量：阶段类别提升规则（见下）按这个 id 匹配。两处各写一遍字符串，
+ * 改一处就会让「④⑤ 逐条放行」静默失效——命令退回基类 `active_probing`（预设内 ⇒ 免批），
+ * 而界面上、账本里都看不出少了什么闸门。
+ */
+export const FREE_COMMAND_TEMPLATE_ID = 'direct_command';
+
+/**
+ * 会话阶段对**自由命令通道**的类别提升（2026-10-09 操作者裁定）。
+ *
+ * ── 为什么要有它 ──
+ * 2026-10-07 的「任意命令免批」裁定把 `direct_command` 的类别从 `exploit_validation` 改成
+ * `active_probing`，于是**所有**阶段的自由命令都不再需要人类放行。代价在利用验证与后渗透
+ * 两个阶段最大：那里没有结构化模板可替代，命令是唯一的目标出口，而放行卡是**唯一的内容闸门**——
+ * 免批之后命令原文再没有人看过，只读侦察与「打一条 exploit」在闸门上是同一件事。
+ *
+ * 侦察/核验两个阶段的免批收益是真的（吞吐），因此这里**只提升 ④⑤**：
+ * 结构化动作全程不变；①②③ 的自由命令维持基类（免批）。
+ *
+ * ── 提升了什么 ──
+ * `exploitation` → `exploit_validation`：人工模式下逐条放行；高权限（auto）模式仍按
+ *   `shouldSelfApprove` 的既有豁免由服务端放行（那是人类在建作业时选的"高权限"）。
+ * `post-exploitation` → `lateral_movement`：**任何模式都逐条放行**（不在任何预设的启用集合里，
+ *   且 `shouldSelfApprove` 不为它开豁免）。
+ */
+export const PHASE_COMMAND_ACTION_CLASS: Readonly<Partial<Record<Phase, ActionClass>>> = Object.freeze({
+  exploitation: 'exploit_validation',
+  'post-exploitation': 'lateral_movement',
+});
+
+/**
+ * 一次动作的**有效类别**：模板声明的类别，加上会话阶段对自由命令通道的提升。
+ *
+ * 只提升、不降低：`PHASE_COMMAND_ACTION_CLASS` 里的值都是更严的类别（逐次放行），
+ * 且非自由命令通道的模板（结构化侦察/核验、纯本地处理）一律返回声明值。
+ *
+ * `phase === null`（会话行读不到阶段）按**最严**处理——它与「读不到策略就回落到最严的
+ * `DEFAULT_ACTION_POLICY`」是同一条纪律。会话不存在时调用方会在下一道闸门拒绝，因此
+ * 这一分支只会出现在数据损坏的场景里。
+ */
+export function effectiveActionClass(
+  templateId: string,
+  declared: ActionClass,
+  phase: Phase | null,
+): ActionClass {
+  if (templateId !== FREE_COMMAND_TEMPLATE_ID) return declared;
+  if (phase === null) return 'lateral_movement';
+  return PHASE_COMMAND_ACTION_CLASS[phase] ?? declared;
+}
+
+/**
+ * 自由命令通道在某阶段是否**逐次人工放行**。
+ *
+ * **提示词与执行面共用这一条**：简报要告诉模型「这一阶段命令原文会不会有人看」，
+ * 执行面按同一个类别判定。两处各写一份布尔判断，就会再长出一处
+ * 「提示词说免批、执行面在拉人」的不一致（2026-10-07 与 10-09 两次都栽在这上面）。
+ *
+ * 基类字面量只出现在这里与模板注册表两处，`test/action-templates.test.ts` 断言两者一致。
+ */
+export function freeCommandNeedsApproval(phase: Phase | null): boolean {
+  return (PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(
+    effectiveActionClass(FREE_COMMAND_TEMPLATE_ID, 'active_probing', phase),
+  );
+}
+
+/**
  * 唯一触及目标的工具名。
  *
  * 放在契约层而不是各模块各写一份：`tools/worker.ts` 用它注册工具、
@@ -588,7 +655,7 @@ export const SCOPE_ENTRY_PROFILES = ['ip', 'domain', 'cidr', 'custom'] as const;
 export type ScopeEntryProfile = (typeof SCOPE_ENTRY_PROFILES)[number];
 
 /** 服务端展开的行为预设；custom 从 stealth 的安全基线开始应用受限覆盖。 */
-export const BEHAVIOR_PROFILES = ['stealth', 'standard', 'deep', 'custom'] as const;
+export const BEHAVIOR_PROFILES = ['stealth', 'standard', 'fast', 'custom'] as const;
 export type BehaviorProfile = (typeof BEHAVIOR_PROFILES)[number];
 
 /**
@@ -2005,6 +2072,17 @@ export interface HandoffDraft {
    * **权威来源**的那个值，因此由读端点带回（REQ-9）。
    */
   readonly contentHash: string;
+  /**
+   * 前序阶段推理摘要（2026-10-09 新增）。
+   *
+   * 从 `reasoning` 类型分块召回，展示"当时为什么这么做"的推理链片段。
+   * 仅当召回成功时存在；人类可见，下一阶段 Agent 可参考但不强制注入。
+   */
+  readonly reasoningSummary?: readonly {
+    readonly memoryId: string;
+    readonly content: string;
+    readonly timestamp: string;
+  }[];
 }
 export interface HandoffEdit {
   readonly draftId: string;
@@ -2353,6 +2431,16 @@ export interface PentestReportService {
    * §8.9：「签字前置条件是所有候选结论都已给出处置，不允许带着未处置条目出报告」。
    */
   listUndisposed(engagementId: string): Promise<readonly Finding[]>;
+  /**
+   * 资产清单（控制台「资产」面板）。
+   *
+   * 源是 `pentest.assets`（资产**只由范围修订登记**，见 §5.5），携带当前范围版本下的
+   * 裁决与引用它的结论；不复用 `listCandidateAssets`，因为那个只回待裁决子集、且带
+   * limit 截断，面板要的是全集。
+   *
+   * 放在报告面而不是工作流面：它与本文件其余读投影一样是**只读投影**，且不改任何事实。
+   */
+  listAssets(engagementId: string): Promise<readonly NetworkAsset[]>;
 }
 
 /**
@@ -2865,3 +2953,50 @@ export const DEFAULTS = {
   /** 范围违规连续次数上限，达到则自动暂停会话。 */
   scopeViolationPauseThreshold: 3,
 } as const;
+
+// ───────────────────────────── 资产（控制台面板） ─────────────────────────────
+
+/**
+ * 资产种类（`pentest.assets.kind` 的取值，与迁移 001 的 CHECK 约束逐字一致）。
+ *
+ * 这里只是**投影**：客户端拿它分组展示，判定一律在服务端。
+ */
+export const ASSET_KINDS = [
+  'domain',
+  'ip',
+  'cidr',
+  'url',
+  'service',
+  'cloud-resource',
+  'repository',
+  'host',
+  'other',
+] as const;
+export type AssetKind = (typeof ASSET_KINDS)[number];
+
+/**
+ * 资产清单的一行（控制台「资产」面板）。
+ *
+ * 字段与 `pentest.assets` 一一对应——**只投影库里真有的列**。此前这里放过
+ * 「服务指纹 / 网段 / 被攻陷」这类字段，但它们没有任何落库出处（assets 表没有这些列），
+ * 结果是界面永远显示「无」。要显示它们，先有写入库的出处，再扩这张视图。
+ *
+ * `scopeDecision` 取**当前范围版本**（`max(scope_versions.version)`）下的裁决：
+ * 没有 `asset_scope_versions` 行的资产在该版本里从未被裁决，因此是 `null` 而不是
+ * `'pending'`——前者是「不在该版本范围内」，后者是「登记了、等着裁决」，两件事。
+ */
+export interface NetworkAsset {
+  readonly id: string;
+  /** `assets.canonical_target`（规范化后的稳定键）。 */
+  readonly identifier: string;
+  readonly kind: AssetKind;
+  readonly labels: readonly string[];
+  readonly firstSeenIteration: number;
+  readonly scopeDecision: ScopeDecision | null;
+  readonly discoveredInSessionId: string | null;
+  readonly discoveredFromAssetId: string | null;
+  readonly evidenceRefs: readonly string[];
+  /** 引用该资产的结论（`findings.affected_asset_ids` 命中）。 */
+  readonly findingIds: readonly string[];
+  readonly createdAt: string;
+}

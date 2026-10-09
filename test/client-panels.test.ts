@@ -1,9 +1,9 @@
 /**
  * 面板装配层的测试（`src/client/panels.ts`）。
  *
- * 装配层是「契约数据 → 九个面板节点」的接缝。它的两类危险：
+ * 装配层是「契约数据 → 八个面板节点」的接缝。它的两类危险：
  *
- *   1. **字段名翻译错**（契约叫 `memoryId`、视图叫 `chunkId`）——静默错位会让界面
+ *   1. **字段名翻译错**（例如契约叫 `id`、视图叫 `assetId`）——静默错位会让界面
  *      显示另一个条目的内容，而不是报错。
  *   2. **把「不知道」渲染成「没有」**——`null`（尚未读到）与 `[]`（确实没有）
  *      混同后，人类会把「读取失败」当成「Agent 没在请求放行」。
@@ -19,14 +19,14 @@ import type {
   ApprovalDetail,
   CandidateAsset,
   Finding,
-  MemorySearchHit,
+  NetworkAsset,
   ScopeDetail,
   SkillSummary,
   WorkerSessionSummary,
 } from '../src/contracts.ts';
 import { ConsoleController } from '../src/client/controller.ts';
 import type { ConsoleSnapshot } from '../src/client/controller.ts';
-import { buildPanels, toCandidateAssets, toMemoryHits } from '../src/client/panels.ts';
+import { buildPanels, toCandidateAssets } from '../src/client/panels.ts';
 import type { BuildPanelsInput } from '../src/client/panels.ts';
 import type { HostRpcResult } from '../src/console/rpc.ts';
 
@@ -87,6 +87,23 @@ function finding(over: Partial<Finding> = {}): Finding {
     confidence: null,
     acceptedBy: null,
     acceptedAt: null,
+    ...over,
+  };
+}
+
+function asset(over: Partial<NetworkAsset> = {}): NetworkAsset {
+  return {
+    id: 'asset-1',
+    identifier: 'domain:app.example.com',
+    kind: 'domain',
+    labels: ['external'],
+    firstSeenIteration: 1,
+    scopeDecision: 'included',
+    discoveredInSessionId: null,
+    discoveredFromAssetId: null,
+    evidenceRefs: [],
+    findingIds: [],
+    createdAt: '2026-09-19T10:05:00Z',
     ...over,
   };
 }
@@ -159,69 +176,6 @@ function skill(over: Partial<SkillSummary> = {}): SkillSummary {
 
 // ───────────────────────── 字段名翻译 ─────────────────────────
 
-test('toMemoryHits：契约的 memoryId 映射到视图的 chunkId，引用与时间原样传递', () => {
-  const hits: readonly MemorySearchHit[] = [
-    {
-      memoryId: 'chunk-42',
-      excerpt: '……',
-      score: 0.75,
-      kind: 'fact',
-      trustLevel: 'tool_observation',
-      phase: 'intelligence-gathering',
-      workerSessionId: 's1',
-      occurredAt: '2026-09-19T11:00:00Z',
-      citation: 'memory:chunk-42',
-      reasoningNote: '模型推理，不等同于事实',
-    },
-  ];
-
-  const [view] = toMemoryHits(hits);
-  assert.ok(view !== undefined, '应映射出一条命中');
-
-  assert.equal(view.chunkId, 'chunk-42', 'chunkId 必须来自 memoryId——错位会显示另一条记忆的内容');
-  assert.equal(view.citation, 'memory:chunk-42', '引用原样传递，它同时是 readMemory 的入参');
-  assert.equal(view.reasoningLabel, '模型推理，不等同于事实', '思考链标注走独立字段');
-  assert.equal(view.score, 0.75);
-  assert.equal(view.occurredAt, '2026-09-19T11:00:00Z');
-});
-
-test('toMemoryHits：未识别的分块类型原样传递，不伪装成已知类型', () => {
-  // 服务端可能先于客户端新增类型。把它断言成已知类型会让视图显示一个**错的**标签。
-  const hits = [{
-    memoryId: 'chunk-1',
-    excerpt: 'x',
-    score: 0.1,
-    kind: 'quantum_observation',
-    trustLevel: 'tool_observation',
-    phase: null,
-    workerSessionId: null,
-    occurredAt: '2026-09-19T11:00:00Z',
-    citation: 'memory:chunk-1',
-  }] as readonly MemorySearchHit[];
-
-  const [unknown] = toMemoryHits(hits);
-  assert.ok(unknown !== undefined);
-  assert.equal(unknown.kind, 'quantum_observation');
-});
-
-test('toMemoryHits：没有思考链标注时为 null，而不是缺键', () => {
-  const hits = [{
-    memoryId: 'chunk-1',
-    excerpt: 'x',
-    score: 0.1,
-    kind: 'fact',
-    trustLevel: 'tool_observation',
-    phase: null,
-    workerSessionId: null,
-    occurredAt: '2026-09-19T11:00:00Z',
-    citation: 'memory:chunk-1',
-  }] as readonly MemorySearchHit[];
-
-  const [plain] = toMemoryHits(hits);
-  assert.ok(plain !== undefined);
-  assert.equal(plain.reasoningLabel, null);
-});
-
 test('toCandidateAssets：拆开契约的发现来源两列，并说出「来源未记录」', () => {
   const base: CandidateAsset = {
     id: 'asset-1',
@@ -255,8 +209,8 @@ test('toCandidateAssets：拆开契约的发现来源两列，并说出「来源
 /**
  * `buildPanels` 的入参夹具。
  *
- * 把**结构性缺省**（未读到的面板数据、回调、草稿）集中一处：`BuildPanelsInput`
- * 每加一个必需字段，只有这里要改——否则四个调用点各改一遍，必然漏一个。
+ * 把**结构性缺省**（未读到的面板数据、回调）集中一处：`BuildPanelsInput`
+ * 每加一个必需字段，只有这里要改——否则各调用点各改一遍，必然漏一个。
  *
  * 缺省刻意是「全部未读到」（`null`），因为那是最安全的状态：面板不渲染总好过
  * 用假数据显示出一个错误结论。
@@ -266,30 +220,17 @@ function panelInput(over: Partial<BuildPanelsInput> = {}): BuildPanelsInput {
     controller: inertController(),
     snapshot: loadedSnapshot(),
     now: NOW,
-    findings: null,
     approvals: null,
     scope: null,
     candidateAssets: null,
     skills: null,
-    handoffDraft: null,
-    onHandoffDraft: () => {},
-    scopeAmendment: { completed: false, newVersion: null },
-    dispositions: {},
-    onDispose: () => {},
+    publicMemory: null,
+    findings: null,
+    assets: null,
+    onSavePublicMemory: () => undefined,
     onAddSkill: () => {},
     onUpdateSkill: () => {},
     onRemoveSkill: () => {},
-    reportDraft: null,
-    undisposedCount: null,
-    memoryHits: null,
-    memoryWatermark: null,
-    publicMemory: null,
-    onSavePublicMemory: () => undefined,
-    memorySearched: false,
-    memoryInitialForm: null,
-    memoryDetails: {},
-    onMemorySearch: () => {},
-    onMemoryExpand: () => {},
     ...over,
   };
 }
@@ -297,72 +238,52 @@ function panelInput(over: Partial<BuildPanelsInput> = {}): BuildPanelsInput {
 // ───────────────────────── 三态区分 ─────────────────────────
 
 test('buildPanels：尚未读取（null）时不渲染该面板，交由外壳说明', () => {
-  const panels = buildPanels(panelInput({
-  findings: null,
-  approvals: null,
-  scope: null,
-  candidateAssets: null,
-  skills: null,
-  memoryHits: null,
-  memoryWatermark: null,
-  memorySearched: false,
-  memoryInitialForm: null,
-  memoryDetails: {},
-  onMemorySearch: () => {},
-  onMemoryExpand: () => {},
-}));
+  const panels = buildPanels(panelInput());
 
-  // 键不存在 → 外壳渲染「该面板尚未接入」，而不是一个看起来「没有数据」的空列表
-  assert.equal(panels.report, undefined);
+  // 键不存在 → 外壳渲染「正在读取该面板的数据…」，而不是一个看起来「没有数据」的空列表
   assert.equal(panels.approvals, undefined);
   assert.equal(panels.scope, undefined);
   assert.equal(panels.skills, undefined);
-  // 记忆面板例外：它自带表单，没数据时仍要能让人**发起**检索
-  assert.notEqual(panels.memory, undefined);
+  assert.equal(panels.vulnerabilities, undefined);
+  assert.equal(panels.assets, undefined);
+  // 公共记忆例外：它是「可编辑的当前状态」，没读到也要能让人写（面板自己区分空与未读）
+  assert.notEqual(panels.publicmemory, undefined);
 });
 
 test('buildPanels：确切读到空集合时渲染该面板（「确实没有」与「读不到」不同）', () => {
   const panels = buildPanels(panelInput({
-  findings: [],
-  approvals: [],
-  scope: scopeDetail(),
-  candidateAssets: [],
-  skills: [],
-  memoryHits: [],
-  memoryWatermark: null,
-  memorySearched: true,
-  memoryInitialForm: null,
-  memoryDetails: {},
-  onMemorySearch: () => {},
-  onMemoryExpand: () => {},
-}));
+    approvals: [],
+    scope: scopeDetail(),
+    candidateAssets: [],
+    skills: [],
+    findings: [],
+    assets: [],
+  }));
 
-  assert.notEqual(panels.report, undefined);
   assert.notEqual(panels.approvals, undefined);
   assert.notEqual(panels.scope, undefined);
   assert.notEqual(panels.skills, undefined);
+  assert.notEqual(panels.vulnerabilities, undefined);
+  assert.notEqual(panels.assets, undefined);
 });
 
 // ───────────────────────── 端到端渲染 ─────────────────────────
 
-test('buildPanels：数据确实抵达面板（结论、放行命令、skill 名与范围版本都渲染出来）', () => {
+test('buildPanels：数据确实抵达面板（结论、放行命令、skill 名、范围版本与资产都渲染出来）', () => {
   const panels = buildPanels(panelInput({
-  findings: [finding({ title: 'HSTS 缺失' })],
-  approvals: [approvalDetail()],
-  scope: scopeDetail(),
-  candidateAssets: [],
-  skills: [skill()],
-  memoryHits: null,
-  memoryWatermark: null,
-  memorySearched: false,
-  memoryInitialForm: null,
-  memoryDetails: {},
-  onMemorySearch: () => {},
-  onMemoryExpand: () => {},
-}));
+    findings: [finding({ title: 'HSTS 缺失' })],
+    assets: [asset({ identifier: 'domain:app.example.com' })],
+    approvals: [approvalDetail()],
+    scope: scopeDetail(),
+    candidateAssets: [],
+    skills: [skill()],
+  }));
 
-  const report = renderToStaticMarkup(panels.report as never);
-  assert.ok(report.includes('HSTS 缺失'), '结论标题必须抵达报告面板');
+  const vulnerabilities = renderToStaticMarkup(panels.vulnerabilities as never);
+  assert.ok(vulnerabilities.includes('HSTS 缺失'), '结论标题必须抵达漏洞列表');
+
+  const assets = renderToStaticMarkup(panels.assets as never);
+  assert.ok(assets.includes('domain:app.example.com'), '资产标识必须抵达资产清单');
 
   const approvals = renderToStaticMarkup(panels.approvals as never);
   assert.ok(
@@ -376,6 +297,7 @@ test('buildPanels：数据确实抵达面板（结论、放行命令、skill 名
   const scope = renderToStaticMarkup(panels.scope as never);
   assert.ok(scope.includes('3'), '当前范围版本号必须抵达范围面板');
 });
+
 
 test('buildPanels：范围规划的入参是「当前范围 + 本轮裁决」，且不做规范化', () => {
   // 这是装配层承担的唯一一条规则：新范围 = 当前范围 + 本轮纳入/排除的候选。
@@ -392,21 +314,7 @@ test('buildPanels：范围规划的入参是「当前范围 + 本轮裁决」，
     },
   };
 
-  const panels = buildPanels(panelInput({
-  controller,
-  findings: null,
-  approvals: null,
-  scope: withTargets,
-  candidateAssets: null,
-  skills: null,
-  memoryHits: null,
-  memoryWatermark: null,
-  memorySearched: false,
-  memoryInitialForm: null,
-  memoryDetails: {},
-  onMemorySearch: () => {},
-  onMemoryExpand: () => {},
-}));
+  const panels = buildPanels(panelInput({ controller, scope: withTargets }));
 
   // 从渲染出的节点里取出回调：面板把 `planAmendment` 存在 props 上。
   const element = panels.scope as { props: { planAmendment: (d: readonly unknown[]) => unknown } };
@@ -469,6 +377,7 @@ test('装配层读方法：没有选中 engagement 时不发请求', async () =>
   assert.equal(await controller.refreshFindings(), null);
   assert.equal(await controller.refreshApprovals(), null);
   assert.equal(await controller.refreshCandidateAssets(), null);
+  assert.equal(await controller.refreshAssets(), null);
   assert.equal(await controller.refreshScope(), null);
   assert.equal(await controller.readMemoryWatermark(), null);
   assert.equal(calls, 0, '未选中 engagement 时不该发 RPC');
@@ -492,11 +401,7 @@ test('skill 库拿到三个写回调：增/改/删不再是「未接线」', () 
   // ——等于验证「装配层确实把回调透传下去了」，而不是验证它「调用了什么」。
   const added: string[] = [];
   const panels = buildPanels(panelInput({
-    skills: [{
-      id: 's1', name: 'n', description: 'd', body: 'b', contentHash: 'h',
-      addedBy: 'op', revision: 1, disabled: false,
-      createdAt: '2026-09-19T00:00:00Z', updatedAt: '2026-09-19T00:00:00Z',
-    }],
+    skills: [skill()],
     onAddSkill: () => { added.push('add'); },
     onUpdateSkill: () => { added.push('update'); },
     onRemoveSkill: () => { added.push('remove'); },
@@ -511,16 +416,34 @@ test('skill 库拿到三个写回调：增/改/删不再是「未接线」', () 
   assert.ok(!html.includes('未接线'), '接线后不该再出现「未接线」的提示');
 });
 
-test('报告审阅拿到处置回调与处置表：结论处置不再是「从未处置」', () => {
-  // §8.9 的三选一是报告的核心人类动作。`onDispose` 没接时三个按钮全禁用，
-  // 而四节分节因为拿不到处置记录会把所有结论都算成「未处置」。
+// ─────────────── 新面板的数据形状（漏洞列表 / 资产清单） ───────────────
+
+test('漏洞列表：只从结论投影，严重度与状态用共享标签渲染', () => {
   const panels = buildPanels(panelInput({
-    findings: [finding({ id: 'f1' })],
-    dispositions: { f1: 'accept' },
-    onDispose: () => {},
+    findings: [
+      finding({ id: 'f1', title: '弱口令', severity: 'critical', status: 'human_accepted' }),
+      finding({ id: 'f2', title: '待定级项', severity: null, status: 'candidate' }),
+    ],
   }));
-  const element = panels.report as { props: { children?: unknown } } | undefined;
-  assert.ok(element !== undefined, '报告面板应已渲染');
-  const html = renderToStaticMarkup(element as never);
-  assert.ok(html.includes('已验证结论'), '已接受（accept）的结论应落入「已验证结论」一节');
+
+  const html = renderToStaticMarkup(panels.vulnerabilities as never);
+  assert.ok(html.includes('弱口令') && html.includes('待定级项'), '两条结论都要渲染出来');
+  assert.ok(html.includes('严重'), '严重度用中文标签（唯一出处是 format.ts）');
+  assert.ok(html.includes('待定级'), '未定级的结论不能显示成一个等级——它需要人动手');
+  assert.ok(html.includes('已接受'), '状态用中文标签');
+});
+
+test('资产清单：只渲染库里真有的列，未入本版范围与待裁决要分开显示', () => {
+  const panels = buildPanels(panelInput({
+    assets: [
+      asset({ id: 'a1', identifier: 'domain:in.example.com', scopeDecision: 'included' }),
+      asset({ id: 'a2', identifier: '10.20.3.7', kind: 'ip', scopeDecision: 'pending' }),
+      asset({ id: 'a3', identifier: 'domain:out.example.com', scopeDecision: null }),
+    ],
+  }));
+
+  const html = renderToStaticMarkup(panels.assets as never);
+  assert.ok(html.includes('domain:in.example.com'), '资产标识必须渲染出来');
+  assert.ok(html.includes('已纳入') && html.includes('待裁决'), '两种裁决各自成词');
+  assert.ok(html.includes('未入本版范围'), '没有裁决行 ≠ 待裁决：前者是「不在这一版范围内」');
 });

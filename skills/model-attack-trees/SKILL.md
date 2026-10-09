@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [Schneier 攻击树方法论, PTES 威胁建模, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@81483611f0a0：6 块原文照跑，4 块通过；步骤 1 的输入契约本轮修掉——原配方只造 root，而步骤 3/4/5 读 .leaves[]，在它自己产出的文件上三块全部 Cannot iterate over null (exit=5)，补 leaves:[] 后三块 exit=0（AND/OR 枚举与缺 op 检测本就有效）"
+  smoked: "沙箱实测@5ee07609c870：6 块原文照跑；步骤 1 抓到并修掉配方缺陷——原命令直接 `> /tmp/tm/tree.json`，而一次性容器里 /tmp/tm 不存在，实测 `/bin/bash: /tmp/tm/tree.json: No such file or directory`（exit 1），前置 `mkdir -p /tmp/tm &&` 后 exit 0；步骤 2 在步骤 1 的空树上无输出属正常，展开后正确报 `OR/AND` 子节点数并点名缺 op 的内部节点 n2、root 缺 op 时按 `(root)` 豁免；步骤 3 五叶（含枚举外 scan、未放行的 exploit_validation）逐叶列出动作类别与放行标记；步骤 4 裁剪前=2（persistence + in_scope:false），移出后=0；步骤 5 每叶 verify/stop_condition/证据引用成列，缺 stop_condition 显示 ?、无引用叶末列留空"
 ---
 
 # 攻击树与验证计划（model-attack-trees）
@@ -21,7 +21,7 @@ metadata:
 - 叶子必须是**本作业可执行的动作**：在范围内、动作类别在本次策略内可申请。
 - 动作类别取自固定枚举：`passive_collection`、`active_probing`、`credentialed_access`、`exploit_validation`、`lateral_movement`、`persistence`、`destructive`、`exfiltration`。
 - 默认需逐次人工放行的类别是 `exploit_validation`、`lateral_movement`；`persistence`/`destructive`/`exfiltration` 默认关闭，只能记为「本作业不可执行」。
-- 需要现场核验才能确认某叶子可达时，**至多一次只读**核验（`recon_http_probe`：`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`；或裸 `curl`（类别 `active_probing`，**免批**），只发 GET/HEAD），并写清为什么非现场不可；其余核验属于漏洞分析 / 利用阶段。
+- 需要现场核验才能确认某叶子可达时，**至多一次只读**核验（`recon_http_probe`：`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`；或裸 `curl`（类别 `active_probing`，**本阶段（②威胁建模）免批**）），只发 GET/HEAD），并写清为什么非现场不可；其余核验属于漏洞分析 / 利用阶段。
 
 ## 步骤
 
@@ -31,7 +31,7 @@ metadata:
 
 ### 1. 定根（目标状态）
 ```bash
-jq -n --arg g "获得对<资产>的未授权读取" --arg ref "memory:<uuid>" \
+mkdir -p /tmp/tm && jq -n --arg g "获得对<资产>的未授权读取" --arg ref "memory:<uuid>" \
   '{root:{goal:$g, evidence_refs:[$ref]}, leaves:[]}' > /tmp/tm/tree.json
 ```
 **期望**：`tree.json` 的 `root.goal` 是一个可判定的目标状态，且带至少一个 `evidence_ref`。

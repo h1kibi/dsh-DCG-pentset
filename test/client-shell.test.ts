@@ -95,22 +95,25 @@ function render(over: Partial<ConsoleShellProps> = {}): string {
 
 // ─────────────── 结构 ───────────────
 
-test('外壳渲染总览条与两个核心屏', () => {
+test('外壳渲染总览条与总览面板的阶段轨道', () => {
   const html = render();
   assert.match(html, /运行总览/, '① 运行总览条');
-  assert.match(html, /阶段轨道/, '② 阶段轨道');
-  assert.match(html, /会话时间轴/, '③ 会话时间轴');
+  assert.match(html, /阶段轨道/, '总览面板里的阶段轨道');
+  // ③ 会话时间轴现挂在 `logs` 面板：默认面板是 `console`，因此显式切过去才渲染。
+  assert.match(render({ activePanel: 'logs' }), /会话时间轴/, '③ 会话时间轴在 logs 面板');
 });
 
-test('每个面板标签都出现在切换条里（受控切换的基础）', () => {
+test('每个面板都出现在切换条里（受控切换的基础）', () => {
+  // 标签文案在 `PANEL_LABELS`（未导出）；这里不抄一份中文标签表——改名时会静默失真。
+  // 改用导出的单一事实源 `CONSOLE_PANELS`，按面板 id 锚定 tab 元素。
   const html = render();
-  const labels = ['总览与时间轴', '报告审阅', '记忆浏览器', '放行队列', '交接编辑', 'Skill 库', '范围管理', '公共记忆'];
-  for (const label of labels) {
-    assert.match(html, new RegExp(label), `面板 ${label} 应在切换条里`);
+  const tabs = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((match) => match[0]);
+  // 断言的是「tab 数 = 面板数」这个**关系**，而不是某个具体数字：
+  // 写死数字会在每次加面板时要求人回来改，而那种维护动作会训练人「见红灯改数字」。
+  assert.equal(tabs.length, CONSOLE_PANELS.length, '每个 ConsolePanel 都要有一个可见 tab');
+  for (const panel of CONSOLE_PANELS) {
+    assert.ok(html.includes(`id="pentest-tab-${panel}"`), `面板 ${panel} 的 tab 应在切换条里`);
   }
-  // 断言的是「标签数 = 面板数」这个**关系**，而不是某个具体数字：
-  // 写死 7 会在每次加面板时要求人回来改数字，而那种维护动作会训练人「见红灯改数字」。
-  assert.equal(labels.length, CONSOLE_PANELS.length, '每个 ConsolePanel 都要有一个可见标签');
 });
 
 test('面板切换是 WAI-ARIA tablist：选中态、roving tabindex 与 tabpanel（可访问性）', () => {
@@ -213,12 +216,12 @@ test('数据未到的面板说明「正在读取」；读失败时给出稳定�
   // 面板节点由数据驱动（读到才生成），所以「没有节点」有两种原因：
   // 正在读，或读失败。原来一律说「视图组件还没有装配到这个外壳上」——把「正在读」
   // 说成「没做」，那是撒谎（§6.2.3 的 P16：空/未加载/失败必须分别表达）。
-  const html = render({ activePanel: 'memory' });
+  const html = render({ activePanel: 'assets' });
   assert.match(html, /正在读取该面板的数据/);
-  assert.match(html, /记忆浏览器/, '要说明是哪个面板');
+  assert.match(html, /资产清单/, '要说明是哪个面板');
 
   const failed = render({
-    activePanel: 'memory',
+    activePanel: 'assets',
     snapshot: { ...shellProps().snapshot, lastError: { code: 'console/internal', message: 'boom' } },
   });
   assert.match(failed, /该面板的数据没有读到/);
@@ -229,7 +232,7 @@ test('范围未确认时：锁定的面板显式禁用并给出原因，公共�
   // 这一条修的是实测缺陷：原来八个 tab 都能点、高亮也跟着走，但内容永远停在
   // intake 卡片上——点得动、内容不动，人只会以为坏了。
   const snapshot = { ...shellProps().snapshot, state: { ...STATE, scopeVersion: null } };
-  const html = render({ snapshot, activePanel: 'report' });
+  const html = render({ snapshot, activePanel: 'assets' });
   assert.match(html, /范围尚未确认/, '必须说明为什么锁着');
   const buttons = [...html.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((match) => match[0]);
   assert.equal(buttons.length, CONSOLE_PANELS.length);
@@ -241,12 +244,12 @@ test('范围未确认时：锁定的面板显式禁用并给出原因，公共�
 
 test('已装配的面板渲染注入的内容', () => {
   const html = render({
-    activePanel: 'report',
-    panels: { report: createElement('div', { className: 'injected-report' }, '报告内容占位') },
+    activePanel: 'assets',
+    panels: { assets: createElement('div', { className: 'injected-assets' }, '资产内容占位') },
   });
-  assert.match(html, /报告审阅/, '面板标题仍在切换条里');
-  assert.match(html, /injected-report/);
-  assert.match(html, /报告内容占位/);
+  assert.match(html, /资产清单/, '面板标题仍在切换条里');
+  assert.match(html, /injected-assets/);
+  assert.match(html, /资产内容占位/);
 });
 
 test('切到功能面板时不再渲染轨道与时间轴（它们属于总览面板）', () => {
@@ -259,13 +262,14 @@ test('切到功能面板时不再渲染轨道与时间轴（它们属于总览�
 
 test('受控：面板由 props 决定，点击不自行改状态（服务端渲染下无状态）', () => {
   // 两次渲染同一 props 应完全相同——组件不持状态
-  const a = render({ activePanel: 'overview' });
-  const b = render({ activePanel: 'overview' });
+  const a = render({ activePanel: 'console' });
+  const b = render({ activePanel: 'console' });
   assert.equal(a, b, '相同 props 必须渲染出相同结果（受控组件的基本性质）');
 });
 
 test('受控：时间轴筛选由 props 传入并生效', () => {
-  const html = render({ timelineFilter: { text: '绝不匹配' } });
+  // 时间轴在 `logs` 面板：必须切过去，筛选才落到 SessionTimeline 上（默认面板是 `console`）。
+  const html = render({ activePanel: 'logs', timelineFilter: { text: '绝不匹配' } });
   assert.match(html, /没有匹配的会话/, '筛选要真的生效，而不是外壳自己忽略它');
 });
 

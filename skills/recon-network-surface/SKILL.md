@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@5ee07609c870：内容核验（snmp 目录/ping/rpcinfo/showmount 全在、hostgroup 钉死 ×2、网段形状判定 ×1、字典 8 个，经可达镜像源拉取）+ 网络冒烟（`direct` 走 bridge 对 172.17.0.5:5000 实跑 `http_get`）。历史：沙箱实测@81483611f0a0：5 块原文照跑通过（-sS -Pn -p 8080 → 8080/tcp open 且网段 6 台存活；-sT --top-ports 200；-sV --version-light；--script banner,http-title,http-headers）；整段 /24 扫 top-200 达 900s 未完成属耗时（非语法错），收窄到两台主机 rc=0、8080/8443 open。2026-10-06 补第 5/6 步并实测：arp-scan 扫 /24 得 9 台响应（含 MAC）、fping 打印 2 台存活、traceroute 1 跳直达目标、masscan -p8080 --rate 500 命中 172.29.0.2、nbtscan 在纯 Linux 网段无 NetBIOS 名字（负例形态）、tshark 边造流量边抓得 34 包含 `GET / HTTP/1.1`（抓与读写在同一条命令里）"
+  smoked: "沙箱实测@5ee07609c870：6 块原文配方逐条实跑（靶标 fx-web 172.29.0.2:8080）——①`-sS -Pn -p 8080 -oN /tmp/alive.txt` → `Host is up` + `8080/tcp open`（0.17s，rc=0）；占位符换整份声明目标 `172.29.0.2-7 -p 8080,8443,9000` 时 6/6 up、`.2:8080/.3:8443/.4:9000` open（0.18s）；②`-sT -Pn --top-ports 200 -oN` → 8080 open、199 closed（0.05s）；③`-sV --version-light -p 8080` → `SimpleHTTPServer 0.6 (Python 3.10.21)`；④`--script=banner,http-title,http-headers` 有输出但**无** `banner:` 段（http-title=fixture、Server: SimpleHTTP/0.6 Python/3.10.21）；⑤`arp-scan -I eth0 172.29.0.0/16` → 12 台含 MAC（263s，248 主机/秒）、`fping -a -q` 打印 6 台存活但 rc=1（列表含 1 台不可达，非失败）、`nbtscan -r 172.29.0.0/24` → `172.29.0.7 DC1 <server>`、`traceroute -n -m 5 172.30.0.2` 第 1 跳即网关 172.29.0.1 后全 `*`（跨网段须经跳板）、`mtr -n -r -c 5 172.29.0.2` 单跳 0% 丢包；⑥`tshark -i eth0 -a duration:5 -w /tmp/cap.pcap` 抓包 + 同一条命令内读回 → 24 包含 `GET /index.html HTTP/1.1` 与 `HTTP/1.0 200 OK`（cap/read rc=0；仅有 `cap_set_proc()` 告警）。历史：沙箱实测@81483611f0a0：5 块照跑通过（8080 open、网段 6 台存活、top-200、--version-light、NSE 三脚本）；/24 扫 top-200 达 900s 属耗时非语法错。2026-10-06 补第 5/6 步：arp-scan /24 得 9 台、fping 2 台、traceroute 1 跳、masscan 命中 .2、nbtscan 无名字、tshark 34 包"
 ---
 
 # 网络面清点（recon-network-surface）
@@ -99,6 +99,7 @@ mtr -n -r -c 5 <目标>            # 路径 + 丢包统计（"间歇不通"比 t
 **期望**：arp-scan 出主机表（含 MAC）；fping 逐行打印存活地址；traceroute/mtr 出逐跳列表。
 **判据**：**`arp-scan` 只对同网段有效**（跨三层一律没结果，那不是"主机不存在"，是它看不到）；
 nbtscan 出名字才说明是 Windows/Samba；路径里出现网关即说明目标不在本网段。
+实测补充（2026-10-09）：`fping -a -q` 的地址表里有**任何一台不可达**时退出码就是 **1**（6 台存活 + 1 台不可达 → rc=1，输出仍逐行正确）——别把它串进 `&&` 链、也别当失败；`arp-scan` 扫 /16 实测 **263s**（248 主机/秒），段级范围大时先按这个速率排预算。
 > 快扫工具 `masscan` 很快也**很响**：只在人类明确要求并给出速率时用
 > （`masscan <网段> -p<端口清单> --rate <人类给的数>`），且**结果要用 `nmap -sT` 复核**——
 > 它自己的握手判定会漏，别把 masscan 的清单直接当资产表。
@@ -110,6 +111,8 @@ date -u +%FT%TZ && tshark -i eth0 -a duration:5 -w /tmp/cap.pcap && tshark -r /t
 **期望**：抓包文件生成，读回时出现本步时间段内的包（如 `HTTP … GET / HTTP/1.1`）。
 **判据**：抓到的包要能对上**同时段你发过的动作**（时间窗由 `date -u` 标定）；抓不到任何包 ≠ 目标没响应，
 先确认网卡名（`ip a`）与是否真有流量。
+实测补充（2026-10-09）：`--cap-drop ALL` 下 tshark 会打印 `cap_set_proc() fail return: Operation not permitted`，
+**抓包仍然成功**（24 包含 `GET /index.html HTTP/1.1` 与 `HTTP/1.0 200 OK`，copy/read 均 rc=0），别把它当失败。
 > 注意：`/tmp/cap.pcap` 只在那一条命令内存在——**抓与读必须写在同一条命令里**（上面就是合并写法）。
 
 ## 判读与去噪

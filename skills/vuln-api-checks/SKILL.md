@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [OWASP API Security Top 10 2023（API1/API3/API5/API6/API8）, OWASP WSTG-APIT, MITRE ATT&CK T1190, swagger/openapi 规范]
-  smoked: "沙箱实测@81483611f0a0：对实验室 API 靶站（fx-api，见 docker/lab-api）逐块跑，9 块全部通过——①openapi.json=200 且 paths 列出 5 个端点、swagger.json=404、ffuf+api-endpoints.txt 命中 /graphql ②无凭据 GET 集合=200 且正文是业务数据（含 api_key 字段名）③BOLA：同一凭据取 users/1 与 users/2 都 200，own.id=1/role=user 与 other.id=2/role=admin 是不同主体 ④OPTIONS 的 Allow 声明 GET,HEAD,OPTIONS,POST,PUT,DELETE 而实际 GET=404、PUT=501（Allow 不能当实现证据）⑤Content-Type：json=201 / form=415 ⑥mass assignment：accepted_fields=[is_admin,name,role] ⑦introspection 返回 User(id,email,role) 与 Order(id,total,userId) ⑧403 的 detail 回显判定逻辑、/api/v1/debug=200 回显 cwd ⑨枚举（seq 1 50 | ffuf -w -）得 200/1、200/2、200/3，长度列区分对象大小。两处命令坑已写进文：管道喂 ffuf 漏 -w - 会打印帮助退出、缺 /tmp/api 目录会让 -o 失败"
+  smoked: "沙箱实测@5ee07609c870：对 fx-api（172.29.0.4:9000，docker/lab-api）逐块跑原文配方（每块一条 -c，前面带 mkdir -p /tmp/api），9 块全通过——①openapi.json=200 且 paths 列出 5 个端点、swagger.json=404、ffuf+api-endpoints.txt 命中 /graphql ②无凭据 GET /api/v1/users=200 size=271 且正文是业务数组（含 api_key 字段名）③BOLA：同一 Bearer 占位凭据取 users/1 与 users/2 都 200，diff 显示 id=1/role=user 与 id=2/role=admin 是不同主体（该靶站不校验凭据）④OPTIONS 的 Allow 声明 GET,HEAD,OPTIONS,POST,PUT,DELETE 而实际 GET=404、PUT=501（Allow 不能当实现证据）⑤Content-Type：json=201 / form=415 ⑥mass assignment：accepted_fields=[is_admin,name,role]、created.role=admin 原样入库回显 ⑦introspection=200，解出 User(id,email,role) 与 Order(id,total,userId) ⑧403 的 detail 回显判定逻辑（X-Role 大小写敏感）、/api/v1/debug=200 回显 cwd=/srv 与 Python 3.10.21 ⑨seq 1 50 | ffuf -w - 得 200/1(len70)、200/2(len102)、200/3(len70)。两处命令坑已复验并写进文：缺 /tmp/api 时 curl -o 以 23（Failure writing output to destination）退出，原文 no such file 的说法已按实测改正；管道喂 ffuf 漏 -w - 会打印 82 行帮助并以 1 退出、不做任何枚举"
 ---
 
 # API 面核验（vuln-api-checks）
@@ -19,10 +19,10 @@ metadata:
 ## 前提与边界
 - **能用结构化通道的地方先用它**：`pentest_scan` 的 `http_check`（六项只读核验：方法面、安全头、
   robots、标题等）与 `exposure_check`（规范文件/备份档的存在性，只判形态、不回显内容）类别是
-  `active_probing`，**不需要逐条人工放行**。下面手写 curl 的步骤走 `pentest_exec`
-  （`active_probing`，**免批**：命令原文不再经人过目）——顺序是先结构化、覆盖不到再手写
+  `active_probing`，**不需要逐条人工放行**（结构化通道在所有阶段都免批；手写命令的类别见下）。下面手写 curl 的步骤走 `pentest_exec`
+  （`active_probing`，**本阶段（③漏洞分析）免批**：命令原文不再经人过目；④⑤ 阶段该模板提升为逐条人批）——顺序是先结构化、覆盖不到再手写
   （例如第 3 步 BOLA 需要"两个身份各取一次"，结构化通道没有这个形态）。
-- 每条命令经 `pentest_exec`（`direct_command` ⇒ `active_probing`）**免批**（命令原文不再经人过目）；写法上一条命令一个目的。
+- 每条命令经 `pentest_exec`（`direct_command` ⇒ `active_probing`）**免批**（命令原文不再经人过目；**该口径只属 ①②③**，④⑤ 阶段同一模板提升为逐条人批）；写法上一条命令一个目的。
 - **本技能只发只读请求**：`GET`/`HEAD`/`OPTIONS`，以及**一次**带标记的 `POST`（用于验证 mass assignment /
   Content-Type 判定）。任何写库、改状态、删数据的请求不在这里——那属于利用阶段。
 - 凭据：需要「特定用户视角」时用人类给的那组凭据；**同一资源至少用两个不同身份各请求一次**才能判 BOLA，
@@ -36,7 +36,8 @@ metadata:
 
 ## 步骤
 
-> **先建输出目录**（后面每步都往 `/tmp/api/` 落证据，缺目录会让工具以 `no such file` 失败——实测踩过）：
+> **先建输出目录**（后面每步都往 `/tmp/api/` 落证据；缺目录时 `curl -o` 直接以
+> `(23) Failure writing output to destination` 退出（`ffuf -o` 同理写不进去）——实测踩过）：
 > ```bash
 > mkdir -p /tmp/api
 > ```

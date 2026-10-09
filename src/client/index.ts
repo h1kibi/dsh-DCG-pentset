@@ -33,15 +33,13 @@ import { onPanelRequest, requestPanel, selectPentestPanel } from './panel-jump.t
 
 import type {
   ApprovalDetail,
-  HandoffDraft,
-  ReportDraft,
   PreviewScopeInput,
   ScopePreview,
   CandidateAsset,
   EngagementMemory,
   Finding,
-  MemoryWatermark,
   DiagnosticsSnapshot,
+  NetworkAsset,
   ScopeDetail,
   SkillSummary,
 } from '../contracts.ts';
@@ -49,7 +47,7 @@ import type { HostRpcResult } from '../console/rpc.ts';
 import { ConsoleController } from './controller.ts';
 import type { ConsoleSnapshot } from './controller.ts';
 import { useConsoleSnapshot, useInitialLoad } from './hooks.ts';
-import { buildPanels, toMemoryHits } from './panels.ts';
+import { buildPanels } from './panels.ts';
 import { ConsoleShell } from './views/ConsoleShell.tsx';
 import { ErrorBar } from './ui.tsx';
 import type { ConsolePanel } from './views/ConsoleShell.tsx';
@@ -69,9 +67,6 @@ import {
 } from './views/IntakePrompt.tsx';
 import { EngagementList } from './views/EngagementList.tsx';
 import { EngagementWizard } from './views/EngagementWizard.tsx';
-import type { MemoryHitView, MemorySearchParams } from './views/MemoryExplorer.tsx';
-import type { DispositionAction, DispositionInput } from './views/ReportReview.tsx';
-import type { ExportFormat, ExportOutcome } from './views/ReportExport.tsx';
 import type { SkillAddInput, SkillRemoveInput, SkillUpdateInput } from './views/SkillLibrary.tsx';
 import { installConsoleStyles } from './styles.ts';
 import {
@@ -348,7 +343,7 @@ function ConsoleApp(props: {
   readonly ctx: Context;
 }): ReactNode {
   const snapshot = useConsoleSnapshot(props.controller);
-  const [panel, setPanel] = useState<ConsolePanel>('overview');
+  const [panel, setPanel] = useState<ConsolePanel>('console');
   // 状态条（会话上栏）跳进来时**落到指定标签**：它够不到这里的 state，只能经登记点请求。
   // 卸载时注销，免得面板已不在却还留着回调。
   useEffect(() => onPanelRequest((next) => { setPanel(next as ConsolePanel); }), []);
@@ -365,36 +360,16 @@ function ConsoleApp(props: {
   //
   // `null` 一律表示「尚未成功读取」。它与空数组是两件事：空数组是「确实没有」，
   // `null` 是「不知道」——把后者显示成前者会让人类误判。
-  const [findings, setFindings] = useState<readonly Finding[] | null>(null);
   const [approvals, setApprovals] = useState<readonly ApprovalDetail[] | null>(null);
   const [scope, setScope] = useState<ScopeDetail | null>(null);
   const [candidateAssets, setCandidateAssets] = useState<readonly CandidateAsset[] | null>(null);
   const [skills, setSkills] = useState<readonly SkillSummary[] | null>(null);
   /** 公共记忆；`null` = 尚未成功读取（与「读到空串」是两件事）。 */
   const [publicMemory, setPublicMemory] = useState<EngagementMemory | null>(null);
-  const [memoryHits, setMemoryHits] = useState<readonly MemoryHitView[] | null>(null);
-  const [memoryWatermark, setMemoryWatermark] = useState<MemoryWatermark | null>(null);
-  const [memorySearched, setMemorySearched] = useState(false);
-  /**
-   * 最近一次检索的失败（`null` = 没有失败）。
-   *
-   * 与 `memoryHits` 分开：命中为空有两种原因（真的没有匹配 / 这次没查成），
-   * 而界面对它们的表达必须不同（§6.2.1）。它驱动面板的空态文案。
-   */
-  const [memoryError, setMemoryError] = useState<{ readonly code: string; readonly message: string } | null>(null);
-  const [memoryDetails, setMemoryDetails] = useState<Readonly<Record<string, string>>>({});
-  /** 交接草稿：人类请求生成后由 App 持有（它是写操作的结果，且编辑中要跨渲染保留）。 */
-  const [handoffDraft, setHandoffDraft] = useState<HandoffDraft | null>(null);
-  /** 报告草稿与未处置数：签字/导出的输入，也是签字硬前置的判据（§8.9）。 */
-  const [reportDraft, setReportDraft] = useState<ReportDraft | null>(null);
-  const [undisposedCount, setUndisposedCount] = useState<number | null>(null);
-  /**
-   * `findingId` → 最近一次处置动作（§8.9）。
-   *
-   * 由 App 持有而不是等 Host 回传：处置成功后要立刻反映到四节分节与未处置计数，
-   * 否则人要手动刷新才知道自己刚做的处置生效了。
-   */
-  const [dispositions, setDispositions] = useState<Readonly<Record<string, DispositionAction>>>({});
+  /** 结论全集（漏洞列表页）。 */
+  const [findings, setFindings] = useState<readonly Finding[] | null>(null);
+  /** 资产清单（资产页）。 */
+  const [assets, setAssets] = useState<readonly NetworkAsset[] | null>(null);
 
   const engagementId = snapshot.selectedEngagementId;
 
@@ -478,20 +453,11 @@ function ConsoleApp(props: {
   useEffect(() => {
     if (lastEngagement.current === engagementId) return;
     lastEngagement.current = engagementId;
-    setFindings(null);
     setApprovals(null);
     setScope(null);
     setCandidateAssets(null);
     setSkills(null);
     setPublicMemory(null);
-    setMemoryHits(null);
-    setMemoryWatermark(null);
-    setMemorySearched(false);
-    setMemoryDetails({});
-    setHandoffDraft(null);
-    setReportDraft(null);
-    setUndisposedCount(null);
-    setDispositions({});
   }, [engagementId]);
 
   /** 运行诊断（§15.5）：总览页的只读快照；「读取失败」与「尚未读取」分开说（P16）。 */
@@ -535,23 +501,12 @@ function ConsoleApp(props: {
     };
 
     switch (panel) {
-      case 'overview':
-        // 打开总览时拉一次诊断（失败与空由卡片分开呈现）。
+      case 'console':
+        // 打开控制台时拉一次诊断（失败与空由卡片分开呈现）。
         onRefreshDiagnostics();
-        break;
-      case 'report':
-        settle(setFindings, props.controller.refreshFindings());
-        // 签字前置的两个输入：报告草稿与**Host 侧的**未处置数（§8.9）。
-        settle(setReportDraft, props.controller.refreshReportDraft());
-        settle(setUndisposedCount, props.controller.refreshUndisposedCount());
         break;
       case 'approvals':
         settle(setApprovals, props.controller.refreshApprovals());
-        break;
-      case 'handoff':
-        // 交接面板需要范围版本：回环的硬前置是「已做范围修订」（§5.4 步骤 4），
-        // 而判据是「当前范围版本 > 来源会话绑定的版本」——两者都在这两个端点里。
-        settle(setScope, props.controller.refreshScope(false));
         break;
       case 'scope':
         // 范围管理页要看历史版本，因此这里显式带历史（其他页面不要）。
@@ -564,9 +519,11 @@ function ConsoleApp(props: {
       case 'publicmemory':
         settle(setPublicMemory, props.controller.refreshPublicMemory());
         break;
-      case 'memory':
-        // 水位单独拉：检索返回的水位是**那次检索时**的，与当前水位含义不同（§8.4）。
-        settle(setMemoryWatermark, props.controller.readMemoryWatermark());
+      case 'vulnerabilities':
+        settle(setFindings, props.controller.refreshFindings());
+        break;
+      case 'assets':
+        settle(setAssets, props.controller.refreshAssets());
         break;
       default:
         break;
@@ -576,123 +533,6 @@ function ConsoleApp(props: {
       cancelled = true;
     };
   }, [panel, engagementId, props.controller, onRefreshDiagnostics]);
-
-  // ── 意图出口 ──
-
-  const onMemorySearch = useCallback(
-    (params: MemorySearchParams) => {
-      setMemorySearched(true);
-      setMemoryError(null);
-      void props.controller
-        .searchMemory({
-          query: params.query,
-          kinds: params.kinds,
-          trustLevels: params.trust_levels,
-          includeReasoning: params.include_reasoning,
-          limit: params.limit,
-          phase: params.phase,
-          assetIds: params.asset_ids,
-        })
-        .then(
-          (result) => {
-            setMemoryHits(result === null ? null : toMemoryHits(result.hits));
-            if (result === null) {
-              /*
-               * `null` = **这次没拿到结果集**。失败与「空结果」必须分开表达（§6.2.1）：
-               * 原来只把命中置空，于是面板说的是「没有匹配的记忆条目」——而事实是这次
-               * 检索根本没执行（实测：审计闸门拒绝，`audit_unavailable`）。
-               *
-               * 注意控制器**不抛**失败：`#fetch` 把错误写进快照的 `lastError` 后返回 `null`
-               * （见 `controller.ts` 的 `#fetch`）。所以这里读快照，而不是等 catch。
-               */
-              setMemoryError(
-                props.controller.getSnapshot().lastError ?? {
-                  code: 'console/internal',
-                  message: '检索请求失败，且未拿到稳定错误码',
-                },
-              );
-              return;
-            }
-            setMemoryError(null);
-            setMemoryWatermark(result.watermark);
-          },
-          () => {
-            // 传输层异常（信封构造失败、连接断开）走这条：同样记成检索失败。
-            setMemoryHits(null);
-            setMemoryError(
-              props.controller.getSnapshot().lastError ?? {
-                code: 'console/internal',
-                message: '检索请求未能送达，且未拿到稳定错误码',
-              },
-            );
-          },
-        );
-    },
-    [props.controller],
-  );
-
-  /**
-   * 处置结论（§8.9）。成功后**就地更新**本地处置表与未处置计数，
-   * 让分节与签字前置立刻反映这次动作。
-   *
-   * 未处置计数的权威值仍在 Host（`listUndisposed`）；这里只做一次乐观的减一，
-   * 并由后续重读纠正——不重读会让「还差几条才能签字」停在旧数字。
-   */
-  const onDispose = useCallback(
-    (input: DispositionInput) => {
-      void props.controller.dispositionFinding({
-        findingId: input.findingId,
-        action: input.action,
-        reason: input.reason,
-        // 视图用 `null` 表示「沿用原值」，而契约的同义表达是**省略该字段**（`severity?`）。
-        // 传 null 会被 `console/argument-invalid` 拒掉（它的取值域只有五个严重度）。
-        ...(input.severity === null ? {} : { severity: input.severity }),
-      }).then(
-        (result) => {
-          if (!result.ok) return;
-          setDispositions((current) => ({ ...current, [input.findingId]: input.action }));
-          void props.controller.refreshUndisposedCount().then((count) => {
-            if (count !== null) setUndisposedCount(count);
-          });
-        },
-        () => {
-          // 传输层失败不入快照（见 ConsoleController 的说明）：这里不谎报成功，
-          // 处置表保持不变——界面继续显示「未处置」，那与事实一致。
-        },
-      );
-    },
-    [props.controller],
-  );
-
-  /**
-   * 导出报告（§8.9）。
-   *
-   * `ReportExport` 不直接发 RPC（它保持纯 props、可服务端渲染），导出经这条回调走
-   * 控制器的方法表入口。端点 `exportReport` 一直是挂着的，此前缺的正是这个调用方接线
-   * ——没有它，视图如实报出 `wiring-missing`，两个导出按钮恒禁用。
-   *
-   * **它不提供签字哈希**：签字绑定的是报告**版本**的哈希（`ReportDraft.contentHash`，
-   * 由 `getReportDraft` 从 `pentest.reports.content_hash` 带来）。导出产物另有一个哈希，
-   * 用途是核对「你导出的这一份是不是签字的那一版」——两者混用会让
-   * `human_decisions.subject_id` 指不到被审阅的版本（同一版本导出 markdown 与 json
-   * 得到的哈希不同）。
-   */
-  const onExport = useCallback(
-    async (format: ExportFormat): Promise<ExportOutcome> => {
-      const result = await props.controller.exportReport(format);
-      if (result === null) {
-        // 失败原因由控制器记进快照（稳定错误码），这里原样冒泡给视图显示。
-        const failure = props.controller.getSnapshot().lastError;
-        return {
-          ok: false,
-          code: failure?.code ?? 'client/export-failed',
-          message: failure?.message ?? '导出未返回结果',
-        };
-      }
-      return { ok: true, result };
-    },
-    [props.controller],
-  );
 
   const onAddSkill = useCallback(
     (input: SkillAddInput) => {
@@ -726,42 +566,6 @@ function ConsoleApp(props: {
     [props.controller],
   );
 
-  const onMemoryExpand = useCallback(
-    (ref: { readonly memoryId: string; readonly citation: string }) => {
-      // 传 `citation`（`memory:<分块标识>`）而**不是** `memoryId`。
-      //
-      // `readMemory` 只接受带前缀的引用（`parseRef` 要求 `memory:` / `event:`），
-      // 而 `memoryId` 是裸 uuid ——把裸 uuid 传过去会被判 `classification_rejected`，
-      // 于是「展开原文」在界面上**永远停在未展开**（失败被下面的空回调吞掉，
-      // 不显示任何原因）。`citation` 本来就是为这条闭环而存在的字段。
-      void props.controller.readMemory([ref.citation], '人类在控制台查看命中原文').then(
-        (rows) => {
-          const detail = rows?.find((row) => row.memoryId === ref.memoryId);
-          if (detail === undefined) return;
-          setMemoryDetails((current) => ({ ...current, [ref.memoryId]: detail.content }));
-        },
-        () => {
-          // 读取原文失败：不写入 details，界面保持「未展开」——不伪造内容。
-        },
-      );
-    },
-    [props.controller],
-  );
-
-  /**
-   * 回环前置状态（§5.4 步骤 4）：**当前范围版本 > 来源会话绑定的范围版本** 即为「已修订」。
-   *
-   * 与服务端 `confirmTransition` 用同一条件（那里是权威，这里是提前显示）。
-   * 判不出来时（未读范围、没有活动会话）保守给 `completed: false`——
-   * 回环因此会被界面拦下并说明原因；那比放行一次未修订的回环安全。
-   */
-  const scopeAmendmentState = useMemo(() => {
-    const active = snapshot.sessions.find((s) => s.id === snapshot.state?.activeWorkerSessionId);
-    const current = scope?.current?.version ?? null;
-    const bound = active?.scopeVersion ?? null;
-    const completed = current !== null && bound !== null && current > bound;
-    return { completed, newVersion: completed ? current : null };
-  }, [snapshot.sessions, snapshot.state?.activeWorkerSessionId, scope]);
 
   // 运行控制：主线入口（启动 Agent / 暂停 / 恢复 / 插话 / 终止）。
   // 它不进 `panels`——那是「可切换的面板」的表，而运行控制属于总览面板内部。
@@ -803,63 +607,32 @@ function ConsoleApp(props: {
         controller: props.controller,
         snapshot,
         now: new Date(),
-        findings,
         approvals,
         scope,
         candidateAssets,
         skills,
         publicMemory,
+        findings,
+        assets,
         onSavePublicMemory,
-        memoryHits,
-        memoryWatermark,
-        memorySearched,
-        memoryError,
-        memoryInitialForm: null,
-        memoryDetails,
-        handoffDraft,
-        onHandoffDraft: setHandoffDraft,
-        scopeAmendment: scopeAmendmentState,
-        dispositions,
-        onDispose,
         onAddSkill,
         onUpdateSkill,
         onRemoveSkill,
-        reportDraft,
-        undisposedCount,
-        reportContentHash: reportDraft?.contentHash ?? null,
-        onExport,
-        onMemorySearch,
-        onMemoryExpand,
       }),
     [
       props.controller,
       snapshot,
-      findings,
       approvals,
       scope,
       candidateAssets,
       skills,
       publicMemory,
+      findings,
+      assets,
       onSavePublicMemory,
-      memoryHits,
-      memoryWatermark,
-      memorySearched,
-      // 漏了这个依赖的后果实测过：检索失败后 `error` 永远传不进去，
-      // 面板一直显示上一次的「没有匹配」——入参写了、依赖没写是这类 bug 的固定形状。
-      memoryError,
-      memoryDetails,
-      handoffDraft,
-      scopeAmendmentState,
-      dispositions,
-      onDispose,
       onAddSkill,
       onUpdateSkill,
       onRemoveSkill,
-      reportDraft,
-      undisposedCount,
-      onExport,
-      onMemorySearch,
-      onMemoryExpand,
     ],
   );
 

@@ -39,7 +39,7 @@ import type {
 // 终态会话（closed / superseded / failed）不可执行任何动作。**用契约里的那一份**：
 // `workflow/core.ts` 的数据库对账读的是同一个集合，这里若再 filter 一份就会漂移，
 // 而漂移的后果是「某种终态会话仍能提交动作」这类静默越权。
-import { TERMINAL_SESSION_STATUSES, EXECUTION_MAIN_STATUSES, PURPOSE_MAX_CHARS } from '../contracts.ts';
+import { TERMINAL_SESSION_STATUSES, EXECUTION_MAIN_STATUSES, PURPOSE_MAX_CHARS, effectiveActionClass } from '../contracts.ts';
 import { derivePlanHash } from './idempotency.ts';
 import { executionGateForAudit } from '../workflow/reconcile.ts';
 import { normalizeCidr, rangeAddressesOf } from '../policy/scope.ts';
@@ -239,18 +239,26 @@ export class AdmissionState {
   readonly now: Date;
   readonly ports: AdmissionPorts;
   /**
-   * 会话绑定的**惰性**读取源（调用方负责记忆化：同一次受理只读一次）。
+   * 会话绑定的**惰性**读取源。**一个状态实例只读一次**（本类内记忆化）。
    *
    * 为什么是惰性而不是提前读：审计闸门（第 0 道）必须在**任何数据库读之前**给出结论——
    * §10.2 的顺序如此，且 §15.1 要的是「根本不受理」。提前读会让「审计不可用」这条路径
    * 先发一次 `worker_sessions` 查询；那次读若抛错（连接池耗尽、语句超时），调用方看到的是
-   * 未包装异常，而**不是**结构化的 `audit_unavailable`（2026-10-05 独立评审的实测结论：
-   * 探针 A 异常逃逸、探针 B 结构化拒绝）。
+   * 未包装异常，而**不是**结构化的 `audit_unavailable`（2026-10-05 独立评审的实测结论）。
    *
-   * 「只读一次」由调用方的记忆化保证：闸门失败的记录要以 engagementId 归属
-   * （账本是 engagement 级的），而**分类失败发生在会话准入之前**，两处必须共用同一次读。
+   * 为什么记忆化在本类而不是调用方（2026-10-09 改）：**两道闸门要读同一个事实**——
+   * 分类闸门要会话阶段（④⑤ 的自由命令按阶段提升类别），`session_bound` 闸门要绑定存在性。
+   * 若只靠调用方记忆化，闸门自己就会发出两次读（测试当场抓到了这一点）；而调用方**同时**
+   * 还要用同一次结果给失败记账归属 `engagementId`，两处各读一次就会出现
+   * 「分类失败时的归属上下文」与「闸门判定所用的上下文」不一致。
    */
-  readonly bindingSource: () => Promise<SessionBinding | undefined>;
+  bindingSource(): Promise<SessionBinding | undefined> {
+    this.#bindingRead ??= this.#source();
+    return this.#bindingRead;
+  }
+
+  readonly #source: () => Promise<SessionBinding | undefined>;
+  #bindingRead?: Promise<SessionBinding | undefined>;
   #binding?: SessionBinding;
   #bindingResolved = false;
 
@@ -269,7 +277,7 @@ export class AdmissionState {
   }) {
     this.intent = input.intent;
     this.now = input.now;
-    this.bindingSource = input.bindingSource;
+    this.#source = input.bindingSource;
     this.ports = input.ports;
   }
 
@@ -434,6 +442,26 @@ export const purposeGate: AdmissionGate = {
   },
 };
 
+/**
+ * 一次动作的**有效类别**：模板声明的类别，加上会话阶段对自由命令通道的提升
+ * （2026-10-09：④ `exploit_validation`、⑤ `lateral_movement`，见 `effectiveActionClass`）。
+ *
+ * ── 为什么阶段在这里读，而不是等 `session_bound` 闸门 ──
+ * 阶段来自会话绑定（`worker_sessions.phase`），而绑定由 `session_bound` 闸门解析。
+ * 这里只**读**（状态自身记忆化：全流程只查一次库），不 `resolveBinding`——
+ * 绑定的存在性判定仍属于 `session_bound`，顺序承载的错误码优先级因此不变
+ * （模板未注册要报 `classification_rejected`，而不是「你缺租约」）。
+ * 会话不存在或阶段读不懂时按最严处理（`effectiveActionClass` 的 `null` 分支），
+ * 下一道闸门随即拒绝。
+ */
+async function effectiveClassOf(
+  state: AdmissionState,
+  spec: ActionTemplateSpec,
+): Promise<ActionClass> {
+  const binding = await state.bindingSource();
+  return effectiveActionClass(spec.template.id, spec.template.actionClass, binding?.phase ?? null);
+}
+
 /** 4. 动作类别判定与复算：策略给出的类别必须与注册模板一致，漂移即拒绝。 */
 export const classificationGate: AdmissionGate = {
   name: 'action_class_recomputed',
@@ -466,7 +494,7 @@ export const classificationGate: AdmissionGate = {
         { eventType: 'classification.rejected', rule: 'classification_mismatch', detail, normalized: null },
       );
     }
-    state.resolveActionClass(spec.template.actionClass);
+    state.resolveActionClass(await effectiveClassOf(state, spec));
     return pass();
   },
 };

@@ -32,6 +32,7 @@ import type {
   ApprovalRecord,
   ExecutionPlan,
   ExecutionService,
+  Phase,
   PolicyService,
   RunMarker,
   MainStatus,
@@ -116,6 +117,17 @@ export interface SessionBinding {
   readonly scopeVersion: number;
   readonly policyEpoch: number;
   readonly lease: SessionLease | null;
+  /**
+   * 会话所属阶段（`worker_sessions.phase`）。
+   *
+   * 为什么执行面需要它：自由命令通道的**有效类别**按阶段提升（④ `exploit_validation`、
+   * ⑤ `lateral_movement`，见 `effectiveActionClass`），而放行卡与逐次放行判定都以类别为输入。
+   * 它是**执行面的事实**，只能从会话行读——不从提示词、不从工具参数、不从 Agent 自述推断；
+   * 否则「换个说法就免批」。
+   *
+   * `null` = 列值读不懂（001 有 CHECK，正常不会发生）：调用方按最严处理。
+   */
+  readonly phase: Phase | null;
 }
 
 export interface SessionDirectory {
@@ -661,6 +673,8 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     // 记忆化：闸门失败的记录要以 engagementId 归属（账本是 engagement 级的），
     // 而**分类失败发生在会话准入之前**——`recordGateFailure` 与 `session_bound` 闸门
     // 必须共用同一次读（基线就是「只读一次、后面复用」）。
+    // 状态层另有一层同样的记忆化：分类闸门与 `session_bound` 闸门共用同一次读
+    // （2026-10-09 起分类闸门也要读绑定——它要会话阶段）。两层都幂等，不会多查库。
     let bindingOnce: Promise<SessionBinding | undefined> | null = null;
     const bindingSource = (): Promise<SessionBinding | undefined> => {
       bindingOnce ??= deps.sessions.binding(input.workerSessionId);

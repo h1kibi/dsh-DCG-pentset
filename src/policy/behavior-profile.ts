@@ -135,7 +135,7 @@ export const PROFILE_DEFAULTS: Readonly<Record<BehaviorProfile, {
     pacing: { rate: 5, concurrency: 2, jitter: 0.25, burst: 2, retry: 1 },
     enabled: ['local_processing', 'passive_collection', 'active_probing', 'credentialed_access'],
   },
-  deep: {
+  fast: {
     detectionObjective: 'maximize_bounded_coverage',
     pacing: { rate: 10, concurrency: 4, jitter: 0.1, burst: 2, retry: 2 },
     enabled: ['local_processing', 'passive_collection', 'active_probing', 'credentialed_access', 'exploit_validation'],
@@ -512,7 +512,7 @@ export function policySnapshotIsIntact(
 /** Expand one profile without reading process, network, clock, or database state. */
 export function expandBehaviorProfile(input: BehaviorProfileInput): ExpandedBehaviorProfile {
   const profile = input.profile ?? input.behaviorProfile ?? input.behavior_profile ?? 'stealth';
-  if (profile !== 'stealth' && profile !== 'standard' && profile !== 'deep' && profile !== 'custom') {
+  if (profile !== 'stealth' && profile !== 'standard' && profile !== 'fast' && profile !== 'custom') {
     throw new TypeError(`Unknown behavior profile: ${String(profile)}`);
   }
   const targets = input.normalizedTargets ?? input.normalized_targets ?? input.targets ?? [];

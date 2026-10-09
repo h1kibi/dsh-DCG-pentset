@@ -15,19 +15,19 @@ import type { ApprovalMode, BehaviorProfile } from '../contracts.ts';
 /** 场景名（与注入提示词里的场景名叫法一致）。 */
 export const BEHAVIOR_PROFILE_LABELS: Readonly<Record<BehaviorProfile, string>> = Object.freeze({
   stealth: '红队 · 隐蔽测试',
-  standard: '已通知的授权渗透测试',
-  deep: '高许可 · 穷尽利用尝试',
+  standard: '常规授权测试',
+  fast: '快速测试 · 时间受限',
   custom: '自定义 · 我写指引',
 });
 
 /** 一句话说清「这一档允许什么、什么时候选它」。 */
 export const BEHAVIOR_PROFILE_HINTS: Readonly<Record<BehaviorProfile, string>> = Object.freeze({
   stealth:
-    '被看见即失败：被动优先、低噪声确认、动作留间隔；不做全端口/爆破，需要噪声动作先请人类放行。',
+    '避免被检测是第一优先级：被动优先、单点探测、长间隔；仅 top-100 端口与高价值路径，任何提升噪声的动作都需人批。适合红队场景。',
   standard:
-    '目标与时间窗已知、噪声可接受：常规识别、路径枚举与最小化验证；每个动作要可解释、证据可追溯，利用验证仍逐条人批。',
-  deep:
-    '授权内把可能性打满：全端口、指纹细化、爆破与多路径利用尝试；exploit 类逐条人批，破坏性/持久化/外传仍需逐类别确认。',
+    '平衡覆盖与噪声：常规识别、中型字典枚举（2k-5k）、并行扫描；接受合理痕迹以提升效率，每步可解释可追溯。适合已通知的授权测试。',
+  fast:
+    '追求速度：全端口、大字典（10k+）、工具拉满并发、批量并行测试；接受高噪声与被检测的代价。适合时间受限的快速评估。',
   custom:
     '由你写这一段行为指引，字数以输入框上限为准，它会逐字注入该作业下每一次会话，并随策略快照冻结进哈希。',
 });

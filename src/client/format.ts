@@ -18,6 +18,7 @@ import type {
   Phase,
   RunMarker,
   SessionStatus,
+  Severity,
   TrustLevel,
 } from '../contracts.ts';
 import { Fragment, createElement, type ReactNode } from 'react';
@@ -193,6 +194,40 @@ const TRUST_LABELS: Readonly<Record<TrustLevel, string>> = {
 
 export function trustLabel(trust: TrustLevel): string {
   return TRUST_LABELS[trust];
+}
+
+/**
+ * 严重度的显示名与语义色（`findings.severity`）。
+ *
+ * 放在这里而不是某个视图里：结论列表（漏洞列表）与报告审阅都要同一套措辞，
+ * 各写一份就会出现「同一份结论在两页显示不同等级」——那是最难被发现的一类不一致
+ * （两处各自都自洽）。`null` = 尚未人工定级，用「待定级 + attention」表示它需要人动手。
+ */
+const SEVERITY_LABELS: Readonly<Record<Severity, string>> = {
+  critical: '严重',
+  high: '高',
+  medium: '中',
+  low: '低',
+  info: '信息',
+};
+
+export function severityLabel(severity: Severity | null): string {
+  return severity === null ? '待定级' : SEVERITY_LABELS[severity];
+}
+
+export function severityTone(severity: Severity | null): Tone {
+  switch (severity) {
+    case 'critical':
+    case 'high':
+      return 'danger';
+    case 'medium':
+      return 'attention';
+    case 'low':
+    case 'info':
+      return 'neutral';
+    case null:
+      return 'attention';
+  }
 }
 
 /**
