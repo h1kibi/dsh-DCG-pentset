@@ -335,7 +335,7 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         description: '核验项',
         options: [
           { value: 'tech_stack', note: '技术栈版本（已知漏洞匹配）' },
-          { value: 'security_headers', note: '安全响应头缺失（CSP/HSTS/X-Frame-Options 等）' },
+          { value: 'security_headers', note: '安全响应头缺失（CSP/HSTS/X-Frame-Options/Strict-Transport-Security 等6个）' },
           { value: 'cookies', note: 'Cookie 属性（Secure/HttpOnly/SameSite）' },
           { value: 'cors_policy', note: 'CORS 配置弱点' },
           { value: 'http_verbs', note: 'HTTP 方法暴露面（OPTIONS/TRACE/PUT 等）' },

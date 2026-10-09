@@ -48,9 +48,18 @@ export interface PhaseProfile {
   readonly failureModes: string;
   /** 与上下游的接口（消费什么、交付什么）。 */
   readonly interfaces: string;
-  /** 检索策略：何时必须检索、检索什么、如何使用结果（2026-10-09 新增）。 */
+ /** 检索策略：何时必须检索、检索什么、如何使用结果（2026-10-09 新增）。
+  * 
+  * 重要：mandatoryOnStart 与 triggers 是**独立的两个维度**：
+  * - mandatoryOnStart：会话启动时是否强制检索前序内容
+  * - triggers：运行时补充检索的触发点（与 mandatoryOnStart 无关）
+  * 
+  * 因此，即使 mandatoryOnStart=false（如第一阶段），triggers[] 仍可有补充检索点。
+  */
   readonly retrievalStrategy: {
-    /** 会话开始时是否强制检索（新会话必须先看前序阶段结论）。 */
+ /** 会话开始时是否强制检索（新会话必须先看前序阶段结论）。
+  * false 表示启动时不强制检索，但不排除运行时补充检索（见 triggers）。
+  */
     readonly mandatoryOnStart: boolean;
     /** 会话开始的启动查询（phase/kinds/trust 预设）。 */
     readonly startupQuery?: {
@@ -124,7 +133,7 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
       '便于后续阶段检索；不确定的推断标记 `provisional=true`。',
 
     retrievalStrategy: {
-      mandatoryOnStart: false, // 第一阶段，无前序可检索
+      mandatoryOnStart: false, // 第一阶段，启动时无前序可检；但运行时有 triggers 补充检索点（两者独立）
       triggers: [
         '发现新资产或服务时，检索是否已在其他扫描中出现过',
         '遇到不可达目标时，检索是否有其他阶段的网络拓扑信息',
