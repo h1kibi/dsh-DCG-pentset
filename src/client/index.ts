@@ -516,7 +516,7 @@ function ConsoleApp(props: {
       case 'skills':
         settle(setSkills, props.controller.refreshSkills());
         break;
-      case 'publicmemory':
+      case 'public-memory':
         settle(setPublicMemory, props.controller.refreshPublicMemory());
         break;
       case 'vulnerabilities':

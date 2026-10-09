@@ -141,7 +141,7 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
 
   return (
     <Card title="公共记忆">
-      <p className="pentest-publicmemory__hint">
+      <p className="pentest-public-memory__hint">
         这里写的内容会注入本作业下每一次新建会话的系统提示词，包括重做与阶段切换，
         不只是下一个新会话。适用场景：这个作业的通用规矩、客户的硬性限制、已经确认过的
         共识，例如「只做被动读取」「不要碰生产网段」「报告一律用中文」。
@@ -184,12 +184,12 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
           </Field>
 
           {gates.length === 0 ? null : (
-            <ul className="pentest-publicmemory__gates">
+            <ul className="pentest-public-memory__gates">
               {gates.map((gate) => <li key={gate}>{gate}</li>)}
             </ul>
           )}
 
-          <div className="pentest-publicmemory__actions">
+          <div className="pentest-public-memory__actions">
             <Button
               label={busy ? '正在保存…' : '保存'}
               kind="primary"
@@ -213,7 +213,7 @@ export function PublicMemoryPanel(props: PublicMemoryPanelProps): ReactNode {
             />
           </div>
 
-          <p className="pentest-publicmemory__meta">
+          <p className="pentest-public-memory__meta">
             {`${String(content.length)} / ${String(PUBLIC_MEMORY_MAX_CHARS)} 字符`}
             {dirty ? ' · 有未保存的改动' : ''}
           </p>

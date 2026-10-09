@@ -237,12 +237,12 @@ export const PANELS_CSS = `
 .pentest-memory-hit__detail{max-height:360px;margin:0;padding:9px 11px;border:1px solid var(--pt-line);background:var(--pt-bg-well);color:var(--pt-fg-dim);font:400 11.5px/1.65 var(--pt-font-mono);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
 
 /* ═════════════════ 公共记忆（注入每一次新建会话） ═════════════════ */
-.pentest-publicmemory__hint{margin:0;padding-left:9px;border-left:2px solid var(--pt-info);background:var(--pt-info-wash);color:var(--pt-fg-dim);font-size:11.5px;line-height:1.65;overflow-wrap:anywhere;padding-top:6px;padding-bottom:6px}
-.pentest-publicmemory__gates{display:flex;flex-direction:column;gap:5px;margin:0;padding:9px 11px;list-style:none;border:1px solid var(--pt-wait-line);border-left-width:3px;background:var(--pt-wait-wash)}
-.pentest-publicmemory__gates>li{position:relative;padding-left:13px;color:var(--pt-fg-dim);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
-.pentest-publicmemory__gates>li::before{content:"▸";position:absolute;left:0;color:var(--pt-wait);font-size:10px}
-.pentest-publicmemory__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
-.pentest-publicmemory__meta{margin:0;color:var(--pt-fg-faint);font:400 10.5px/1.5 var(--pt-font-mono);letter-spacing:.04em}
+.pentest-public-memory__hint{margin:0;padding-left:9px;border-left:2px solid var(--pt-info);background:var(--pt-info-wash);color:var(--pt-fg-dim);font-size:11.5px;line-height:1.65;overflow-wrap:anywhere;padding-top:6px;padding-bottom:6px}
+.pentest-public-memory__gates{display:flex;flex-direction:column;gap:5px;margin:0;padding:9px 11px;list-style:none;border:1px solid var(--pt-wait-line);border-left-width:3px;background:var(--pt-wait-wash)}
+.pentest-public-memory__gates>li{position:relative;padding-left:13px;color:var(--pt-fg-dim);font-size:11.5px;line-height:1.6;overflow-wrap:anywhere}
+.pentest-public-memory__gates>li::before{content:"▸";position:absolute;left:0;color:var(--pt-wait);font-size:10px}
+.pentest-public-memory__actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.pentest-public-memory__meta{margin:0;color:var(--pt-fg-faint);font:400 10.5px/1.5 var(--pt-font-mono);letter-spacing:.04em}
 
 /* ═════════════════ skill 库（§2.2 可增 / 可改 / 可停用） ═════════════════ */
 .pentest-skill-library__note{color:var(--pt-fg-dim)}

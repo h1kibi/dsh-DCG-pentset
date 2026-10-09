@@ -16,7 +16,18 @@
  *   - **读失败** → 错误。面板说「读取失败」并显示原因。
  *
  * 把三者都渲染成空列表是最常见也最有害的省略：人类看到「没有待放行的动作」会
- * 认为 Agent 没在请求放行，而实际上可能只是那次读取失败了。
+ *
+ * ── 面板名称历史（2026-10-09 重构）──
+ *
+ * 为避免现存书签/链接中断，需特别说明：
+ * - `overview` → 改名为 `console`（阶段轨道 + 运行控制 + 诊断）
+ * - 时间轴与 Agent 轨迹 → 移入新的 `logs` 面板
+ * - 报告审阅、记忆浏览器、交接编辑 → 已删除（视图文件保留供测试用）
+ *
+ * URL 迁移：
+ * - 旧书签 `?panel=overview` → 将被导航到 `?panel=console`（客户端 301 逻辑）
+ * - 旧书签 `?panel=memory_browser` → 将被导航到 `?panel=logs`（合并了时间轴）
+ * - 若需编辑交接内容，用「交接材料」部分的「编辑」按钮，不再有独立面板
  */
 
 import { createElement } from 'react';
@@ -205,7 +216,7 @@ export function buildPanels(input: BuildPanelsInput): Partial<Readonly<Record<Co
 
   // 公共记忆：始终渲染（即使还没读到）——它是「可编辑的当前状态」，
   // 空着与「尚未读取」是两件事，面板自己会区分并各给文案。
-  panels.publicmemory = createElement(PublicMemoryPanel, {
+  panels['public-memory'] = createElement(PublicMemoryPanel, {
     controller,
     snapshot,
     memory: input.publicMemory,

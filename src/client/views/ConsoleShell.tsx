@@ -51,7 +51,7 @@ export const CONSOLE_PANELS = [
   'assets',
   'skills',
   'scope',
-  'publicmemory',
+  'public-memory',
 ] as const;
 export type ConsolePanel = (typeof CONSOLE_PANELS)[number];
 
@@ -63,7 +63,7 @@ const PANEL_LABELS: Readonly<Record<ConsolePanel, string>> = {
   assets: '资产清单',
   skills: 'Skill 库',
   scope: '范围管理',
-  publicmemory: '公共记忆',
+  'public-memory': '公共记忆',
 };
 
 export interface ConsoleShellProps {
@@ -124,7 +124,7 @@ export function ConsoleShell(props: ConsoleShellProps): ReactNode {
   const lockReasonOf = (candidate: ConsolePanel): string | null => {
     if (!scopePending) return null;
     // 公共记忆是作业级的（与范围无关），范围确认前也允许改。
-    if (candidate === 'publicmemory') return null;
+    if (candidate === 'public-memory') return null;
     return '范围尚未确认：先在下方「授权范围 intake」里确认范围方案，或点上方「新建 engagement」走授权向导';
   };
   const enabledPanels = CONSOLE_PANELS.filter((candidate) => lockReasonOf(candidate) === null);

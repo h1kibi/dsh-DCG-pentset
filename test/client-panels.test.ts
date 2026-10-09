@@ -247,7 +247,7 @@ test('buildPanels：尚未读取（null）时不渲染该面板，交由外壳�
   assert.equal(panels.vulnerabilities, undefined);
   assert.equal(panels.assets, undefined);
   // 公共记忆例外：它是「可编辑的当前状态」，没读到也要能让人写（面板自己区分空与未读）
-  assert.notEqual(panels.publicmemory, undefined);
+  assert.notEqual(panels['public-memory'], undefined);
 });
 
 test('buildPanels：确切读到空集合时渲染该面板（「确实没有」与「读不到」不同）', () => {
