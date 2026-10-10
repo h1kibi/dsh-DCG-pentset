@@ -130,6 +130,21 @@ const VERIFY_TLS_CARRY =
   '「纯 IP 目标」也不例外。**只有校验真的失败**（自签 / 链不全 / SAN 不含该名字）才显式 false；' +
   '此后该次结果不再能证明"证书链可信"，报告里会写明未校验。别条件反射地关校验：报告里堆这种免责声明会稀释真正要看的结论';
 
+/**
+ * 批量路径复核的取值形状（`recon_http_probe` 的 `paths`，2026-10-11 操作者诉求 #3）。
+ *
+ * 语义：**逗号分隔的绝对路径**，最多 60 条；空串 = 关闭（与 `path` 同一「显式取值表达不指定」的纪律）。
+ * 这里挡的是三种"把路径当目标用"的形态——它们会让范围记账失效（范围裁决针对**目标**，
+ * 路径不是目标，混进来等于用路径去绕目标维度）：
+ *   1. 含 scheme/主机（`https://host/x`、`host:80/x`）：不带前导 `/` 的串一律不匹配；
+ *      `//host/x`（协议相对 URL）由 `(?!/)` 排除；
+ *   2. 含空白：`k=v` 分词靠空格，路径里出现空白会把一条命令切成两个 token；
+ *   3. `..` 段：正则表达不了"段"语义，用 `(?!.*\.\.)` 直接禁掉（与 `path` 的容器侧拒绝同口径）。
+ * 字符集是 URL path 的安全子集（去掉 `,`：它是分隔符）。
+ */
+const PROBE_PATHS_PATTERN =
+  "^(?!.*\\.\\.)(|/(?!/)[A-Za-z0-9._~/!@%+=-]{0,300}(,/(?!/)[A-Za-z0-9._~/!@%+=-]{0,300}){0,59})$";
+
 const FORBIDDEN_PAYLOAD_RULES: readonly ForbiddenPayloadRule[] = Object.freeze([
   {
     id: 'free_form_shell_interpreter',
@@ -793,9 +808,16 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         // 字典枚举全都没命中）。只跟**同主机**的 .js 引用，条数与字节都有硬上限。
         { name: 'include_chunks', kind: 'enum', values: ['true', 'false'] },
         { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
+        // 批量路径状态复核（2026-10-11 操作者诉求 #3）：此前只能退回手写 `pentest_exec` 的
+        // bash for 循环 + curl 逐条确认「这 60 条路径是真实端点还是兜底路由」。
+        // 空串 = 关闭；≤60 条（逐条一次 GET，输出与墙钟都按条数摊）。
+        { name: 'paths', kind: 'string', pattern: PROBE_PATHS_PATTERN },
       ],
       targetPlaceholder: 'target',
-      timeoutMs: 60_000,
+      // 60 条 × 逐条一次 GET：60s 会把每条压到 1s（含连接建立），实测靶站上容易假 no_response。
+      // 抬到 120s（每条约 2s）——**不是**让它退化成"一条命令打 60 次 30s 超时"：
+      // 容器侧按 `总预算 / 条数` 摊出逐条超时（夹在 1-8s），总预算到点即停并把剩余条标 unprobed。
+      timeoutMs: 120_000,
       maxOutputBytes: 256 * 1024,
     },
     protocol: 'tcp',
@@ -804,11 +826,12 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       port: 'HTTP(S) 端口',
       scheme: 'auto 先试 https 再试 http',
       follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
+      paths: '**批量路径状态复核**（逗号分隔，≤60 条，每条形如 `/api/users`）。给了它：只对每条发 **GET**，回 `path<TAB>status<TAB>size<TAB>content_type` 逐条 + 汇总 `paths=N ok=M no_response=K`；并先用一条**随机路径**取软 404 基准（同状态码同长度 ⇒ 标 `soft404`，即兜底路由而非端点）。**拒绝**含 scheme/主机/空格的串（那是把"路径"当"目标"用，范围记账会失效）、拒绝 `..` 段。它是**复核**通道（确认已知路径的真伪）；**发现**新路径用 `collect=endpoints` 或 `content_discover`——别用它替代后者',
       include_chunks: '**endpoints 专用**：是否跟随同主机的 `.js` 引用（`/_next/static/chunks/*` 这类）再抽一遍——路由常常**只在 chunk 里**。只跟同主机（跨主机一律跳过，与重定向同一纪律），上限 8 条 / 每条 256KiB / 合计 1MiB；命中会标出 `kind=quoted@<chunk 路径>` 供复核',
-      collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）/ **endpoints=端点与路由抽取**（固定三种形态：属性 href/src/action、引号内的绝对路径、fetch/axios 调用第一实参；每条是短行、带 hits，空结果会明说「这不等于页面里没有端点」——手写 grep 抽这类东西时失败是静默的）',
+      collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）/ **endpoints=端点与路由抽取**（固定三种形态：属性 href/src/action、引号内的绝对路径、fetch/axios 调用第一实参；每条是短行、带 hits，空结果会明说「这不等于页面里没有端点」——手写 grep 抽这类东西时失败是静默的）。**给了 `paths` 时本条不执行**（批量复核自成一件事）',
       verify_tls: VERIFY_TLS_CARRY,
     },
-    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls} include_chunks={include_chunks}',
+    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls} include_chunks={include_chunks} paths={paths}',
   },
   {
     template: {
@@ -825,6 +848,12 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         // 基准路径（2026-10-10）：`/api/` 这类前缀此前无法表达，API 面只能靠 JS 逆向猜。
         // 空串 = 站点根；形状与容器侧 `PATH_PREFIX_RE` 同一字符集，`..` 段由容器侧拒绝。
         { name: 'path', kind: 'string', pattern: "^[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,160}$" },
+        // 字典分段（2026-10-11 操作者诉求 #4）：`common_dirs` ≈ 4723 条，按声明节奏 5 req/s
+        // 需要 ~945s，而单条命令上限（maxtime）只有 295s ⇒ **数学上就不可调度**；实测 ffuf 到
+        // maxtime 就停（命中停在 position=4313），而旧 summary 里看不见"被截断"。
+        // 语义：**1 基、双闭区间**的字典条目编号（条目 = 去空行/去注释后的行），空串 = 整本字典。
+        // 选它而不是 `resume_from=<游标>`：区间自证"从第几条跑到第几条"、可拼、可去重、可核账。
+        { name: 'entry_range', kind: 'string', pattern: '^(|\\d{1,6}-\\d{1,6})$' },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 300_000,
@@ -840,9 +869,11 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       rate: '每秒请求数上限（1-20）；并发被钉在 min(10, rate)',
       verify_tls: VERIFY_TLS_CARRY,
       path: '基准路径前缀（空串 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会被归一）。用于在 `/api/` 这类子路径下枚举，而不是只打根路径',
+      entry_range:
+        '**字典分段**（`A-B`，1 基双闭区间，如 `1-2000`；空串 = 整本字典）。大字典在单条命令的墙钟内跑不完（`common_dirs` 4723 条按 5 req/s 需 ~945s，上限 295s）——用 `1-2000` / `2001-4000` … 多次调用拼完。**每次返回都自证**：`coverage: wordlist_entries=… entry_range=… requested_entries=… attempted=… truncated=… position=… remaining=…`，并在超可调度量时直接写"需要分 N 段"（这是数学，不是判断）',
     },
     commandTemplate:
-      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate} verify_tls={verify_tls} path={path}',
+      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate} verify_tls={verify_tls} path={path} entry_range={entry_range}',
   },
   {
     template: {

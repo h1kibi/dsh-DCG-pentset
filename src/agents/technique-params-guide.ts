@@ -191,6 +191,15 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
           { value: 'false', note: '跳过验证（校验失败时才用；此后该次结果不再证明证书链可信）' },
         ],
       },
+      {
+        name: 'paths',
+        type: 'string',
+        required: false,
+        default: '（空串＝关闭）',
+        description:
+          '**批量路径状态复核**（操作者诉求 #3）：逗号分隔的**绝对路径**，≤60 条，每条形如 `/api/users`。给了它只对每条发 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note` ＋ 汇总 `paths=N ok=M no_response=K`；并先用一条**随机路径**取软 404 基准，同状态码同长度即标 `soft404`（兜底路由，不是端点）。**拒绝**含 scheme/主机/空格的串（把路径当目标用会让范围记账失效）。**发现**用 `collect=endpoints`，**复核**才用它',
+        example: 'paths="/api/users,/api/orders,/admin/config"',
+      },
     ],
     example: 'pentest_recon(technique="http_probe", targetSelector="192.168.1.10", port=443, scheme="https", collect="tech", purpose="...")',
   },
@@ -274,6 +283,15 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         description:
           '基准路径前缀（空串 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会归一）。在 /api/ 这类子路径下枚举时**必须**给，否则只打根路径；不得含 `..` 段或查询串',
         example: 'path="api"',
+      },
+      {
+        name: 'entry_range',
+        type: 'string',
+        required: false,
+        default: '（空串＝整本字典）',
+        description:
+          '**字典分段**（操作者诉求 #4）：`A-B`，1 基双闭区间，如 `1-2000`。大字典在**单条命令的墙钟内跑不完**（`common_dirs` 4723 条按 5 请求/秒需 ~945s，而单条上限 295s）——用 `1-2000` / `2001-4000` … 多次调用拼完。每次返回都自证：`coverage: wordlist_entries=… entry_range=… requested=… attempted=… truncated=… position=… remaining=…`，并在超可调度量时直接写「需要分 N 段」（这是数学，不是判断）',
+        example: 'entry_range="1-2000"',
       },
     ],
     example: 'pentest_recon(technique="content_discover", targetSelector="192.168.1.10", scheme="https", wordlist="common_dirs", rate=5, path="api", purpose="...")',

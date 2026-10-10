@@ -254,6 +254,22 @@ interface WatermarkRow {
 
 // ───────────────────────────── 分块种类还原 ─────────────────────────────
 
+/**
+ * 本作业此刻的索引事实（会话简报的输入；见 {@link PgMemoryQueryService.memoryIndexFacts}）。
+ *
+ * 与 {@link MemoryWatermark} 的分工：水位回答「索引覆盖到哪、健不健康」，这份事实回答
+ * 「库里现在到底有几个可检索的分块、账本还有多少条没落块」——后者才是模型在会话开始
+ * 需要知道的那一件事（否则它会把「索引为空」读成「作业里什么材料都没有」）。
+ */
+export interface MemoryIndexFacts {
+  /** 本作业当前可检索的分块数（`memory_chunks` 全行，含以记忆条目为来源的分块）。 */
+  readonly chunkCount: number;
+  /** 已落成分块的事件里最大的账本链序号（`0` = 尚无任何事件被索引）。 */
+  readonly lastChainSeq: number;
+  /** 水位之后仍可索引却还没落块的事件条数（`> 0` = 索引器还没追上）。 */
+  readonly pendingEvents: number;
+}
+
 // 分块种类的还原规则**只有一份**：`chunks.ts` 的 `deriveChunkKind`（已导入）。
 // 从前这里与 `pg-worker-tools.ts` 各有一份私有副本（含各自的逆索引与匹配兜底），两侧漂移的表现是
 // 「同一个 kinds 过滤在控制台与 Worker 上给出不同结果」。
@@ -892,6 +908,44 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
       status: row === undefined ? 'ready' : narrowWatermarkStatus(row.status),
       detail: row?.last_error ?? null,
       lagEvents: lag,
+    };
+  }
+
+  /**
+   * 本作业此刻的**索引事实**（会话简报用；§8.4）。
+   *
+   * 只回答两个问题：库里现在有几个可检索分块、账本还有多少条可索引事件没落块。
+   * **计数口径与 `memory_search` 零命中诊断同一份**（`pg-worker-tools.ts` 的
+   * `#diagnoseZeroHits`）：数的是 `memory_chunks` 的全部行，**含以记忆条目为来源**
+   * （`source_event_id` 为 NULL）的分块——按 INNER JOIN 事件去数会漏掉那一类，
+   * 简报于是报告「0 分块」，而检索其实有内容（正是 2026-10-10 那次 P0 的形状）。
+   *
+   * `pendingEvents` 复用 {@link #lagAfter}（与 `memoryWatermark` 同一判据）：`0 分块`
+   * 搭配 `> 0` 的待索引事件，说明「账本里有东西，索引器还没追上」，与「作业本来就还没内容」
+   * 是两种处置完全不同的状态。
+   *
+   * **调用方必须已在作业作用域内**（`memory_chunks` 是 FORCE RLS 表）：本方法不管作用域。
+   */
+  async memoryIndexFacts(engagementId: string): Promise<MemoryIndexFacts> {
+    const counted = await this.#db.query<{
+      total: number | string | null;
+      last_chain_seq: number | string | null;
+    }>(
+      `select count(*) as total,
+              (select coalesce(max(e.chain_seq), 0)
+                 from pentest.context_events e
+                 join pentest.memory_chunks mc2 on mc2.source_event_id = e.event_id
+                where e.engagement_id = $1::uuid) as last_chain_seq
+         from pentest.memory_chunks mc
+        where mc.engagement_id = $1::uuid`,
+      [engagementId],
+    );
+    const row = counted.rows[0];
+    const lastChainSeq = toSafeCount(row?.last_chain_seq, 'last_chain_seq');
+    return {
+      chunkCount: toSafeCount(row?.total, 'total'),
+      lastChainSeq,
+      pendingEvents: await this.#lagAfter(engagementId, lastChainSeq),
     };
   }
 

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, MITRE ATT&CK Enterprise, OWASP WSTG]
-  smoked: "沙箱实测@c31de6c1070e：6 块原文照跑（候选边台账 4 条含 technique 缺失兜底 `?`/引用数 0；缺前置条件检出 p2；战术映射含空列表兜底；影响×可行性排序 EVID p1=20、p2=8 全在 ASSUMPTION p3=9、p4=2 之前；冻结假设列 p3 的缺失观测；impact=7 越界被 assert 挡下 exit=1）；观察：grounded=false 且 missing_evidence 也没写的 p4 仍进 TOP——脚本只标 ASSUMPTION，不拦缺口缺失，交付前按判据人工剔除"
+  smoked: "沙箱实测@eeaf87926df5：6 块原文照跑（候选边台账 4 条含 technique 缺失兜底 `?`/引用数 0；缺前置条件检出 p2；战术映射含空列表兜底；影响×可行性排序 EVID p1=20、p2=8 全在 ASSUMPTION p3=9、p4=2 之前；冻结假设列 p3 的缺失观测；impact=7 越界被 assert 挡下 exit=1）；观察：grounded=false 且 missing_evidence 也没写的 p4 仍进 TOP——脚本只标 ASSUMPTION，不拦缺口缺失，交付前按判据人工剔除"
 ---
 
 # 攻击路径与优先级（model-attack-paths）
@@ -19,6 +19,7 @@ metadata:
 ## 前提与边界
 - 只在授权范围内建模：入口与资产都必须能在边界台账或资产台账里解析到 `ref`；解析不到的节点视为幽灵，删除或标假设。
 - 每条路径的每个节点都要么挂 `memory:<uuid>`/`artifact:<uuid>` 引用，要么标 `assumption=true` 并写 `missing_evidence`。
+  - **证据 id 从哪来**（2026-10-11 起）：`pentest_exec` 开 `save_stdout_as_evidence` 落盘成功后，返回值带 `artifact_ref`（形如 `artifact:<uuid>`）——直接引它，人复核能按 id 取回原文；不要用文件路径冒充引用（路径只是纯文本，取不回来）。
 - 战术标签是**分类**，不是证据：它说明这条路径属于哪类行为，不证明它可行。
 - 影响取自业务影响模型（资产关键度），可行性取自前置条件的数量与强度 —— 两者都要写清依据，不靠直觉给分。
 - 外网可达（2026-10-05 起）：外部漏洞库、公网 POC 查得到，但**外部资料不是本目标的证据**——引用标来源，未在目标上复现的一律标假设。

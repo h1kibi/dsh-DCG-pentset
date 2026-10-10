@@ -711,6 +711,130 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
   });
 });
 
+/**
+ * 2026-10-11 两条结构化能力（操作者诉求 #3/#4）的**三处一致性锁**。
+ *
+ *   A. `http_probe paths=` —— 批量路径状态复核。此前只能退回手写 `pentest_exec` 的
+ *      `for p in …; do curl …; done` 逐条确认「这 60 条路径是真实端点还是兜底路由」：
+ *      输出进不了审计通道，也没法逐条核账。
+ *   B. `content_discover entry_range=` —— 字典分段 + 覆盖度自报。`common_dirs` ≈ 4723 条
+ *      按声明节奏 5 req/s 需 ~945s，而单条命令上限 295s ⇒ **数学上不可调度**；且旧摘要里
+ *      **看不见被截断**（上游 JSON 有 `maxtime:295`、命中停在 `position:4313`）。
+ *
+ * 两处都跨三个信任域（模板注册表 / technique 表 / 容器分发器），与既有那一组同一纪律：
+ * **声明与实现不许漂移**，且"能分辨"这件事本身要有机器可核对的落点。
+ */
+describe('批量路径复核与字典分段：模板 / technique / 容器三处对拍（2026-10-11）', () => {
+  it('http_probe 的 paths：模板声明、命令形态、carries、technique 默认都在，形状即语义', () => {
+    const spec = registry.get('recon_http_probe');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'paths');
+    assert.ok(declared !== undefined && declared.kind === 'string', '模板必须声明 paths（字符串 + 形状）');
+    assert.ok((declared.pattern ?? '').length > 0, 'paths 必须带 shape 校验（形状是语义的一部分，不只是提示）');
+    assert.match(spec.commandTemplate, /paths=\{paths\}/, '新参数必须进入命令形态');
+    assert.ok('paths' in spec.carries, '新参数必须有 carries');
+    assert.equal(
+      STRUCTURED_TECHNIQUES.recon.http_probe?.defaults.paths,
+      '',
+      'technique 默认必须是空串（关闭）：默认行为不变，批量复核是显式动作',
+    );
+    const base = { port: 80, scheme: 'auto', follow_redirects: 0, collect: 'headers', verify_tls: 'true', include_chunks: 'true' };
+    assert.equal(validateForTest('recon_http_probe', { ...base, paths: '' }).ok, true, '空串＝关闭，必须合法');
+    assert.equal(validateForTest('recon_http_probe', { ...base, paths: '/,/api/users,/.git/HEAD' }).ok, true);
+    for (const bad of [
+      'https://example.com/x', // 带 scheme（把路径当目标用）
+      '//example.com/x', // 协议相对 URL：带主机
+      'example.com/x', // 没有前导 `/`
+      '/a b', // 空白（会把 k=v 切成两个 token）
+      '/a/../b', // `..` 段
+      '/a?x=1', // 查询串
+      '/a#f', // 片段
+      Array.from({ length: 61 }, (_, i) => `/p${i}`).join(','), // 超 60 条上限
+    ]) {
+      assert.equal(validateForTest('recon_http_probe', { ...base, paths: bad }).ok, false, `paths=${bad} 必须被拒`);
+    }
+  });
+
+  it('http_probe paths= 的容器实现：只发 GET + 软 404 基准 + 逐条表格与汇总', () => {
+    const start = DISPATCHER.indexOf('def http_probe(');
+    const verbBody = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef ', start + 1));
+    assert.match(verbBody, /parse_probe_paths\(params\)/, '容器侧必须读 paths 并做**服务端**校验');
+    assert.ok(DISPATCHER.includes('PROBE_PATHS_LIMIT = 60'), '条数上限必须是常量 60（与模板 {0,59} 同口径）');
+    // 只发 GET：形态由服务端固定（HEAD/OPTIONS 在很多实现上与 GET 语义不同，换来的只是噪声）。
+    const probeOne = verbBody.slice(verbBody.indexOf('def probe_one('), verbBody.indexOf('paths_budget:'));
+    assert.ok(probeOne.length > 0, '找不到 probe_one（批量复核的逐条实现）');
+    assert.match(probeOne, /conn\.request\(\s*"GET"/, '批量复核只发 GET');
+    assert.ok(!/"(HEAD|OPTIONS|POST)"/.test(probeOne), '批量复核不得发 GET 之外的方法');
+    // 软 404 基准：一条随机路径；同状态码同长度即判"兜底路由"，不是端点。
+    assert.match(verbBody, /SOFT404_PATH_PREFIX/, '必须用随机路径取软 404 基准');
+    assert.match(verbBody, /paths_soft404_baseline:/, '基准要自己开口（取不到时也要说"unavailable"）');
+    assert.match(verbBody, /note = "soft404"/, '与基准同形的命中要标 soft404');
+    assert.match(verbBody, /candidate_endpoint:/, '非兜底命中要有可直接引用的短行');
+    assert.match(
+      verbBody,
+      /paths_summary: paths=\{len\(probe_paths\)\} ok=\{responded\} no_response=\{no_response\}/,
+      '汇总形态固定：paths=N ok=M no_response=K',
+    );
+    assert.ok(verbBody.includes('paths_columns: path<TAB>status<TAB>size<TAB>content_type<TAB>note'), '列定义要写出来');
+    assert.match(verbBody, /unprobed/, '墙钟到点必须报"没发出去"的条数（否则会被读成"不存在"）');
+    assert.match(verbBody, /collect=endpoints/, '复核通道要指明"发现"用哪条通道（不许替代发现）');
+    // 服务端拒绝"把路径当目标用"（模板只管形状，模型仍可能递 scheme/主机串）。
+    const parser = DISPATCHER.slice(
+      DISPATCHER.indexOf('def parse_probe_paths('),
+      DISPATCHER.indexOf('def parse_entry_range('),
+    );
+    assert.match(parser, /:\/\/" in item or not item\.startswith\("\/"\)/, '必须拒绝含 scheme/主机/无前导 / 的串');
+    assert.match(parser, /item\.startswith\("\/\/"\)/, '必须拒绝协议相对 URL（//host/x）');
+    assert.match(parser, /不得含空白/, '必须拒绝含空白的串（命令按空格分词）');
+    assert.match(parser, /PROBE_PATH_RE\.match/, '形状由常量正则锁死');
+  });
+
+  it('content_discover 的 entry_range：模板声明、命令形态、carries、technique 默认都在', () => {
+    const spec = registry.get('recon_content_discover');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'entry_range');
+    assert.ok(declared !== undefined && declared.kind === 'string', '模板必须声明 entry_range');
+    assert.match(spec.commandTemplate, /entry_range=\{entry_range\}/, '新参数必须进入命令形态');
+    assert.ok('entry_range' in spec.carries, '新参数必须有 carries');
+    assert.equal(
+      STRUCTURED_TECHNIQUES.recon.content_discover?.defaults.entry_range,
+      '',
+      'technique 默认必须是空串（整本字典）：不改变既有调用的语义',
+    );
+    const base = { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5, verify_tls: 'true', path: '' };
+    assert.equal(validateForTest('recon_content_discover', { ...base, entry_range: '' }).ok, true);
+    assert.equal(validateForTest('recon_content_discover', { ...base, entry_range: '1-2000' }).ok, true);
+    // 模板只管**形状**：1 ≤ A ≤ B ≤ 条目数 这类语义只能由容器（知道字典有多长）判。
+    for (const bad of ['1-', '-10', '1-2-3', 'abc', '1 - 2', '1234567-1', '1-2000,3000-4000']) {
+      assert.equal(validateForTest('recon_content_discover', { ...base, entry_range: bad }).ok, false, `entry_range=${bad} 必须被拒`);
+    }
+  });
+
+  it('content_discover 的容器实现：分段切片 + 覆盖度自报 + 可调度性提示（数学不是判断）', () => {
+    const start = DISPATCHER.indexOf('def content_discover(');
+    const body = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef web_crawl(', start));
+    assert.match(body, /params\.get\("entry_range"\)/, '容器侧必须读 entry_range');
+    assert.ok(
+      DISPATCHER.includes('ENTRY_RANGE_RE = re.compile(r"^(\\d{1,6})-(\\d{1,6})$")'),
+      'entry_range 的形状常量必须与模板模式同口径',
+    );
+    assert.match(body, /parse_entry_range\(raw_range, wordlist_lines\)/, '语义校验（上界 ≤ 条目数）走同一个纯函数');
+    assert.match(body, /ffuf\.wordlist\.txt/, '必须把**本段**字典落盘再喂给 ffuf（报告的编号与实跑同一来源）');
+    for (const field of ['coverage: wordlist_entries=', 'attempted=', 'truncated=', 'position=', 'remaining=', 'position_max_hit=']) {
+      assert.ok(body.includes(field), `coverage 行缺字段 ${field}`);
+    }
+    assert.match(body, /coverage_note:/, '必须给一句人能读懂的"跑到哪儿、还剩多少"');
+    assert.match(body, /需要分 \{segments\} 段/, '超可调度量时必须直接写出"需要分 N 段"（这是数学，不是判断）');
+    assert.match(body, /schedulability_note:/, '本段自己就超容量时也要说（否则又是"跑一半"）');
+    // 覆盖依据来自 ffuf 的 stderr 进度行 ⇒ **不能再传 `-s`**（静默模式把进度整条吞掉，
+    // 于是"跑完、干净"与"跑一半被 maxtime 砍"输出同形——这正是本轮要修的形态）。
+    assert.ok(!body.includes('"-s"'), '不得再用 -s：进度行是覆盖度的唯一直接证据');
+    assert.match(body, /facts = ffuf_stderr_facts\(stderr\)/, 'stderr 要走同一份解析（进度/速率/错误计数/maxtime）');
+    assert.ok(DISPATCHER.includes('def ffuf_stderr_facts(stderr: str) -> dict:'), '覆盖度读数必须有单一来源');
+    assert.ok(DISPATCHER.includes('FFUF_MAXTIME_RE = re.compile(r"Maximum running time")'), 'maxtime 收尾行是截断的直接证据');
+  });
+});
+
 describe('buildStructuredIntent 布尔值强制转换（2026-10-10 实测：LLM 看到 enum: ["true","false"] 常传布尔）', () => {
   it('枚举参数：布尔值自动转换成字符串', () => {
     // 用户传布尔 false
@@ -735,6 +859,21 @@ describe('buildStructuredIntent 布尔值强制转换（2026-10-10 实测：LLM 
     });
     assert.ok(result2.ok);
     assert.strictEqual(result2.params.verify_tls, 'true', 'verify_tls 应转换成字符串 "true"');
+  });
+
+  it('非枚举参数收到布尔：**明确拒绝**（不许归一成 "true" 静默命中模式）', () => {
+    // `scripts: true` 若被归一成 `'true'`，正好命中脚本名的 `^[a-z0-9-]+(,…)*$` ⇒
+    // 一个类型错误会变成**合法的静默调用**（`ports: true` 同理：结果对、理由错、不可预期）。
+    // 契约：布尔只对枚举参数有意义；其余一律在工具层拒绝并说明理由。
+    const scripts = buildStructuredIntent('recon', {
+      technique: 'nse_safe',
+      targetSelector: 't',
+      purpose: 'p',
+      port: 80,
+      scripts: true,
+    });
+    assert.equal(scripts.ok, false, '非枚举参数收到布尔必须拒绝');
+    assert.match(scripts.ok ? '' : scripts.message, /只有枚举参数接受布尔/);
   });
 
   it('非枚举参数：保留原始类型', () => {

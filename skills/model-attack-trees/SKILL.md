@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [Schneier 攻击树方法论, PTES 威胁建模, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@c31de6c1070e：6 块原文照跑；步骤 1 抓到并修掉配方缺陷——原命令直接 `> /tmp/tm/tree.json`，而一次性容器里 /tmp/tm 不存在，实测 `/bin/bash: /tmp/tm/tree.json: No such file or directory`（exit 1），前置 `mkdir -p /tmp/tm &&` 后 exit 0；步骤 2 在步骤 1 的空树上无输出属正常，展开后正确报 `OR/AND` 子节点数并点名缺 op 的内部节点 n2、root 缺 op 时按 `(root)` 豁免；步骤 3 五叶（含枚举外 scan、未放行的 exploit_validation）逐叶列出动作类别与放行标记；步骤 4 裁剪前=2（persistence + in_scope:false），移出后=0；步骤 5 每叶 verify/stop_condition/证据引用成列，缺 stop_condition 显示 ?、无引用叶末列留空"
+  smoked: "沙箱实测@eeaf87926df5：6 块原文照跑；步骤 1 抓到并修掉配方缺陷——原命令直接 `> /tmp/tm/tree.json`，而一次性容器里 /tmp/tm 不存在，实测 `/bin/bash: /tmp/tm/tree.json: No such file or directory`（exit 1），前置 `mkdir -p /tmp/tm &&` 后 exit 0；步骤 2 在步骤 1 的空树上无输出属正常，展开后正确报 `OR/AND` 子节点数并点名缺 op 的内部节点 n2、root 缺 op 时按 `(root)` 豁免；步骤 3 五叶（含枚举外 scan、未放行的 exploit_validation）逐叶列出动作类别与放行标记；步骤 4 裁剪前=2（persistence + in_scope:false），移出后=0；步骤 5 每叶 verify/stop_condition/证据引用成列，缺 stop_condition 显示 ?、无引用叶末列留空"
 ---
 
 # 攻击树与验证计划（model-attack-trees）

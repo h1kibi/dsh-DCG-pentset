@@ -219,7 +219,56 @@ export interface DshSessionFactoryDeps {
    * 而元数据与事实不符比不挂更容易误导。
    */
   readonly presetId?: string;
+
+  /**
+   * 记忆索引状态探针（2026-10-11）：会话创建**那一刻**按作业查一次真实索引事实，
+   * 如实写进能力快照——让模型不必先花一次 `memory_search` 撞墙，才知道「本作业索引里
+   * 还没有可检索内容」（那是操作者实测里最贵的一次弯路：拿到空结果后转去手工翻归档文档）。
+   *
+   * 省略即**不写那一行**：本文件不知道库的状态，也不该为了凑一句话假设它为空。
+   * 查询失败或超时一律降级成「未知」，**绝不阻断会话创建**（见 {@link DshSessionFactory} 的
+   * `#probeMemoryIndex`）——探针是附注，不是闸门。
+   *
+   * 为什么是注入的函数而不是自己去连库：`memory_chunks` 是 FORCE RLS 表，读它必须先进
+   * 作业作用域，而作用域归装配层管（`composed.rls.run`）。工厂不持有数据库，只依赖一个函数。
+   */
+  readonly memoryIndex?: MemoryIndexProbe;
 }
+
+/**
+ * 记忆索引在**会话创建那一刻**的事实（只读）。
+ *
+ * 形状与 `PgMemoryQueryService.memoryIndexFacts` 的返回**结构一致**（那边是同一份口径的
+ * 数据库实现）：装配层直接把它接过来即可，无需在本层引入数据库类型。
+ */
+export interface MemoryIndexFacts {
+  /** 本作业当前可检索的分块数（`memory_chunks` 全行，含条目来源的分块）。 */
+  readonly chunkCount: number;
+  /** 已落成分块的事件里最大的账本链序号（`0` = 尚无任何事件被索引）。 */
+  readonly lastChainSeq: number;
+  /** 水位之后仍可索引却还没落块的事件条数（`> 0` = 索引器还没追上）。 */
+  readonly pendingEvents: number;
+}
+
+/** 按作业读索引事实；由装配层注入（见 {@link DshSessionFactoryDeps.memoryIndex}）。 */
+export type MemoryIndexProbe = (engagementId: string) => Promise<MemoryIndexFacts>;
+
+/**
+ * 简报里那句「记忆索引状态」的三态。
+ *
+ * `unknown` 涵盖「查询抛错」「查询超时」两种情况——对模型而言处置相同（历史材料走 workdir），
+ * 因此不细分；细分只会让简报更长而不更可执行。
+ */
+export type MemoryIndexStatus =
+  | { readonly kind: 'available'; readonly facts: MemoryIndexFacts }
+  | { readonly kind: 'empty'; readonly facts: MemoryIndexFacts }
+  | { readonly kind: 'unknown' };
+
+/**
+ * 探针的等待上限。会话创建是状态机的同步前置（`createDshSessionOrMarkFailed`），
+ * 数据库不可达时 `pool.connect()` 可能长时间不返回——附注没有资格把状态机卡住。
+ */
+const MEMORY_INDEX_PROBE_TIMEOUT_MS = 2_000;
 
 /** 本进程创建且尚未关闭的会话。 */
 interface LiveSession {
@@ -289,6 +338,7 @@ export class DshSessionFactory implements SessionFactory {
   readonly #mountsOf: ((dshSessionId: string) => readonly SandboxMount[]) | undefined;
   readonly #mountPreset: ((agentCtx: unknown) => Promise<void>) | undefined;
   readonly #presetId: string | undefined;
+  readonly #memoryIndex: MemoryIndexProbe | undefined;
   readonly #live = new Map<string, LiveSession>();
   readonly #closed = new Set<string>();
 
@@ -299,6 +349,7 @@ export class DshSessionFactory implements SessionFactory {
     this.#mountsOf = deps.mountsOf;
     this.#mountPreset = deps.mountPreset;
     this.#presetId = deps.presetId;
+    this.#memoryIndex = deps.memoryIndex;
   }
 
   /**
@@ -347,6 +398,9 @@ export class DshSessionFactory implements SessionFactory {
         // 预设想用同名分节时冲突。
         setup: async (agentCtx) => {
           await this.#applyPreset(agentCtx);
+          // 索引状态探针**先查**：它是附注，失败/超时都降级成「未知」，不会走到上面的
+          // fail-loud 通道上去（见 `#probeMemoryIndex`）。
+          const memoryIndex = await this.#probeMemoryIndex(input);
           // 按**事实**校正工具面：预设没挂上时它贡献的工具也不存在（见方法注释）。
           installFrozenCapabilities(
             agentCtx,
@@ -355,6 +409,7 @@ export class DshSessionFactory implements SessionFactory {
               toolAllow: this.#toolAllowWithPresetFacts(input.toolAllow),
             },
             this.#briefMounts(input.dshSessionId),
+            memoryIndex,
           );
         },
       });
@@ -553,6 +608,39 @@ export class DshSessionFactory implements SessionFactory {
   }
 
 
+  /**
+   * 查一次索引事实；**任何失败都降级为「未知」，绝不抛出**。
+   *
+   * 两条纪律：
+   *   1. 探针是附注，不是闸门——它挂掉不能让会话创建失败。`setup` 是「要么冻结成功、
+   *      要么根本没有这个会话」的 fail-loud 通道；附注没有资格占用它。
+   *   2. 有超时：数据库不可达时 `pool.connect()` 可能长时间不返回，而会话创建是状态机的
+   *      同步前置——卡在这里等于整个作业不动。
+   *
+   * 未注入探针时返回 `null`（= 简报里不写这一行）：不知道就不说，不写「未知」占位。
+   */
+  async #probeMemoryIndex(input: FrozenSessionInput): Promise<MemoryIndexStatus | null> {
+    const probe = this.#memoryIndex;
+    if (probe === undefined) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const facts = await Promise.race([
+        probe(input.engagementId),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => { resolve(null); }, MEMORY_INDEX_PROBE_TIMEOUT_MS);
+        }),
+      ]);
+      if (facts === null) return { kind: 'unknown' };
+      return facts.chunkCount > 0 ? { kind: 'available', facts } : { kind: 'empty', facts };
+    } catch {
+      return { kind: 'unknown' };
+    } finally {
+      // 撤掉可能还没触发的定时器：悬着的定时器会拖住事件循环（测试里表现为进程不退出）。
+      // `clearTimeout(undefined)` 本身是空操作，不需要判断。
+      clearTimeout(timer);
+    }
+  }
+
   /** 取宿主 agents 服务；缺它就 fail loud——没有会话 API 就没有本适配器。 */
   #agentsOrFail(): AgentRegistryView {
     const agents = this.#ctx.get('agents') as AgentRegistryView | undefined;
@@ -618,6 +706,11 @@ function installFrozenCapabilities(
   agentCtx: AgentScopedContextView,
   input: FrozenSessionInput,
   mounts: readonly SandboxMount[],
+  /**
+   * 记忆索引状态（注入探针的结论；`null` = 本部署没注入探针，简报不写那一行）。
+   * 它**不影响任何闸门**：只改提示词里的一句话。
+   */
+  memoryIndex: MemoryIndexStatus | null,
 ): void {
   const tools = agentCtx.tools;
   if (tools === undefined || typeof tools.restrict !== 'function') {
@@ -661,7 +754,7 @@ function installFrozenCapabilities(
     name: SECTION_CAPABILITY,
     order: SECTION_ORDER_CAPABILITY,
     text:
-      renderCapabilitySection(input, mounts) +
+      renderCapabilitySection(input, mounts, memoryIndex) +
       // 提问通道（外部审计 P1-1）：预设没挂上时，提问工具会被 `#toolAllowWithPresetFacts`
       // **按事实**裁掉，而这条裁剪此前是静默的——模型于是把选项写成没有落点的散文，人类只能
       // 自己打字作答。与 `renderRetrievalChannels` 同一个道理：只说"没有 X"不够，要说"那该怎么办"。
@@ -735,8 +828,52 @@ function renderRetrievalChannels(channels: readonly string[] | undefined): strin
   );
 }
 
+/**
+ * 「记忆索引状态」那一行（会话创建那一刻的事实，不是告警堆）。
+ *
+ * 三态由**探测结论**决定，不靠猜：
+ *   - `available`：本作业已有可检索分块 → 一行带过（分块数 + 水位），不说教。
+ *   - `empty`：一个可检索分块都没有 → 明说「这不是"没找到"，是库里还没有可检索内容」，
+ *     并给出**跨作业历史材料**的入口（`pentest_workdir`）。这一句就是本函数存在的理由：
+ *     少了它，模型会先花一次 `memory_search` 撞墙，再手工去翻作业目录里的归档文档。
+ *   - `unknown`：查询失败/超时 → 如实说未知（措辞是事实陈述，不是错误），并同样给出
+ *     workdir 路线——不让「查不到」变成「拿不到材料」。
+ *
+ * `null` = 本部署没注入探针（例如 `runtime.sessions` 由外部提供）：返回空串，**不写这一行**。
+ * 工厂不知道库的状态，就不该编一句「未知」占位。
+ *
+ * 与 `phase-profiles.ts` 的「memory_search 使用指南」是**同一套词表**：那边说
+ * 「note 含"索引为空" → 用 pentest_workdir 读」，这边在会话开始就先把这个状态摊开。
+ */
+export function renderMemoryIndexStatus(status: MemoryIndexStatus | null): string {
+  if (status === null) return '';
+  if (status.kind === 'available') {
+    return `记忆索引状态：可用（已索引 ${String(status.facts.chunkCount)} 个分块，水位链序 ${String(status.facts.lastChainSeq)}）。`;
+  }
+  if (status.kind === 'empty') {
+    const pending = status.facts.pendingEvents;
+    return (
+      '记忆索引状态：本作业记忆索引为空（0 个分块）——这是"库里还没有可检索的内容"，不是"没找到"。' +
+      (pending > 0
+        ? `账本里已有 ${String(pending)} 条待索引事件，索引器还没追上（索引随账本追加逐步建立）。`
+        : '索引随账本追加逐步建立，本会话期间才可能有内容。') +
+      '历史材料（人类挂进作业目录的清单/报告/归档）请用 `pentest_workdir`：`op=list` 列目录、' +
+      '`op=search` 在目录内**递归检索正则**，不要因为记忆检索为空就断定"没有材料"。'
+    );
+  }
+  return (
+    '记忆索引状态：未知（创建会话时查询失败，**不影响本会话**，也**不要**据此断定"没有材料"）。' +
+    '历史材料请用 `pentest_workdir` 的 `op=list` / `op=search`（目录内递归正则）直接读作业目录。'
+  );
+}
+
 /** 冻结能力分节：把「什么被冻结了」讲到模型不需要猜。 */
-function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly SandboxMount[]): string {
+function renderCapabilitySection(
+  input: FrozenSessionInput,
+  mounts: readonly SandboxMount[],
+  memoryIndex: MemoryIndexStatus | null,
+): string {
+  const memoryIndexStatusLine = renderMemoryIndexStatus(memoryIndex);
   const skills =
     input.skillIds.length === 0
       ? '（本次未装载任何 skill——这是合法状态，但不等于可以使用未勾选的 skill）'
@@ -782,6 +919,8 @@ function renderCapabilitySection(input: FrozenSessionInput, mounts: readonly San
     `阶段：${input.phase}`,
     `Profile：${input.profileId}@${input.profileRevision}`,
     `记忆检索通道：${renderRetrievalChannels(input.retrievalChannels)}`,
+    // 索引状态紧跟检索通道：两者说的是同一件事的两个面（「靠什么查」与「现在能查到什么」）。
+    ...(memoryIndexStatusLine === '' ? [] : [memoryIndexStatusLine]),
     `已装载 skill（用 \`skill_load\` 取正文；没装载的取不到）：${skills}`,
     `可用工具（工具面之外的工具对本会话根本不可见）：${input.toolAllow.length === 0 ? '（无）' : input.toolAllow.join('、')}`,
     `需要逐次人工放行的动作类别：${approval}`,

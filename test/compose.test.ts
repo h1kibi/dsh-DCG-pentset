@@ -367,6 +367,21 @@ describe('组合根接线', { skip: DATABASE_URL === undefined ? '未设置 PENT
       const file = (await workdir!.read({ path: 'hello.md' })) as { text: string; containerPath: string };
       assert.equal(file.text, '# hi\n');
       assert.equal(file.containerPath, '/work/hello.md');
+
+      // 函数形**解析器**同样不能被 async 化（2026-10-11 实测 P0）：
+      // `save_stdout_as_evidence` 报 `The "path" argument must be of type string.
+      // Received an instance of Promise`，根因就是包装器把 `evidenceRootFor(会话)` 也包成了 async。
+      // 与上面那条同源，必须走 compose 才能测到（工具层单测直接喂依赖对象，绕过包装）。
+      const evidenceRootFor = (mounted.hostServices.workerTools as {
+        evidenceRootFor?: unknown;
+      }).evidenceRootFor as ((workerSessionId: string) => unknown) | undefined;
+      const resolved = evidenceRootFor?.('sess-not-registered');
+      assert.equal(
+        typeof resolved,
+        'string',
+        '解析器必须返回字符串本身（变成 Promise 就是"证据静默不落盘"那个故障）',
+      );
+      assert.equal(resolved, dir, '会话没有 cwd 时回退到配置声明的 /work 挂载');
     } finally {
       await mounted.dispose();
     }

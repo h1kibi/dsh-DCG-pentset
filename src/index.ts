@@ -592,6 +592,16 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
       ...(runtime.sandbox.mounts === undefined ? {} : { sandboxMounts: runtime.sandbox.mounts }),
       ...(mountPreset === undefined ? {} : { mountPreset }),
       ...(presetId === undefined ? {} : { presetId }),
+      // 记忆索引状态（2026-10-11）：会话简报里如实写「本作业索引里现在有没有可检索内容」，
+      // 免得模型先用一次 `memory_search` 撞墙才知道。
+      //
+      // 作用域必须由这里给：`memory_chunks` 是 FORCE RLS 表，在租户级作用域下**静默返回
+      // 零行**——那会把「有内容」误报成「0 分块」，正好是本探针要消灭的那种假事实。
+      memoryIndex: (engagementId: string) =>
+        composed.rls.run(
+          { engagementId },
+          () => composed.memoryQuery.memoryIndexFacts(engagementId),
+        ),
     }),
     // 会话即 intake 的审计归属：Agent 在对话里开作业时没有控制台 CallContext，
     // 由这里注入部署声明的身份（与 config.operator 同一来源）。

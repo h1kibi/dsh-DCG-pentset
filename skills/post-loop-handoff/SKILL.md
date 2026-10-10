@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, 本插件状态机设计（回环与范围修订）, NIST SP 800-115]
-  smoked: "沙箱实测@c31de6c1070e：5 块原文照跑通过（jq -s 合并 boundary+cleanup、新未知区域候选列 in-scope 两条、判定信号计数 new_assets=1 unresolved=1、范围修订点骨架出 asset/source、交接清单四类键就位）；观察：步骤 2 取 verdict=in-scope 而回环信号 A 取 out-of-scope，口径相反——越界的 172.30.0.2:8080 反而不进步骤 2 输出；缺 verdict 的条目对 2/3 两块均不可见（需人读原始台账）"
+  smoked: "沙箱实测@eeaf87926df5：5 块原文照跑通过（jq -s 合并 boundary+cleanup、新未知区域候选列 in-scope 两条、判定信号计数 new_assets=1 unresolved=1、范围修订点骨架出 asset/source、交接清单四类键就位）；观察：步骤 2 取 verdict=in-scope 而回环信号 A 取 out-of-scope，口径相反——越界的 172.30.0.2:8080 反而不进步骤 2 输出；缺 verdict 的条目对 2/3 两块均不可见（需人读原始台账）"
 ---
 
 # 回环与交接（post-loop-handoff）

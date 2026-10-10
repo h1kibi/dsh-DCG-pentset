@@ -34,6 +34,9 @@ import type {
 } from '../contracts.ts';
 import { DEFAULTS } from '../contracts.ts';
 import { evidenceRelPath, writeEvidence } from './evidence-sink.ts';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { DEFAULT_MOUNT_CONTAINER_PATH } from '../execution/docker-sandbox.ts';
 import { PHASE_ORDER } from '../workflow/phases.ts';
 // 结构化动作的技巧表搬到了 execution/techniques.ts（提示词与测试共用同一份），
 // 这里再导出一次，既有调用点不必改。
@@ -57,6 +60,30 @@ export interface WorkerToolDeps {
    * （没挂载时连 `pentest_workdir` 都是 `no_roots`，那是同一个事实）。
    */
   readonly evidenceRoot?: string;
+  /**
+   * 把刚落盘的证据**登记为 artifact**（2026-10-11 操作者诉求 #5）。
+   *
+   * 为什么必须有写入方：报告的 `source_refs` 认 `artifact:<uuid>`，而在此之前
+   * `pentest.artifacts` **全仓没有任何 INSERT**（与"findings 全仓没有写入方"同一类缺口）——
+   * 模型永远拿不到 artifact id，只能把文件路径当纯文本写进报告，人复核得自己翻目录。
+   *
+   * 省略该端口 = 不登记（工具照常返回落盘路径；返回到字段里会如实说明没有 artifact id）。
+   */
+  readonly recordEvidenceArtifact?: (input: {
+    readonly workerSessionId: string;
+    /** 宿主上的绝对路径（人复核用；也是 `readArtifact` 的 storageRef）。 */
+    readonly storagePath: string;
+    /** 容器里的对应路径（模型写命令时用）。 */
+    readonly containerPath: string;
+    readonly mediaType: string;
+    readonly byteSize: number;
+    readonly contentHash: string;
+    readonly purpose: string;
+    readonly targetSelector: string;
+    /** 归属解析用的目标线索（**精确等值**匹配 `assets.canonical_target`，不做模糊匹配）。 */
+    readonly targetHints: readonly string[];
+    readonly toolRunId?: string;
+  }) => Promise<{ readonly artifactId: string }>;
   /**
    * **按会话**的证据落盘根（2026-10-11）。与容器 argv / 简报 / `pentest_workdir` **同源**：
    * 会话 cwd 覆盖 `/work` 时，证据也必须落到同一处——否则 `.txt`（宿主侧写）与 `.xml/.json`
@@ -126,6 +153,15 @@ export interface WorkerToolDeps {
      * `skipped` 只统计**空标题**这类无法成行的条目——原始条目仍在 `worker_reports.payload_json`。
      */
     findings: { written: number; skipped: number };
+    /**
+     * `mode: 'append'` 时的合并信息（基底报告 + 合并后各数组分段的条数）。缺省 = 整份替换。
+     * 模型据此确认"我补的那条真的进去了"，而不是靠"我发出去了"推断。
+     */
+    merged?: {
+      readonly mode: 'append';
+      readonly baseReportId: string;
+      readonly sections: Readonly<Record<string, number>>;
+    };
   }>;
   /**
    * 写入本轮状态便签（§6.2.2）。`leaseGeneration` 与报告同口径：写入必须绑定世代。
@@ -231,6 +267,11 @@ export interface MemorySearchResult {
     readonly citation: string;
   }[];
   readonly indexWatermark: number;
+  /**
+   * 零命中/降级时的**诊断说明**（运行期一直返回它，类型里此前漏了——测试因此报了三个版本的
+   * "Property 'note' does not exist"，而那是类型在说谎，不是测试写错）。
+   */
+  readonly note?: string;
 }
 
 export interface MemoryRecord {
@@ -407,7 +448,11 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       source_refs: {
         type: 'array',
         items: { type: 'string' },
-        description: '证据引用：memory:<uuid> / artifact:<uuid> / tool_run:<uuid>（有就直接引用，别复述）',
+        description:
+          '证据引用：memory:<uuid> / artifact:<uuid> / tool_run:<uuid>（有就直接引用，别复述）。' +
+          '`artifact:<uuid>` 取自 `pentest_exec` 开启 `save_stdout_as_evidence` 后返回的 `artifact_ref`' +
+          '（2026-10-11 起落盘的证据会自动登记）——**有了它就优先引它**：人复核时能按 id 取回原文，' +
+          '而路径只是纯文本',
       },
     },
   } as const;
@@ -451,6 +496,47 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
 }
 
 
+/**
+ * 证据登记（诉求 #5）：算好哈希与字节数，交给注入的端口去写 `pentest.artifacts`。
+ *
+ * **绝不把一次已经执行完的动作变成失败**（与 `writeEvidence` 同一条纪律）：登记失败只回一句
+ * 原因，文件仍在磁盘上、输出仍在返回值里。但**不静默**——原因会进返回值。
+ */
+async function registerEvidenceArtifact(
+  deps: WorkerToolDeps,
+  input: {
+    readonly workerSessionId: string;
+    readonly storagePath: string;
+    readonly containerPath: string;
+    readonly stdout: string;
+    readonly purpose: string;
+    readonly targetSelector: string;
+    readonly targetHints: readonly string[];
+    readonly toolRunId?: string;
+  },
+): Promise<{ readonly artifactId?: string; readonly error?: string }> {
+  const record = deps.recordEvidenceArtifact;
+  if (record === undefined) return {}; // 未接端口的部署：只是没有 artifact id，不是错误
+  try {
+    const bytes = Buffer.from(input.stdout, 'utf8');
+    const { artifactId } = await record({
+      workerSessionId: input.workerSessionId,
+      storagePath: input.storagePath,
+      containerPath: input.containerPath,
+      mediaType: 'text/plain; charset=utf-8',
+      byteSize: bytes.byteLength,
+      contentHash: createHash('sha256').update(bytes).digest('hex'),
+      purpose: input.purpose,
+      targetSelector: input.targetSelector,
+      targetHints: input.targetHints,
+      ...(input.toolRunId === undefined ? {} : { toolRunId: input.toolRunId }),
+    });
+    return { artifactId };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
   const submitReport = defineTool({
     name: 'pentest_submit_report',
     description:
@@ -469,10 +555,22 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       objective: { type: 'string', required: true, description: '本次任务目标（不可变快照）。**此字段必须作为顶层参数传递，不要只放在 payload 里**；payload.objective 仅用于兼容整份照抄设计示例的情况' },
       summary: { type: 'string', required: true, description: '面向人的简短总结' },
       status_note: {
-        type: 'string',
-        description: `可选短状态便签（≤${DEFAULTS.statusNoteMaxChars} 字符），供控制台列表扫描`,
+        // 容忍 null（= 不填）：模型把"没有"写成 null 是常态，不该为它重发整份报告。
+        oneOf: [{ type: 'string' }, { type: 'null' }],
+        description: `可选短状态便签（≤${DEFAULTS.statusNoteMaxChars} 字符），供控制台列表扫描；不填或写 null 都可以`,
+      },
+      mode: {
+        oneOf: [{ type: 'string', enum: ['replace', 'append'] }, { type: 'null' }],
+        description:
+          '载荷模式。replace（默认）：本份 payload 整份替换；append：在**本会话本次尝试的当前报告载荷**上合并' +
+          '本份 payload（数组**追加并按深等值去重**、对象递归合并、其余由新值覆盖）——补几条事实/候选时用它，' +
+          '不必整份重发（一份真实报告可能几 KB）。返回里带 `merged` 与各分段的条数。',
       },
       payload: {
+        // **不容忍 `null`**（没有载荷请**省略该字段**）：`oneOf` 会把 payload 内部的**细分违规**
+        // 塌成一条「must match exactly one oneOf branch」，而"一次说清哪里错"正是操作者的直接诉求
+        // （2026-10-11 实测：普通对象分支给出 facts[0]/facts[1] 两条，oneOf 分支只给一条泛化信息）。
+        // 浅层标量（`status_note`/`mode`）没有这个代价，才用 `oneOf` 容忍 null。
         type: 'object',
         additionalProperties: false,
         description:
@@ -537,19 +635,19 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
           // 重新变成静默丢弃；这里逐项列出设计里出现过的名字，拼错的名字仍然会被拒。
           // 这几个字段有些与工具入参同名（`status`/`objective`/`summary`/`status_note`）：
           // 它们作为入参是必填/可选的兄弟字段，模型按设计示例整份塞进 `payload` 时不该被拒。
-          schema_version: { type: 'integer', description: '报告 schema 版本（设计 §7.1 示例为 1）' },
-          status: { type: 'string', enum: ['report_ready', 'blocked'], description: '与入参 status 同义；整份照抄设计示例时会出现' },
-          objective: { type: 'string', description: '**顶层必填**；如果整份照抄设计示例到 payload 里，这里会重复' },
-          summary: { type: 'string', description: '与入参 summary 同义' },
-          status_note: { type: 'string', description: '与入参 status_note 同义（≤200 字符）' },
-          completed: { type: 'array', items: { type: 'string' }, description: '已完成事项清单' },
-          revision: { type: 'integer', description: '报告版本号（派生对象版本化管理，§7.1）' },
-          finished_at: { type: 'string', description: '完成时间（ISO 字符串）' },
+          schema_version: { type: 'json', description: '报告 schema 版本（设计 §7.1 示例为 1）。**不采信**：可以是任意值，包括 null' },
+          status: { type: 'json', description: '与入参 status 同义；整份照抄设计示例时会出现。**不采信**：可以是任意值，包括 null' },
+          objective: { type: 'json', description: '**顶层必填**；整份照抄设计示例到 payload 里会重复。**不采信**：可以是任意值，包括 null' },
+          summary: { type: 'json', description: '与入参 summary 同义。**不采信**：可以是任意值，包括 null' },
+          status_note: { type: 'json', description: '与入参 status_note 同义（≤200 字符）。**不采信**：可以是任意值，包括 null' },
+          completed: { type: 'json', description: '已完成事项清单。**不采信**：可以是任意值，包括 null' },
+          revision: { type: 'json', description: '报告版本号（派生对象版本化管理，§7.1）。**不采信**：可以是任意值，包括 null' },
+          finished_at: { type: 'json', description: '完成时间（ISO 字符串）。**不采信**：可以是任意值，包括 null' },
           // 归属字段：设计 §7.1 的示例里有，**只接收不采信**——真实归属由服务端从执行身份推导
           // （§4.2：不信任模型传入的会话标识）。列出来是为了让「照抄设计示例」能通过校验。
-          engagement_id: { type: 'string', description: '仅接收；归属由服务端推导，不必填也不被采信' },
-          agent_session_id: { type: 'string', description: '仅接收；同上，服务端不采信入参' },
-          phase: { type: 'string', enum: [...PHASE_ORDER], description: '仅接收；阶段由会话决定，不必填' },
+          engagement_id: { type: 'json', description: '**只接收不采信**：归属由服务端从执行身份推导（§4.2）。可以是任意值，**包括 null**——写 null 或不写都行，别为它重发整份' },
+          agent_session_id: { type: 'json', description: '**只接收不采信**：同上，服务端不采信入参。可以是任意值，包括 null' },
+          phase: { type: 'json', description: '**只接收不采信**：阶段由会话决定。可以是任意值，包括 null' },
         },
       },
     },
@@ -557,54 +655,56 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
     async execute(args, exec) {
       const dshSessionId = dshSessionIdOf(exec);
       const session = await workerSessionContextOf(deps, dshSessionId);
-      const note = args.status_note;
+      // `status_note: null` 与不填同义（schema 用 oneOf 容忍 null，见上面的说明）。
+      const note = typeof args.status_note === 'string' ? args.status_note : undefined;
       return toJson(await deps.submitReport({
-        workerSessionId: session.workerSessionId,
-        leaseGeneration: session.leaseGeneration,
-        report: {
-          status: args.status,
-          objective: args.objective,
-          summary: args.summary,
-          ...(note === undefined ? {} : { statusNote: note.slice(0, DEFAULTS.statusNoteMaxChars) }),
-          payload: args.payload ?? {},
-        },
-      }));
+            workerSessionId: session.workerSessionId,
+            leaseGeneration: session.leaseGeneration,
+            report: {
+              status: args.status,
+              objective: args.objective,
+              summary: args.summary,
+              ...(note === undefined ? {} : { statusNote: note.slice(0, DEFAULTS.statusNoteMaxChars) }),
+              payload: args.payload ?? {},
+              ...(args.mode === undefined || args.mode === null ? {} : { mode: args.mode }),
+            },
+          }));
     },
   });
-  const scopeTargetSchema = {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      kind: {
-        type: 'string',
-        enum: ['domain', 'ip', 'cidr', 'url', 'asset-label'],
-        required: true,
-        description: '范围条目类型',
-      },
-      value: { type: 'string', required: true, description: '域名、IP、网段或 URL' },
-      protocols: {
-        type: 'array',
-        items: { type: 'string', enum: ['tcp', 'udp', 'icmp'] },
-        required: true,
-        description: '允许的协议集合',
-      },
-      ports: {
-        type: 'array',
-        required: true,
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            from: { type: 'integer', required: true, description: '端口区间起点（0-65535）' },
-            to: { type: 'integer', required: true, description: '端口区间终点（0-65535）' },
-          },
-        },
-        description: '端口区间集合；每项为 from/to 对象',
-      },
-      wildcardSubdomain: { type: 'boolean', description: '是否显式匹配一级子域' },
+const scopeTargetSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['domain', 'ip', 'cidr', 'url', 'asset-label'],
+      required: true,
+      description: '范围条目类型',
     },
-  } as const;
-  const requestScopeConfirmation = defineTool({
+    value: { type: 'string', required: true, description: '域名、IP、网段或 URL' },
+    protocols: {
+      type: 'array',
+      items: { type: 'string', enum: ['tcp', 'udp', 'icmp'] },
+      required: true,
+      description: '允许的协议集合',
+    },
+    ports: {
+      type: 'array',
+      required: true,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          from: { type: 'integer', required: true, description: '端口区间起点（0-65535）' },
+          to: { type: 'integer', required: true, description: '端口区间终点（0-65535）' },
+        },
+      },
+      description: '端口区间集合；每项为 from/to 对象',
+    },
+    wildcardSubdomain: { type: 'boolean', description: '是否显式匹配一级子域' },
+  },
+} as const;
+const requestScopeConfirmation = defineTool({
     name: 'pentest_request_scope_confirmation',
     description:
       '提交一个供人类确认的目标与动作范围方案。当前 intake 会话只负责问清范围，' +
@@ -805,7 +905,10 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
           '返回值里给出一行 `evidence: <相对路径>`。**建议凡是产出证据的命令都开**：容器是一次性的，' +
           '不开就只能靠你自己在命令里 tee（忘一条那条原文就永久没了）。它只是**额外落盘**，不改命令本身。' +
           '**超时/中止时也落盘**（写已捕获的部分），此时返回值带 `partial_output: true`——' +
-          '那半截输出往往是唯一线索，别丢掉。',
+          '那半截输出往往是唯一线索，别丢掉。' +
+          '落盘成功后还会**登记成证据**：返回值带 `artifact_id`/`artifact_ref`，报告的 `source_refs` 直接引它' +
+          '（`artifact:<uuid>`）；登记失败会带 `evidence_failed`/`evidence_artifact_error` **说出来**，' +
+          '不会静默少一条证据链。',
       },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
@@ -862,7 +965,19 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       // 一条跑了 289 秒的命令，前 288 秒的产出全部不可回收，人只能重跑（等于对目标再打一遍）。
       // 宿主侧的捕获器本来就把已读到的 stdout 保留在 `mapOutcome` 的返回里（`timed_out`/`cancelled`
       // 两个分支都带 `stdout`），所以这里只需把落盘条件放宽到"有结果就落"。
-      let evidenceNote: string | null = null;
+      // 落盘结果结构化（2026-10-11 操作者实测 P0）：此前只回一行 `evidence: …`，成功与失败
+      // **同形**（都是同一句话的位置），而失败恰恰是这个功能最不能接受的形态——它的全部价值就是
+      // "忘了 tee 时的安全网"。现在失败带 `evidence_failed: true` 并说明输出此刻在哪。
+      let evidence:
+        | {
+            readonly ok: boolean;
+            readonly detail: string;
+            readonly hostPath?: string;
+            readonly artifactId?: string;
+            /** 登记失败的原因（文件已落盘，但 artifact 行没写成）：**开口**而不是吞掉。 */
+            readonly artifactError?: string;
+          }
+        | null = null;
       // 先收窄再取 result：`blocked` 变体没有 `result` 字段（类型系统盯着这一点）。
       const executed = outcome.kind === 'blocked' ? null : outcome;
       const resultView = executed?.result as
@@ -872,20 +987,46 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       if (args.save_stdout_as_evidence === true && outcome.kind !== 'blocked') {
         // 优先**按会话**解析（与容器 argv/简报/工具同源）；无该钩子时回退静态配置。
         const root = deps.evidenceRootFor?.(workerSessionId) ?? deps.evidenceRoot;
+        const stdout = resultView?.stdout;
         if (root === undefined) {
-          evidenceNote = 'evidence: 未挂载工作目录，无法落盘（见 pentest_workdir 的 no_roots）';
-        } else {
-          const stdout = resultView?.stdout;
-          if (typeof stdout === 'string' && stdout.length > 0) {
-            const written = writeEvidence(
-              root,
-              evidenceRelPath({ targetSelector, purpose: args.purpose, at: new Date() }),
+          evidence = {
+            ok: false,
+            detail: '未挂载工作目录（见 pentest_workdir 的 no_roots）：本次输出只在返回值与 tool_run 记录里',
+          };
+        } else if (typeof stdout === 'string' && stdout.length > 0) {
+          const relPath = evidenceRelPath({ targetSelector, purpose: args.purpose, at: new Date() });
+          const written = writeEvidence(root, relPath, stdout);
+          if (written.ok) {
+            const hostPath = join(root, relPath);
+            // 登记为 artifact（见 `recordEvidenceArtifact` 的说明）：只多一条数据库行，
+            // 却让报告的证据链从"tool_run 一条腿"变成"可被 readArtifact 取回的一条腿"。
+            const registered = await registerEvidenceArtifact(deps, {
+              workerSessionId,
+              storagePath: hostPath,
+              containerPath: `${DEFAULT_MOUNT_CONTAINER_PATH}/${relPath}`,
               stdout,
-            );
-            evidenceNote = written.ok ? `evidence: ${written.detail}` : `evidence: ${written.detail}`;
-          } else if (partial) {
-            evidenceNote = 'evidence: 本次没有捕获到任何 stdout（命令在产出前就被终止）';
+              purpose: args.purpose,
+              targetSelector,
+              targetHints: [
+                ...new Set([
+                  ...(outcome.plan.resolvedAddresses ?? []),
+                  outcome.plan.normalizedTarget,
+                ]),
+              ].filter((hint) => hint !== ''),
+              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+            });
+            evidence = {
+              ok: true,
+              detail: written.detail,
+              hostPath,
+              ...(registered.artifactId === undefined ? {} : { artifactId: registered.artifactId }),
+              ...(registered.error === undefined ? {} : { artifactError: registered.error }),
+            };
+          } else {
+            evidence = written;
           }
+        } else if (partial) {
+          evidence = { ok: false, detail: '本次没有捕获到任何 stdout（命令在产出前就被终止）' };
         }
       }
       return toJson(
@@ -899,7 +1040,23 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
               // **stderr 非空就自己开口**（见 `stderrMarker` 的说明：空 stdout + 被管道掩掉的
               // 退出码 = 看起来像"干净的阴性结果"）。
               ...stderrMarker(resultView),
-              ...(evidenceNote === null ? {} : { evidence: evidenceNote.replace(/^evidence: /, '') }),
+              ...(evidence === null
+                ? {}
+                : evidence.ok
+                  ? {
+                      evidence: evidence.detail,
+                      // 两种路径都给：容器路径是模型写命令时用的，宿主路径是人复核时用的。
+                      evidence_container_path: `${DEFAULT_MOUNT_CONTAINER_PATH}/${evidence.detail}`,
+                      ...(evidence.hostPath === undefined ? {} : { evidence_host_path: evidence.hostPath }),
+                      // 证据链：报告写 `source_refs: ["artifact:<id>"]` 用它（诉求 #5）。
+                      ...(evidence.artifactId === undefined
+                        ? {}
+                        : { artifact_id: evidence.artifactId, artifact_ref: `artifact:${evidence.artifactId}` }),
+                      ...(evidence.artifactError === undefined
+                        ? {}
+                        : { evidence_artifact_error: evidence.artifactError }),
+                    }
+                  : { evidence_failed: true, evidence: evidence.detail }),
               ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
             },
       );
@@ -1007,6 +1164,21 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
           'content_discover 的基准路径前缀（空串或省略 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会归一）。' +
           '在 /api/ 这类子路径下枚举时必须给，否则只会打根路径；不得含 `..` 段或查询串',
       },
+      paths: {
+        type: 'string',
+        description:
+          'http_probe 的**批量路径状态复核**（≤60 条，逗号分隔，每条形如 `/x/y`；**拒绝**含 scheme/主机/空格的串——' +
+          '那是把"路径"当"目标"用，会让范围记账失效）。给了它只对每条发 GET，逐条返回 `path status size content_type` ' +
+          '+ 汇总 `paths=N ok=M no_response=K`，并用不可命中的随机路径取软 404 基准标注同形命中。' +
+          '**发现**用 collect=endpoints，**复核**才用它（2026-10-11 操作者诉求：别再退回手写 bash for + curl）',
+      },
+      entry_range: {
+        type: 'string',
+        description:
+          'content_discover 的**字典分段**（`A-B`，1 基双闭区间，如 `1-2000`；省略 = 整本字典）。' +
+          '大字典（common_dirs≈4700 行）在单条命令墙钟内跑不完：用分段多次调用拼完，每次 summary 自证 ' +
+          '`entry_range/attempted/truncated/remaining`，超可调度量时直接写"需要分 N 段"',
+      },
       depth: { type: 'integer', description: 'web_crawl 深度（1-3）' },
       max_pages: { type: 'integer', description: 'web_crawl 页数上限（1-500）' },
       record_types: { type: 'string', description: 'dns_enum 的记录类型（逗号分隔，最多 8 个）' },
@@ -1042,6 +1214,8 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
         ...(args.wordlist === undefined ? {} : { wordlist: args.wordlist }),
         ...(args.extensions === undefined ? {} : { extensions: args.extensions }),
         ...(args.path === undefined ? {} : { path: args.path }),
+        ...(args.paths === undefined ? {} : { paths: args.paths }),
+        ...(args.entry_range === undefined ? {} : { entry_range: args.entry_range }),
         ...(args.depth === undefined ? {} : { depth: args.depth }),
         ...(args.max_pages === undefined ? {} : { maxPages: args.max_pages }),
         ...(args.record_types === undefined ? {} : { recordTypes: args.record_types }),
@@ -1250,7 +1424,8 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       '而本工具照常可用——读作业资料（资产清单、既有报告、目标说明、人类放进去的任何文件）就该用它。' +
       `op：\`list\` 列目录、\`read\` 读文本（超 ${Math.round(WORKDIR_READ_LIMIT_BYTES / 1024)}KiB 会截断并标注）、` +
       '`write` 写文本文件（会建父目录）、`search` 在目录内**递归检索正则**（返回文件/行号/该行，' +
-      '适合在大量归档文档里定位——比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
+      '外加**命中文件清单** `files`（路径 + 修改时间 + 命中行数，**新的在前**）——归档目录里考古时' +
+      '先看最近动过的那几份，比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
       'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；写入新文件时若**可写根不止一个**' +
       '才必须用容器路径（如 `/work/...`）消歧——只有一个可写根（其余是只读）时相对路径直接落到它。' +
       '**`/work` 跟随本会话在宿主上的工作目录**（不是配置里的固定目录）；实际生效的挂载根以 `op=list` 返回的 `roots` 为准**（每次调用都会附加）。' +

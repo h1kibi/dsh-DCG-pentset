@@ -1992,6 +1992,15 @@ export interface WorkerReportInput {
   readonly summary: string;
   readonly statusNote?: string;
   readonly payload: unknown;
+  /**
+   * 载荷模式（2026-10-11 操作者诉求 #2）：`replace`（默认）整份替换；`append` 在**本会话本次
+   * 尝试的当前报告载荷**上合并本次增量（数组追加去重、对象递归合并、其余覆盖）。
+   *
+   * 为什么要有它：一份真实报告几 KB（操作者那次 21 条 facts + 5 条候选），补几条就得整份重发，
+   * 每次几千 token。追加模式下新旧两份载荷**都留在** `worker_reports`（新行 supersede 旧行），
+   * 账本事件记的是**合并后的有效载荷** + 合并来源，所以审计上没有任何东西被替代掉。
+   */
+  readonly mode?: 'replace' | 'append';
 }
 
 export interface HandoffDraftRequest {

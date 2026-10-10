@@ -37,6 +37,7 @@ import type {
 } from '../contracts.ts';
 import { DEFAULTS, LIVE_SESSION_STATUSES, isPhase, ACTION_CLASSES } from '../contracts.ts';
 import { toOrTsQuery } from './text-projection.ts';
+import { mergeReportPayload, reportPayloadSectionCounts } from './report-payload-merge.ts';
 // 会话准入 + 范围集合 + RLS 查询/事务的唯一入口（C3；与 pg-memory-query 共用机制）。
 import {
   admitWorkerSession,
@@ -1338,15 +1339,91 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
     };
   }
 
+  // ── 3b. 证据登记（§9.2 artifacts；2026-10-11 操作者诉求 #5） ──
+
+  /**
+   * 把宿主上刚落盘的证据登记成一行 artifact，返回标识。
+   *
+   * **为什么由此处写**：在这之前 `pentest.artifacts` **全仓没有任何 INSERT**（与"findings 全仓
+   * 没有写入方"同一类缺口，外部审计抓到过前者）——于是报告的 `source_refs: ["artifact:<uuid>"]`
+   * 永远无法被满足，模型只能把文件路径当纯文本写进报告，人复核得自己翻目录。
+   *
+   * **资产归属**（§8.6 写入侧义务）：按 `assets.canonical_target` 的**精确等值**匹配目标线索
+   * （绝不自动创建资产、绝不做模糊匹配——归属错会把内容带进或带出范围过滤，比解析不到严重）。
+   * 解析不到时 `asset_ids = '{}'`（可见性公式放行），并在 metadata 里如实记 `asset_resolution`
+   * 与线索，让人能看出"这条没归到资产"，而不是让它看起来像"已知无归属"。
+   */
+  async recordEvidenceArtifact(
+    input: Parameters<NonNullable<WorkerToolDeps['recordEvidenceArtifact']>>[0],
+  ): Promise<{ artifactId: string }> {
+    return this.#withTransaction(input.workerSessionId, async (tx) => {
+      const session = (
+        await tx.query<{ engagement_id: string }>(
+          'SELECT engagement_id FROM pentest.worker_sessions WHERE id = $1::uuid',
+          [input.workerSessionId],
+        )
+      ).rows[0];
+      if (session === undefined) {
+        throw refuse(
+          'lease_required',
+          `会话 ${input.workerSessionId} 不存在或没有 engagement 绑定`,
+          '由控制台创建 Worker 会话后再登记证据',
+        );
+      }
+      const hints = [...new Set([input.targetSelector, ...input.targetHints])].filter((hint) => hint !== '');
+      const assetRows =
+        hints.length === 0
+          ? { rows: [] as readonly { id: string }[] }
+          : await tx.query<{ id: string }>(
+              `SELECT id FROM pentest.assets
+                WHERE engagement_id = $1::uuid AND canonical_target = ANY($2::text[])
+                ORDER BY canonical_target, id`,
+              [session.engagement_id, hints],
+            );
+      const assetIds = [...new Set(assetRows.rows.map((row) => row.id))];
+      const metadata = {
+        purpose: input.purpose,
+        targetSelector: input.targetSelector,
+        containerPath: input.containerPath,
+        assetResolution: assetIds.length > 0 ? 'matched' : hints.length === 0 ? 'no_target' : 'no_match',
+        targetHints: hints,
+      };
+      const inserted = await tx.query<{ id: string }>(
+        `INSERT INTO pentest.artifacts
+           (engagement_id, worker_session_id, tool_run_id, kind, media_type, byte_size,
+            storage_kind, storage_path, content_hash, encrypted, classification, truncated,
+            source_ref, asset_ids, metadata)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, 'evidence_stdout', $4, $5,
+                 'file', $6, $7, false, 'engagement', false, $8, $9::uuid[], $10::jsonb)
+         RETURNING id`,
+        [
+          session.engagement_id,
+          input.workerSessionId,
+          input.toolRunId ?? null,
+          input.mediaType,
+          input.byteSize,
+          input.storagePath,
+          input.contentHash,
+          input.containerPath,
+          assetIds,
+          JSON.stringify(metadata),
+        ],
+      );
+      const row = inserted.rows[0];
+      if (row === undefined) {
+        throw refuse('classification_rejected', '证据登记未返回标识', '重试；持续失败时人工登记证据');
+      }
+      return { artifactId: row.id };
+    });
+  }
+
   // ── 4. 提交报告（§7.1 / §13.4 / §9.2） ──
 
   async submitReport(
     input: Parameters<WorkerToolDeps['submitReport']>[0],
-  ): Promise<{
-    reportId: string;
-    stateVersion: number;
-    findings: { written: number; skipped: number };
-  }> {
+    // 返回类型**从接口取**（不再手抄一份）：此前实现里加了 `merged` 而这里的注解没跟，
+    // 于是"实现有、类型没有"——调用方（与测试）看不到 `merged`，一条真行为被类型藏起来。
+  ): Promise<Awaited<ReturnType<WorkerToolDeps['submitReport']>>> {
     const report = input.report;
     return this.#withTransaction(input.workerSessionId, async (tx) => {
       const locked = await tx.query<SessionRow & {
@@ -1433,14 +1510,42 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
         throw refuse('lease_expired', '提交报告所需的租约已过期', '由控制台重新签发租约后再提交');
       }
 
+      // ── 载荷模式：append 在**当前**报告载荷上合并（2026-10-11 操作者诉求 #2）──
+      //
+      // 基底取"同一会话、同一 attempt、尚未被取代"的那一行 ⇒ 追加永远接在**人类当前看到的那一版**
+      // 后面，而不是某个历史版本。旧行随后被本行 supersede（两份载荷都留在 `worker_reports`）。
+      // 为什么不要求模型整份重发：一份真实报告几 KB（操作者那次 21 条 facts + 5 条候选），
+      // 补几条就重发一次是几千 token；而合并语义（数组追加去重/对象递归/其余覆盖）是确定的。
+      let mergeBaseId: string | null = null;
+      let effectivePayload: unknown = report.payload ?? {};
+      if (report.mode === 'append') {
+        const base = await tx.query<{ id: string; payload_json: unknown }>(
+          `SELECT id, payload_json
+             FROM pentest.worker_reports
+            WHERE worker_session_id = $1::uuid AND attempt = $2::int AND superseded_by IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [input.workerSessionId, session.attempt],
+        );
+        const baseRow = base.rows[0];
+        if (baseRow === undefined) {
+          throw refuse(
+            'classification_rejected',
+            'append 模式需要本会话本次尝试已有一份报告（没有基底可追加）',
+            '先用 mode=replace 提交一份，或本次也用 replace',
+          );
+        }
+        mergeBaseId = baseRow.id;
+        effectivePayload = mergeReportPayload(baseRow.payload_json ?? {}, report.payload ?? {});
+      }
       const newId = randomUUID();
-      const payloadJson = JSON.stringify(report.payload ?? {}) ?? '{}';
+      const payloadJson = JSON.stringify(effectivePayload) ?? '{}';
       const contentHash = sha256Hex(
         JSON.stringify({
           status: report.status,
           objective: report.objective,
           summary: report.summary,
-          payload: report.payload ?? {},
+          payload: effectivePayload,
         }),
       );
       // 未提供便签时用报告摘要兜底，保证等待人工列表始终有扫描线索；显式空白仍视为
@@ -1489,7 +1594,7 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
       // 状态的结论）。只投影能一一对应的列：模型侧的 `evidence_refs`/`affected_assets` 是字符串
       // （"标识或地址"），表里是 uuid[]，**不做猜测性转换**——原始条目始终留在
       // `worker_reports.payload_json` 与账本事件里，信息不丢，只是未结构化。
-      const reportPayload: ReportPayload = report.payload ?? {};
+      const reportPayload: ReportPayload = effectivePayload as ReportPayload;
       const findingItems = [...(reportPayload.findings ?? []), ...(reportPayload.candidate_findings ?? [])];
       // 与 worker_reports 同一条纪律：**先让位、后插入**（本次提交取代本会话此前仍在待处置
       // 状态的结论）。"待处置"的唯一定义是 `isUndisposed`（从未有处置记录），**不是**行状态：
@@ -1577,7 +1682,12 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
       const version = engagementUpdate.rows[0].state_version;
       if (this.#ledger !== undefined) {
         const reportedAt = new Date();
-        const reportEventPayload = workerReportEventPayload({ reportId: newId, report });
+        const reportEventPayload = workerReportEventPayload({
+          reportId: newId,
+          // 记**合并后的有效载荷**（账本里那份就是"本报告"，不是增量）。
+          report: { ...report, payload: effectivePayload },
+          ...(mergeBaseId === null ? {} : { mergedFrom: mergeBaseId }),
+        });
         const noteEventPayload = {
           note,
           noteAt: reportedAt.toISOString(),
@@ -1630,6 +1740,15 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
         reportId: newId,
         stateVersion: Number(version),
         findings: { written: findingsWritten, skipped: findingsSkipped },
+        ...(mergeBaseId === null
+          ? {}
+          : {
+              merged: {
+                mode: 'append' as const,
+                baseReportId: mergeBaseId,
+                sections: reportPayloadSectionCounts(effectivePayload),
+              },
+            }),
       };
     });
   }
@@ -2122,6 +2241,12 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
 export function workerReportEventPayload(input: {
   readonly reportId: string;
   readonly report: WorkerReportInput;
+  /**
+   * `mode: 'append'` 时的基底报告 id。**必须记进账本**：`payload` 是合并后的有效载荷，
+   * 只看它无法分辨"这次是追加"还是"整份重发"，而这两者在审计上含义不同（前者意味着
+   * 之前那份仍在生效且被并入了）。缺省 = 整份替换。
+   */
+  readonly mergedFrom?: string;
 }): Readonly<Record<string, unknown>> {
   return {
     reportId: input.reportId,
@@ -2129,5 +2254,6 @@ export function workerReportEventPayload(input: {
     objective: input.report.objective,
     summary: input.report.summary,
     payload: input.report.payload ?? {},
+    ...(input.mergedFrom === undefined ? {} : { mergedFrom: input.mergedFrom }),
   };
 }

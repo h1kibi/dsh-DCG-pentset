@@ -777,13 +777,22 @@ function isConnectionFailure(error: unknown): boolean {
  * 主执行路径整体不可用，而错误文案会指向「会话不存在」，与实际原因无关。
  *
  * 逐个人工包装每个方法是可行的，但那样「新加的工具忘了包」会再次静默失效。
- * 这里按 `WorkerToolDeps` 的统一形状（每个方法首个入参都带 `workerSessionId`）做一次
+ * 这里按 `WorkerToolDeps` 的统一形状（**工具方法**首个入参都带 `workerSessionId`）做一次
  * 结构性包装，让这条不变量只写一遍。
  *
- * 入参里没有 `workerSessionId` 时不套作用域：那是编程错误，交给下游的类型与准入
- * 检查暴露，而不是在这里猜一个会话。
+ * ── 函数依赖有两种，别混（2026-10-11 操作者实测 P0）──
+ *
+ * `WorkerToolDeps` 里除了工具方法还有**解析器**（如 `evidenceRootFor(会话)`：入参是字符串、
+ * 返回值是路径）。判别只有一条：入参是不是 `{workerSessionId}` 形状的对象。
+ *   - 是 ⇒ 工具方法，包进会话作用域；
+ *   - 否 ⇒ 解析器/辅助，**原样透传**（返回值形态不变）。
+ *
+ * 早先的实现把**每个**函数依赖都包成 `async`，于是 `evidenceRootFor` 的字符串返回值变成
+ * Promise，下游 `writeEvidence(root, …)` 拿到 Promise ⇒ `The "path" argument must be of type
+ * string. Received an instance of Promise` ⇒ 证据**静默不落盘**（而那个功能的全部价值就是
+ * "忘了 tee 时的安全网"）。所以包装器本身**不能是 async**：透传时必须保持原返回形态。
  */
-function scopeWorkerToolsBySession(
+export function scopeWorkerToolsBySession(
   deps: WorkerToolDeps,
   enter: (workerSessionId: string, work: () => Promise<unknown>) => Promise<unknown>,
 ): WorkerToolDeps {
@@ -797,12 +806,13 @@ function scopeWorkerToolsBySession(
       wrapped[name] = dep;
       continue;
     }
-    wrapped[name] = async (input: unknown) => {
-      const call = (): Promise<unknown> => dep(input);
+    wrapped[name] = (input: unknown) => {
       const workerSessionId = (input as { readonly workerSessionId?: unknown } | null | undefined)
         ?.workerSessionId;
-      if (typeof workerSessionId !== 'string' || workerSessionId.length === 0) return call();
-      return enter(workerSessionId, call);
+      // 非 `{workerSessionId}` 入参 ⇒ 解析器，**原样透传**（不得 async 化：那会把
+      // 返回值变成 Promise，见上面的说明）。
+      if (typeof workerSessionId !== 'string' || workerSessionId.length === 0) return dep(input);
+      return enter(workerSessionId, () => Promise.resolve(dep(input) as unknown));
     };
   }
   return wrapped as unknown as WorkerToolDeps;
@@ -1567,6 +1577,9 @@ function installWorkflow(input: {
           },
           // 证据落盘根：与上面同源（同一份视图）。
           evidenceRootFor: views.evidenceRootFor,
+          // 证据登记（§9.2 artifacts；诉求 #5）：落盘成功后写一行 artifact，让报告的
+          // `source_refs` 能用 `artifact:<uuid>`。此前 `pentest.artifacts` 全仓没有写入方。
+          recordEvidenceArtifact: pgTools.recordEvidenceArtifact.bind(pgTools),
         }),
   };
 

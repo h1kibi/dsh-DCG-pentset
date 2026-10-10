@@ -288,6 +288,22 @@ export interface WorkdirSearchResult {
   readonly filesScanned: number;
   readonly truncated: boolean;
   readonly skipped: readonly string[];
+  /**
+   * **命中文件清单**（路径 + 修改时间 + 命中行数），**新的在前**。
+   *
+   * 为什么要有它（2026-10-11 操作者建议）：作业目录里几百份证据文件，`matches` 是逐行的，
+   * 想知道"**最近**动过哪几份、哪份命中最密"得自己在几百行里数——而他正是靠在 254 个文件里
+   * 正则考古才把丢失的信息捞回来的。这个清单让模型先看最新那几份，不必先读全部命中行烧上下文。
+   */
+  readonly files: readonly WorkdirFileHit[];
+}
+
+/** 命中文件一行（`matches` 的按文件汇总）。 */
+export interface WorkdirFileHit {
+  readonly path: string;
+  /** 宿主上的修改时间（ISO，UTC）——排序与"最近动过"判断用。 */
+  readonly modifiedAt: string;
+  readonly matches: number;
 }
 
 export function searchWorkdir(
@@ -327,6 +343,7 @@ export function searchWorkdir(
     files.push(target.rel);
   }
   const matches: WorkdirMatch[] = [];
+  const fileHits = new Map<string, { readonly modifiedAt: string; matches: number }>();
   const skipped: string[] = [];
   let totalBytes = 0;
   let filesScanned = 0;
@@ -338,6 +355,7 @@ export function searchWorkdir(
     }
     const resolved = resolveInRoots(roots, target.root.containerPath.replace(/\/+$/, '') + '/' + rel);
     let buf: Buffer;
+    let modifiedAt = '';
     try {
       const st = statSync(resolved.abs);
       if (!st.isFile() || st.size > WORKDIR_SEARCH_MAX_FILE_BYTES) {
@@ -348,6 +366,7 @@ export function searchWorkdir(
         truncated = true;
         break;
       }
+      modifiedAt = new Date(st.mtimeMs).toISOString();
       buf = readFileSync(resolved.abs);
     } catch {
       skipped.push(rel);
@@ -364,6 +383,8 @@ export function searchWorkdir(
       const line = lines[i] ?? '';
       if (!regex.test(line)) continue;
       matches.push({ path: rel, line: i + 1, text: line.length > 400 ? `${line.slice(0, 400)}…` : line });
+      const hit = fileHits.get(rel);
+      fileHits.set(rel, { modifiedAt, matches: (hit?.matches ?? 0) + 1 });
       if (matches.length >= maxMatches) {
         truncated = true;
         break;
@@ -377,6 +398,10 @@ export function searchWorkdir(
     filesScanned,
     truncated,
     skipped: skipped.slice(0, 20),
+    // 新的在前：考古时的默认入口是"最近动过的那几份"。
+    files: [...fileHits.entries()]
+      .map(([path, hit]) => ({ path, modifiedAt: hit.modifiedAt, matches: hit.matches }))
+      .sort((a, b) => (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : b.modifiedAt < a.modifiedAt ? -1 : 1)),
   };
 }
 

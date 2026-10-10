@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Threat Modeling, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@c31de6c1070e：7 块原文照跑全通过（台账按正文结构先铺：2 条 0 引用、1 条缺 boundary、1 条 auth=unknown）：步骤 1 按 kind/ref/引用数计数并暴露 0 引用记录；步骤 2 入口/出口六列，缺列走 ?/unknown；步骤 3 列出 memory:1002/1003 待判定，只读核验原文 curl 打 fx-web 172.29.0.2:8080/index.html 得 HTTP/1.0 200 OK（exit 0），按判据 200 只证该路径匿名可达、不判入口免认证；步骤 4 数据流列出 boundary=?；步骤 5 点名 `svc:fx-api -> db:pg [boundary=?]`；步骤 6 自检 flows=2 with_evid=1（差额=1，与假设清单一致）；台账混入日志行复现 jq parse error（exit 4）"
+  smoked: "沙箱实测@eeaf87926df5：7 块原文照跑全通过（台账按正文结构先铺：2 条 0 引用、1 条缺 boundary、1 条 auth=unknown）：步骤 1 按 kind/ref/引用数计数并暴露 0 引用记录；步骤 2 入口/出口六列，缺列走 ?/unknown；步骤 3 列出 memory:1002/1003 待判定，只读核验原文 curl 打 fx-web 172.29.0.2:8080/index.html 得 HTTP/1.0 200 OK（exit 0），按判据 200 只证该路径匿名可达、不判入口免认证；步骤 4 数据流列出 boundary=?；步骤 5 点名 `svc:fx-api -> db:pg [boundary=?]`；步骤 6 自检 flows=2 with_evid=1（差额=1，与假设清单一致）；台账混入日志行复现 jq parse error（exit 4）"
 ---
 
 # 信任边界与数据流（model-trust-boundaries）
@@ -19,6 +19,7 @@ metadata:
 ## 前提与边界
 - 工具面是记忆检索与只读证据访问（`memory_search` / `memory_read` / `artifact_read`），加**至多一次**现场只读核验。现场核验的两条现行路径（2026-10-06 对齐模板名）：`pentest_exec:recon_http_probe`（`http_probe target=… port=… scheme=… follow_redirects=0 collect=headers`，只发 GET/HEAD，类别 `active_probing`）或`pentest_exec:direct_command`（裸 `curl`，类别 `active_probing`，**免批**：命令原文不再经人过目）。主动扫描（`recon_port_scan`/`recon_service_probe`）与枚举爆破**本阶段不做**——注意这是**纪律**，不是闸门强制的：闸门按动作类别与范围判，不会因为你在建模阶段就自动拦下扫描，越界与否取决于你写不写。
 - **证据 vs 推断，二选一**：每条边界、每处认证判定、每条数据流，要么挂 `memory:<uuid>`/`artifact:<uuid>` 引用，要么显式 `assumption=true` 并写出缺失证据。禁止「看起来合理就当真」。
+  - **证据 id 从哪来**（2026-10-11 起）：`pentest_exec` 开 `save_stdout_as_evidence` 落盘成功后，返回值带 `artifact_ref`（形如 `artifact:<uuid>`）——直接引它，人复核能按 id 取回原文；不要用文件路径冒充引用（路径只是纯文本，取不回来）。
 - 沙箱**可出网**（2026-10-05 起，DNS 用宿主解析器）：公网 CVE 库、威胁情报站查得到，但**它们不是关于本目标的证据源**——外部事实要么标来源+假设，要么改用人类提供的材料或记忆检索。
 - 目标地址一律用选择器给的**已裁决地址**，不自行解析域名。
 - 越界即中止并请人类修订范围；破坏性 / 持久化 / 数据外传类动作会被上游直接拒，本阶段也不会用到。

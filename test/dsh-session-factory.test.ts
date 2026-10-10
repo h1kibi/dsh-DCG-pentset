@@ -26,6 +26,7 @@ import { HUMAN_QUESTION_TOOL } from '../src/contracts.ts';
 import { SessionFactoryError } from '../src/workflow/session-port.ts';
 import {
   DshSessionFactory,
+  renderMemoryIndexStatus,
 } from '../src/agents/dsh-session-factory.ts';
 import { renderPhaseProfile } from '../src/agents/phase-profiles.ts';
 
@@ -702,5 +703,153 @@ describe('DshSessionFactory.interrupt / close', () => {
       () => factory.close('dsh-unknown', '切换阶段'),
       (error: unknown) => error instanceof SessionFactoryError,
     );
+  });
+});
+
+// ───────────────────────── 记忆索引状态（简报如实说明） ─────────────────────────
+
+/**
+ * 事故（2026-10-11 操作者实测）：会话开始时 `memory_search` 返回
+ * `indexWatermark: 0` + note「本作业记忆索引为空（0 个分块）」，而模型先按正常流程
+ * 查历史结论、拿到空结果，白撞一次墙才转去 `pentest_workdir` 找那 254 个文件。
+ *
+ * 因此简报在**创建那一刻**就把这个状态写出来。这组用例锁三件事：
+ *   1. 三态（可用 / 空 / 未知）各说各的话，措辞是事实陈述而不是告警堆；
+ *   2. 空与未知都把历史材料指向 `pentest_workdir`（含 `op=search` 递归正则）；
+ *   3. 探针**永远不会**阻断会话创建——抛错与超时都只降级成「未知」。
+ */
+describe('记忆索引状态写进简报', () => {
+  it('渲染三态：有内容一行带过；空要说清"不是没找到"并给出 workdir 路线；未知不阻断', () => {
+    const available = renderMemoryIndexStatus({
+      kind: 'available',
+      facts: { chunkCount: 12, lastChainSeq: 34, pendingEvents: 0 },
+    });
+    assert.match(available, /记忆索引状态：可用/);
+    assert.match(available, /12 个分块/);
+    assert.match(available, /水位链序 34/);
+    // 有内容时不啰嗦：不出现「索引为空」，也不长篇推销 workdir。
+    assert.equal(available.includes('索引为空'), false);
+    assert.equal(available.includes('pentest_workdir'), false);
+
+    const empty = renderMemoryIndexStatus({
+      kind: 'empty',
+      facts: { chunkCount: 0, lastChainSeq: 0, pendingEvents: 0 },
+    });
+    assert.match(empty, /记忆索引状态：本作业记忆索引为空（0 个分块）/);
+    assert.match(empty, /不是"没找到"/);
+    assert.match(empty, /pentest_workdir/);
+    assert.match(empty, /op=search/);
+    // 事实陈述，不是告警堆。
+    assert.equal(/警告|错误/.test(empty), false);
+    // 不承诺「索引一定会有内容」：只说它随账本追加逐步建立。
+    assert.equal(/一定|保证/.test(empty), false);
+
+    // 「账本里有待索引事件」= 索引器没追上，与「作业本来就还没内容」是两种状态，措辞要分开。
+    const pending = renderMemoryIndexStatus({
+      kind: 'empty',
+      facts: { chunkCount: 0, lastChainSeq: 0, pendingEvents: 7 },
+    });
+    assert.match(pending, /7 条待索引事件/);
+    assert.equal(pending.includes('本会话期间才可能有内容'), false);
+
+    const unknown = renderMemoryIndexStatus({ kind: 'unknown' });
+    assert.match(unknown, /记忆索引状态：未知/);
+    assert.match(unknown, /不影响本会话/);
+    assert.match(unknown, /pentest_workdir/);
+
+    // 未注入探针（null）→ 不写这一行：不知道就不编一句「未知」占位。
+    assert.equal(renderMemoryIndexStatus(null), '');
+  });
+
+  it('探针结论进能力快照：有内容时报分块数与水位，且按作业取数', async () => {
+    const host = makeHost();
+    const asked: string[] = [];
+    const factory = new DshSessionFactory(host.ctx, {
+      memoryIndex: async (engagementId) => {
+        asked.push(engagementId);
+        return { chunkCount: 3, lastChainSeq: 9, pendingEvents: 1 };
+      },
+    });
+
+    await factory.create(INPUT);
+
+    assert.deepEqual(asked, [INPUT.engagementId], '探针必须按作业取数（索引是作业级事实）');
+    const capability = host.sections.find((s) => s.name === 'pentest:capability-freeze');
+    assert.ok(capability !== undefined);
+    assert.match(capability.text, /记忆索引状态：可用（已索引 3 个分块，水位链序 9）/);
+    // 位置：紧跟检索通道——「靠什么查」与「现在能查到什么」是同一件事的两个面。
+    assert.ok(
+      capability.text.indexOf('记忆索引状态') > capability.text.indexOf('记忆检索通道'),
+      '索引状态必须挨着检索通道',
+    );
+  });
+
+  it('探针报 0 分块：简报直说本作业索引为空，并把历史材料指向 workdir', async () => {
+    const host = makeHost();
+    const factory = new DshSessionFactory(host.ctx, {
+      memoryIndex: async () => ({ chunkCount: 0, lastChainSeq: 0, pendingEvents: 0 }),
+    });
+
+    await factory.create(INPUT);
+
+    const capability = host.sections.find((s) => s.name === 'pentest:capability-freeze');
+    assert.ok(capability !== undefined);
+    assert.match(capability.text, /本作业记忆索引为空（0 个分块）/);
+    assert.match(capability.text, /pentest_workdir/);
+    assert.match(capability.text, /op=list/);
+  });
+
+  it('探针抛错：简报写「未知」，会话照常创建（附注不是闸门）', async () => {
+    const host = makeHost();
+    const factory = new DshSessionFactory(host.ctx, {
+      memoryIndex: async () => {
+        throw new Error('数据库不可达');
+      },
+    });
+
+    const created = await factory.create(INPUT);
+
+    assert.deepEqual(created, { dshSessionId: INPUT.dshSessionId });
+    assert.equal(host.createOptions.length, 1, '查询失败不得回滚创建');
+    const capability = host.sections.find((s) => s.name === 'pentest:capability-freeze');
+    assert.ok(capability !== undefined);
+    assert.match(capability.text, /记忆索引状态：未知/);
+  });
+
+  it('探针超时（查询不返回）：降级为「未知」，不阻断会话创建', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const host = makeHost();
+    const factory = new DshSessionFactory(host.ctx, {
+      // 永不结清的查询：模拟数据库不可达/挂住（`pool.connect()` 长时间不返回）。
+      memoryIndex: () => new Promise<never>(() => undefined),
+    });
+
+    let created = false;
+    const creating = factory.create(INPUT).then((result) => {
+      created = true;
+      return result;
+    });
+    // 推进假时钟直到创建完成（次数上限只是防止用例挂死）。
+    for (let i = 0; i < 20 && !created; i += 1) {
+      t.mock.timers.tick(1_000);
+      await Promise.resolve();
+    }
+
+    assert.equal(created, true, '探针超时必须降级，而不是把会话创建卡住（它是状态机的同步前置）');
+    await creating;
+    const capability = host.sections.find((s) => s.name === 'pentest:capability-freeze');
+    assert.ok(capability !== undefined);
+    assert.match(capability.text, /记忆索引状态：未知/);
+  });
+
+  it('未注入探针：简报不写那一行（本文件不知道库的状态，就不编）', async () => {
+    const host = makeHost();
+    const factory = new DshSessionFactory(host.ctx);
+
+    await factory.create(INPUT);
+
+    const capability = host.sections.find((s) => s.name === 'pentest:capability-freeze');
+    assert.ok(capability !== undefined);
+    assert.equal(capability.text.includes('记忆索引状态'), false);
   });
 });

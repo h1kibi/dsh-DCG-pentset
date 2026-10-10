@@ -317,6 +317,43 @@ npm run build && npm run verify && npm test
 > 都实现在分发器里、随镜像分发。**镜像不重建，这些 technique 全部以 usage_error 失败**。
 > 它们在容器内只打宿主注入的已裁决地址（`PENTEST_RESOLVED_ADDRESSES`），该变量为空时直接拒绝（刻意 fail-closed）。
 
+#### ⑦ 本轮轮换记录（2026-10-11，第七轮）
+
+**轮换依据**：`docker/tools/pentest-tool` 改了（新增 `http_probe paths=` 批量复核、`content_discover entry_range=` 分段 +
+覆盖度自报、`http_probe` 容器超时 60s→120s、`content_discover` 去掉 `-s` 改读进度行）。
+容器侧改动 ⇒ 必须重建镜像并按 §2.1 的五步走完。
+
+```bash
+# ① 构建（只有 COPY pentest-tool 那一层实打实重建，其余层命中缓存）
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+# ② 推本地 registry + 取摘要
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+# ③ 重钉**两处**（摘要前值 → 新值）
+#    harness.dev.patch.yml            : c31de6c1070e… → eeaf87926df5…
+#    ~/.dsh/profiles/pentest/cordis.patch.yml : 同上（只改 allowedImages[0].digest 一行）
+# ④ 轮换 25 份 skill 的冒烟背书（先真跑、后改摘要，见 §2.1⑤）
+node scripts/resync-smoke-stamps.mjs eeaf87926df5
+```
+
+**原样输出**：
+
+```
+# docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+127.0.0.1:5005/pentest-tools@sha256:eeaf87926df50380429b15563ff7cb4d7599db22db7b02a2a8ea3bf0b69fe7db
+
+# node scripts/resync-smoke-stamps.mjs eeaf87926df5
+改了 25 份、27 处；替换前的摘要值：c31de6c1070e
+```
+
+> 本轮中间还出现过一次摘要 `sha256:4e43bb3ef87b…`——那是**同一个工作副本的上一版**：真跑完之后发现
+> `schedulability_note` 的措辞会把"按声明速率算的容量"读成"一定会被截断"（实测那一段并没有被截断），
+> 于是改了那一句再重建。**摘要轮换不是"构建一次就完"**：代码改一次，前面那轮的实测背书就作废；
+> 最终钉住的 `eeaf87926df5…` 上重跑了 A/B1/B2/B3 四个场景（见 §6.5.13.6 的实测表）。
+
+> **`test/skill-pack.test.ts` 会红**（证明绑定 `c31de6c1070e`，当前镜像 `eeaf87926df5`）——那是设计如此
+> （镜像一换、旧背书自动失效），轮换脚本跑完即恢复绿色。
+
 ---
 
 ## 3. 配置
@@ -1110,6 +1147,87 @@ grep -c "sessionMountsForCwd" "$P/lib/execution/session-mounts.js"   # ≥1 ⇒ 
 门控改为「配置声明了挂载 **或** 存在会话 cwd 来源」，且删掉被 `evidenceRootFor` 取代的静态
 `evidenceRoot`（死配置）。
 
+### 6.5.13.6 会话简报如实说明记忆索引状态（2026-10-11）：别让模型先撞一次墙
+
+**现象**：作业刚开始时 Agent 调 `memory_search` 查历史结论，拿到
+
+```json
+{ "hits": [], "indexWatermark": 0,
+  "note": "本作业记忆索引为空（0 个分块）：这不是\"没找到\"，是\"库里还没有可检索的内容\"。作业资料请用 pentest_workdir 读 —— 它读的是人类挂进来的作业目录，不经过索引" }
+```
+
+它按"正常流程"重试/换词，白撞一次墙；真正救回信息的是 `pentest_workdir op=search`——
+在作业目录的 254 个文件里正则命中原始行（那是人类挂进来的材料，**从来不在记忆索引里**）。
+note 本身是对的，但**要等第一次检索失败才读得到**。
+
+**根因（语义与作用域）**：
+
+| 项 | 事实（代码位置） |
+|---|---|
+| `indexWatermark` | 「**已落成分块**的事件里最大的**账本链序号**」（`context_events ⋈ memory_chunks`，`src/memory/pg-worker-tools.ts` 的 `#indexWatermark`）。**是链序号，不是时间**；`0` = 本作业还没有任何事件落成分块。phase profile 的指南此前写成「`indexWatermark < 当前时间` ⇒ 索引滞后」——拿链序号比时间，已改口径 |
+| 「水位」是**两份东西** | 显示/简报里的水位 = 上面那个**由分块派生**的值（`memoryWatermark` 与新加的 `memoryIndexFacts` 同一口径）；而 `index_watermarks` **表**是**重建进度**，只有 `reindex_engagement` 写它、事件驱动的索引**不写**——拿它当显示值会出现「索引队列完成 20 / 水位 0」并列（QA 2026-10-04 实测）。简报里的「水位链序 N」指的是前者 |
+| 「0 分块」 | `count(*) from pentest.memory_chunks where engagement_id = …`（`#diagnoseZeroHits`）——**按作业**。不是按租户 |
+| 谁写 `memory_chunks` | 账本追加（`ledger.appendEvent`）**同事务入队**（`src/memory/index-enqueue.ts`）→ 调度器/索引器（`dispatcher.ts` / `indexer.ts`）按 `index_event` 任务落块。**嵌入提供方不可用只降级为词法索引（分块照落）**，所以它不会造成「0 分块」 |
+| 「0 分块」的两个来源 | ① 作业还没有可索引内容（新作业）；② 账本已有可索引事件、**索引器还没追上**（`outbox_jobs` 有待办）。两者的处置不同，简报分开说 |
+| 作用域 | `memory_chunks` / `index_watermarks` 都是 **FORCE RLS**（005/006/015）：**租户级查询静默返回零行** → 会把「有内容」误报成「0 分块」。任何读它的路径都必须先进作业作用域（`composed.rls.run({ engagementId }, …)`） |
+| 跨作业材料 | `memory_search` **只覆盖本作业**：检索层丢掉 `engagementId !== 本会话作业` 的候选（`src/memory/retrieval.ts:426`），而 Worker 工具**没有** `engagement_id` 参数（`src/tools/worker.ts` 的 `memory_search`，归属由服务端按会话推导）。这是 §9.4 的隔离，**是设计不是缺陷**：别的作业/人类带来的材料本来就不在本作业记忆里，通道是 `pentest_workdir`（挂进来的目录，不经过索引）。phase profile 里两处「可跨 engagement 检索（去掉 engagement_id）」的说法已改——它描述的是控制台面，Worker 面做不到 |
+
+**处置**：
+
+- 会话简报（`pentest:capability-freeze` 分节，紧跟「记忆检索通道」）在**创建那一刻**写一行
+  「记忆索引状态」，由注入端口 `DshSessionFactoryDeps.memoryIndex` 提供事实
+  （装配处 `src/index.ts` 用 `composed.memoryQuery.memoryIndexFacts` + `composed.rls.run` 接线）：
+  `可用（已索引 N 个分块，水位链序 M）` / `本作业记忆索引为空（0 个分块）…` / `未知（创建会话时查询失败）`。
+- **空与未知都把历史材料指向 `pentest_workdir`**（`op=list` 列目录、`op=search` 在目录内递归检索正则），
+  并明说这是「库里还没有可检索内容」而不是「没找到」。不承诺索引一定会有内容。
+- 探针**绝不阻断会话创建**：抛错/超时（2s）只降级成「未知」；未注入探针时不写这一行（不知道就不编）。
+- `phase-profiles.ts` 的 `memory_search 使用指南` 同步改口径（链序号 vs 时间；索引状态已在简报里）。
+
+**可复跑命令**（测试库，勿指向 `pentest_personal`）：
+
+```bash
+# 1) 三条渲染路径 + 抛错/超时降级 + 「未注入就不写」：不联网不连库（注入假端口）
+PENTEST_DATABASE_URL='postgresql://postgres:check@127.0.0.1:55446/pentest' \
+  node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=40000 \
+  test/dsh-session-factory.test.ts
+
+# 2) 事实口径（真库）：0 分块 → 待索引事件 → 落块后水位/滞后；含「条目来源分块必须计入」
+PENTEST_DATABASE_URL='postgresql://postgres:check@127.0.0.1:55446/pentest' \
+  node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=40000 \
+  test/pg-memory-query.test.ts
+
+# 3) 直接看某个作业现在有几个可检索分块（= 简报 / memory_search 零命中诊断同一口径）
+#    以 app 角色查时要先进作用域，否则 RLS 让它**静默返回 0**（假「空作业」）
+docker exec dsh-pg-c psql -U postgres -d pentest -c \
+  "select count(*) as chunks,
+          (select coalesce(max(e.chain_seq),0) from pentest.context_events e
+             join pentest.memory_chunks mc2 on mc2.source_event_id = e.event_id
+            where e.engagement_id = '<engagement-id>') as watermark
+     from pentest.memory_chunks where engagement_id = '<engagement-id>'"
+```
+
+### 6.5.13.7 第七轮实测（2026-10-11）：证据静默不落盘、报告载荷校验的代价、证据链缺一条腿
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| `save_stdout_as_evidence` **静默不落盘**。报错原文：`证据落盘失败：The "path" argument must be of type string. Received an instance of Promise`。操作者那次 `tool_run:42436eb9`（27 条路径的状态码复核）的 `evidence/` 目录里**没有对应文件** | 装配层的**会话作用域包装器**把 `WorkerToolDeps` 里**每个函数依赖**都包成 `async`。而那里除了"工具方法"还有**解析器**（`evidenceRootFor(会话)`：入参是字符串、返回值是路径）——被 async 化后返回值变 Promise，下游 `writeEvidence(root, …)` 拿到 Promise 当路径 ⇒ 抛错；而 `writeEvidence` 的纪律是"绝不把已执行完的动作变成失败"，于是只剩一行说明 | 包装器改为**按入参形状判别**：入参带 `{workerSessionId}` = 工具方法（进作用域）；否则 = 解析器，**原样透传、不得 async 化**（`scopeWorkerToolsBySession` 已导出，锁在 `test/session-scope-wrapper.test.ts`）。同时把落盘结果结构化：成功给 `evidence` / `evidence_container_path` / `evidence_host_path`，**失败给 `evidence_failed: true` + 原因**（不再与成功同形） |
+| "超时/中止也会落盘"这句话不可信（操作者的怀疑） | 与成功路径**同一个函数**，但从未被单独验证过 | 单测逐条锁：超时（`result.status='timed_out'` + 半截 stdout）**真的落盘**；无挂载根时明确说"输出只在返回值与 tool_run 里"；按会话解析优先于静态配置。`test/worker.test.ts` 四例 |
+| `pentest_submit_report` 传 `payload.engagement_id: null` 被拒（`"payload.engagement_id" must be a string`），而字段说明写"不必填也不被采信"；一份 payload 几 KB，改一个错就得整份重发 | 那些"只接收不采信"的字段被声明成 `type: 'string'`，而 dsh 的参数 DSL **不支持联合类型**（`type arrays are not supported`）⇒ 唯一能表达"任意值"的形状是 `type: 'json'`（编译成 annotation-only，接受 null/字符串/数字/数组/对象） | 11 个不采信字段改 `type: 'json'`；可选**标量** `status_note` / `mode` 用 `oneOf: [<类型>, {type:'null'}]` 容忍 null；**`payload` 刻意不包 oneOf**——实测 `oneOf` 会把 payload 内部的**细分违规**塌成一条 `must match exactly one oneOf branch`，而那正是下一条要修的东西 |
+| "校验一次只报一个错，按错一个改一次的节奏重发大对象" | **不是**宿主的行为：`validateJsonSchemaValue` 返回**全部**违规，运行时把它们用 `"; "` 连成一条消息（`ToolArgsError`）。操作者那次只有一个违规 | 无需改代码；补一条锁：一个含 ≥4 处错误的载荷必须**一次**给出 ≥4 条信息（含 `facts[0]`/`facts[1]` 两条），防止将来退化成"只报第一条"。仍无法一次改完的根因是"整份重发"这件事本身 ⇒ 见下一条 |
+| 补几条事实/候选要重发整份几 KB 的 payload | 只有"整份替换"一种模式（`worker_reports` 的取代语义） | 新增 `mode: 'append'`：在**本会话本次尝试的当前报告载荷**上合并（数组**追加并按深等值去重**、对象递归合并、其余由新值覆盖）；返回 `merged.{baseReportId,sections}`；账本事件的 `payload` 记**合并后的有效载荷**并带 `mergedFrom`；没有基底时**明确拒绝**（不静默当替换——那会丢掉模型没重发的部分）。纯函数 `src/memory/report-payload-merge.ts`，锁见 `test/report-payload-merge.test.ts` 与 `test/pg-worker-tools.test.ts` |
+| 报告的证据链只有 `tool_run:<uuid>` 一条腿：`source_refs` 认 `artifact:<uuid>`，但模型**从来拿不到任何 artifact id** | `pentest.artifacts` 在**全仓没有任何 INSERT**（与"findings 全仓没有写入方"同一类缺口，外部审计抓到过前者）⇒ 表是空的，`artifact_read` 只能读测试塞的行 | 证据落盘成功后自动登记一行 artifact（`kind=evidence_stdout`、`storage_kind=file`、`encrypted=false`、`source_ref=容器路径`），返回值新增 `artifact_id` / `artifact_ref`；登记失败**开口**（`evidence_artifact_error`）但**不影响落盘**。资产归属按 `assets.canonical_target` **精确等值**解析（绝不自动创建资产、绝不模糊匹配），解析不到时 `asset_ids='{}'` 且在 `metadata.assetResolution` 如实记 `no_match`/`no_target` |
+
+**由此产生的两条行为（不是 bug，但要知道）**：
+
+- **登记了资产的证据受范围闸门约束**：填了 `asset_ids` 就等于把证据挂到 §8.6 的可见性公式上——
+  "登记成功但读不回来"（`scope_violation`）在资产未纳入范围时是**正确行为**。这条锁在
+  `test/pg-worker-tools.test.ts`（纳入之后即可按 id 读回，`storageRef` 给宿主路径）。
+- **`payload: null` 仍会被拒**（普通对象分支的代价换取内部细分错误）。空载荷请**省略该字段**。
+
+**顺带强化（操作者建议）**：`pentest_workdir op=search` 现在多返回一份**命中文件清单**
+`files`（路径 + 修改时间 + 命中行数，**新的在前**）——他正是靠在 254 个文件里正则考古
+才把丢失的信息捞回来的；清单让"先看最近动过的那几份"成为默认入口。
+
 ### 6.5.13.3 同日第四轮实测（3 条）的修复：静默失败的三张脸
 
 | 现象 | 根因 | 修复 |
@@ -1148,6 +1266,40 @@ grep -c "sessionMountsForCwd" "$P/lib/execution/session-mounts.js"   # ≥1 ⇒ 
 - `recon-web-surface` 技能补第 8/9 行：配置面暴露 → `exposure_check`（项名 `git,env,swagger,…`，
   ≤10，**不是路径**）、基线核验 → `http_check`；
 - **已有会话不受影响**：能力快照在创建时冻结，要用新面请**新建会话**（或用同阶段重做）。
+
+### 6.5.13.6 第七轮实测（2026-10-11）：可审计的复核通道 + 可分辨、可续跑的字典扫描
+
+操作者给了两条"退回手写才能干活"的诉求，都不是新功能，而是**已有能力缺了可分辨性/可核账性**：
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| 60 条路径只能退回 `pentest_exec` 手写 `for p in …; do curl …; done` 逐条确认「哪些是真端点、哪些只是兜底路由」 | 结构化通道里**没有批量复核动作**：`http_probe` 一次只采一个面（`collect=`），`exposure_check` 的 `paths` 是**固定项名**（10 个配置面），都不能表达"我这份 60 条路径清单" | `http_probe paths=/a,/b,…`（≤60 条，逗号分隔）：只发 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note`，**先用一条随机路径取软 404 基准**（同状态码同长度 ⇒ `note=soft404`＝兜底路由，不是端点），汇总 `paths_summary: paths=N ok=M no_response=K`；含 scheme/主机/空白/`..`/查询串一律 **exit 2** 拒绝（那是把"路径"当"目标"用，会让范围记账失效）。模板 / technique / 分发器三处由 `test/action-templates.test.ts` 对拍 |
+| `content_discover` 跑大字典"看起来跑完了"：`common_dirs` 4723 条按声明节奏 5 req/s 需 ~945s，而单条命令上限 5 分钟 ⇒ **数学上不可调度**，且旧 summary 里**看不见被截断**（上游 JSON 有 `maxtime:295`、命中停在 `position:4313`） | ①返回里没有任何覆盖度字段（`hits=N` 与"全跑完、干净"同形）；②`-s` 把 ffuf 的进度行整条吞掉，连"跑到第几条"都拿不到；③没有分段手段，模型只能自己截断字典（`head -n 2000`）——截了多少、剩多少全靠自觉 | ①新增 `entry_range=A-B`（1 基双闭区间；空=整本）：把本段字典落盘再喂 ffuf，多次调用可拼完并**每次自证"从第几条跑到第几条"**；②去掉 `-s`、解析 stderr 进度行 → `coverage: wordlist_entries=… entry_range=… requested=… attempted=… truncated=… position=… remaining=…`（外加 `position_max_hit=`，即旧版只能去 JSON 里翻的那个数）；③`truncated=true` 时给 `coverage_note:` 明说"被截断 + 下一次的 entry_range"；④条目数/声明速率超单条上限时**直接写出"需要分 N 段"与各段区间**（这是数学，不是判断） |
+
+**实测（真容器、实验室夹具，非推断）**：
+
+```bash
+# 夹具：单文件 python 服务，未知路径一律回 200 + 固定 64 字节正文（软 404 形态），
+#       另有 /hang 故意 sleep 30s 触发逐条超时
+docker run -d --name fx-probe --network pentest-lab-internal -v <夹具>:/srv:ro \
+  --entrypoint python3 python:3.10-slim-bookworm /srv/fixture.py 8080     # 172.29.0.2:8080
+```
+
+| 场景 | 命令 | 原样结论（节选） |
+|---|---|---|
+| A 批量复核（6 条：3 真端点 + 2 兜底 + 1 不通） | `http_probe … paths=/,/api/users,/api/orders,/does-not-exist,/admin/config,/hang` | `paths_soft404_baseline: status=200 size=64`；`/`·`/api/users`·`/api/orders` 三条 `candidate_endpoint:`（size 41/71/24）；`/does-not-exist`·`/admin/config` → `note=soft404`；`/hang` → `no_response`；`paths_summary: paths=6 ok=5 no_response=1` |
+| B1 小字典全跑 | `content_discover … wordlist=api_endpoints rate=5` | `attempted=268 truncated=false position=268 remaining=0`，`hits=3`（`/api/auth` 301、`/api/graphql`、`/graphql`），`position_max_hit=199` |
+| B2 大字典一段 | `… wordlist=common_dirs entry_range=1-200` | `coverage: wordlist_entries=4723 entry_range=1-200 requested=200 attempted=200 truncated=false position=200 remaining=4523`；`schedulability: …需要分 4 段（每段约 1475 条）：1-1475 / 1476-2950 / 2951-4425 / 4426-4723` |
+| B3 大字典**被截断** | `… wordlist=common_dirs rate=2`（无 `entry_range`） | `attempted=1179 truncated=true position=1179 remaining=3544 position_max_hit=659`，`hits=1`；`coverage_note: …**被截断**（ffuf 到达 maxtime=295s 自行停止）；整本字典还剩 3544 条没跑 ⇒ 下一次 entry_range=1180-1769`；`schedulability: …需要分 9 段（每段约 590 条）`。**同一份输出在旧版里就只有 `hits=1`**——这正是"跑一半被读成跑完了"的形态 |
+| B4 分段拼完（3 次调用） | `entry_range` = `1-1600` / `1601-3200` / `3201-4723` | 三次分别 `attempted=1600/1600/1523`、`position=1600/3200/4723`、`remaining=3123/1523/0`；命中并集 `{/api, /robots.txt}`。合计 4723 次请求 = `wordlist_entries`，整本字典确实拼完了 |
+
+**一条要记住的读数纪律**：`schedulability:` 是按**声明速率**算的（宿主按它节流），而容器内 ffuf 的实际节奏是
+`-t/-p` 的组合 ⇒ 实验室 LAN 上实测 `observed_rps` 达 22–25（声明 5），同一台机器上 B4 反而没被截断。
+所以那一行是**规划依据**（保守），不是预测；`summary` 里同时给了 `observed_rps`，两者并排看。
+操作者当年那台目标上实测是 4313 次/295s ≈ 14.6 req/s——落在两者之间，于是"跑不完"确实发生了。
+
+**结论**：两条诉求都不是"加一个功能"，而是把**已经有的事实**（这条路径是端点吗 / 这次跑到哪了）
+从"人得自己看出来"变成"工具自己说出来"，并且让复核动作留在可审计的结构化通道里。
 
 ## 6.5.14 本机跑测试需要独立的 `pentest` 测试库（2026-10-10 补）
 

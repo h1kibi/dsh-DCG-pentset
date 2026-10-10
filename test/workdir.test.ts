@@ -137,6 +137,24 @@ test('检索：递归正则 + 文件与行号；追加写不重发整份', () =>
     '要给出文件与行号（Agent 靠它直接定位，而不是整文件读）',
   );
   assert.equal(found.truncated, false);
+  // 命中文件清单（2026-10-11 操作者建议）：几百份证据里考古时，先看"最近动过的那几份"，
+  // 而不是先读全部命中行烧上下文。
+  assert.deepEqual(
+    found.files.map((file) => [file.path, file.matches]),
+    [...found.files]
+      .sort((a, b) => (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : b.modifiedAt < a.modifiedAt ? -1 : 1))
+      .map((file) => [file.path, file.matches]),
+    'files 必须按修改时间新的在前（并列时按路径稳定排序）',
+  );
+  assert.deepEqual(
+    [...found.files.map((file) => file.path)].sort(),
+    ['a.md', '子目录/b.md'],
+    '两个命中文件都要出现在清单里',
+  );
+  assert.ok(
+    found.files.every((file) => !Number.isNaN(Date.parse(file.modifiedAt))),
+    '修改时间必须是可解析的 ISO 时间戳',
+  );
   const appended = appendWorkdir([root], 'a.md', '\n补一行');
   assert.equal(readWorkdir([root], 'a.md').text.endsWith('补一行'), true, '追加落到文件末尾');
   assert.equal(appended.bytes, Buffer.byteLength('第一行\n命中目标 TCP 443\n第三行\n补一行', 'utf8'));

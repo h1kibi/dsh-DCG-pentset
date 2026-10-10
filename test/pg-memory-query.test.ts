@@ -483,6 +483,70 @@ describe('记忆检索面（真实 PostgreSQL）', { skip: DATABASE_URL === unde
     assert.equal(wm.lagEvents, 0);
     assert.equal(wm.lastChainSeq, 0);
   });
+
+  test('memoryIndexFacts：简报要的三项事实，分块数与 memory_search 零命中诊断同口径', async () => {
+    // 这三项事实进的是**会话简报**：模型据此在动手前就知道「本作业索引里有没有内容」，
+    // 不必先用一次 `memory_search` 撞墙（2026-10-11 操作者实测）。
+    const { svc } = service();
+
+    // (a) 全新作业：三项全零——简报据此说「本作业记忆索引为空（0 个分块）」。
+    const fresh = await seed();
+    assert.deepEqual(await svc.memoryIndexFacts(fresh.engagementId), {
+      chunkCount: 0,
+      lastChainSeq: 0,
+      pendingEvents: 0,
+    });
+
+    // (b) 账本里有可分块事件、索引器还没跑：分块仍为 0，但**待索引事件不为 0**。
+    //     「索引器没追上」与「作业本来就还没内容」是两种状态，简报的措辞与处置不同。
+    await pool.query(
+      `insert into pentest.context_events
+         (engagement_id, source_system, source_id, source_seq, event_type, schema_version,
+          occurred_at, chain_seq, payload_json, raw_payload_zstd, text_projection,
+          classification, trust_level, event_hash)
+       values ($1::uuid, 'test', $2, 1, 'human.input', 1, now(), 1, '{}'::jsonb, '\\x00', $3,
+               'engagement', 'human_decision', decode(repeat('ab', 32), 'hex'))`,
+      [fresh.engagementId, `memidx-${randomUUID()}`, 'memidx 待索引事件'],
+    );
+    assert.deepEqual(await svc.memoryIndexFacts(fresh.engagementId), {
+      chunkCount: 0,
+      lastChainSeq: 0,
+      pendingEvents: 1,
+    });
+
+    // (c) 落了块：水位跟着这条事件走，滞后归零。
+    await seedChunk({
+      engagementId: fresh.engagementId, seq: 2, content: 'memidx-probe-1',
+      classification: 'engagement', trustLevel: 'tool_observation', assetIds: [],
+    });
+    assert.deepEqual(await svc.memoryIndexFacts(fresh.engagementId), {
+      chunkCount: 1,
+      lastChainSeq: 2,
+      pendingEvents: 0,
+    });
+
+    // (d) **条目来源**的分块（`source_event_id` 为 NULL）必须计入 `chunkCount`：
+    //     按 INNER JOIN 事件去数的实现会把这一类整批漏掉 → 简报报「0 分块」而检索其实有内容
+    //     （2026-10-10 那次 P0 就是同一个 SQL 形状）。
+    const itemSourced = await seed();
+    const itemId = randomUUID();
+    await pool.query(
+      `insert into pentest.memory_items (id, engagement_id, kind, content, trust_level, status, created_by)
+       values ($1::uuid, $2::uuid, 'fact', '条目来源的事实：端口 3002 上跑着 nginx。', 'asserted', 'active', 'tester')`,
+      [itemId, itemSourced.engagementId],
+    );
+    await pool.query(
+      `insert into pentest.memory_chunks
+         (engagement_id, memory_item_id, ordinal, content, content_hash, embedding_revision,
+          phase, trust_level, classification, asset_ids)
+       values ($1::uuid, $2::uuid, 0, '条目来源的事实：端口 3002 上跑着 nginx。', 'memidx-item-sourced', 'lexical-only',
+          'intelligence-gathering', 'asserted', 'engagement', '{}'::uuid[])`,
+      [itemSourced.engagementId, itemId],
+    );
+    const itemFacts = await svc.memoryIndexFacts(itemSourced.engagementId);
+    assert.equal(itemFacts.chunkCount, 1, '条目来源的分块必须计入——否则简报会报「0 分块」而检索有内容');
+    assert.equal(itemFacts.lastChainSeq, 0, '条目来源的分块没有来源事件，水位不受它影响');
+  });
 });
 
 // ─────────────── 账本校验面（不依赖数据库：端口可注入） ───────────────

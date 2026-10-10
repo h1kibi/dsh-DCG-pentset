@@ -142,9 +142,10 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
       ],
       usageGuidance:
         '**memory_search 使用指南**：\n' +
-        '- `indexWatermark < 当前时间`：索引滞后，最近扫描可能未入库 → 10分钟后重试。\n' +
-        '- `hits.length === 0 && note 含"索引为空"`：真的没内容 → 用 pentest_workdir 读作业目录。\n' +
-        '- `hits.length === 0 && note 含"没有命中"`：查询词不对 → 换实体名/IP/端口/产品名重试。\n' +
+        '- 会话简报里写有**创建那一刻**的索引状态：若写着「本作业记忆索引为空（0 个分块）」，本作业就还没有可检索内容 → 直接走 workdir，不要反复重试检索。\n' +
+        '- `indexWatermark` 是**账本链序号**（不是时间）：`0` = 本作业还没有任何事件落成分块（新作业，或索引器还没跑）；非 0 才是「已索引到哪一条事件」。\n' +
+        '- `hits.length === 0 && note 含"索引为空"`：库里真的没有可检索内容（不是"没找到"）→ 用 `pentest_workdir` 读作业目录（`op=list` / `op=search` 递归正则）。\n' +
+        '- `hits.length === 0 && note 含"没有命中"`：有内容但查询词不对 → 换实体名/IP/端口/产品名重试。\n' +
         '- `kinds` 过滤：本阶段主要检索 `asset` / `service_fingerprint` / `dns_record` / `web_surface`。\n' +
         '- 零命中时**必读 note 字段**：里面有具体的失败原因和备选查询建议。',
     },
@@ -207,7 +208,7 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
         '**memory_search 使用指南**：\n' +
         '- 会话开始**必须先检索**情报阶段资产清单（phase=intelligence-gathering）。\n' +
         '- `hits` 为空但 `note` 说"索引为空" → 情报阶段未完成或未索引 → 用 pentest_workdir 读取。\n' +
-        '- 推演路径时可跨 engagement 检索（去掉 engagement_id 参数）查找同类服务的已知攻击路径。\n' +
+        '- `memory_search` **只覆盖本作业**（服务端按会话绑定，没有 engagement_id 参数；§9.4 隔离）。要参考别的作业或人类带进来的同类服务攻击路径，用 `pentest_workdir` 读作业目录（`op=list` / `op=search` 递归正则），不要据此断定"没有可参考的先例"。\n' +
         '- 检索 attack_path 时可按 trust_level 过滤：`confirmed` > `likely` > `speculative`。\n' +
         '- 零命中时必读 note 字段的备选查询建议，可能是 phase/kinds 过滤过严。',
     },
@@ -272,7 +273,7 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
         '**memory_search 使用指南**：\n' +
         '- 会话开始**必须先检索**威胁建模的验证计划（phase=threat-modeling）。\n' +
         '- `hits` 为空 → 威胁建模未完成或未交付验证计划 → 通知人类或回退上一阶段。\n' +
-        '- 核验 CVE 时可跨 engagement 检索（去掉 engagement_id）查找同版本服务的历史验证结果。\n' +
+        '- 核验 CVE 时要查历史验证结果：本作业记忆里没有时**不能**跨 engagement 检索（服务端按会话绑定本作业；§9.4），改从 `pentest_workdir` 的作业目录里找（`op=search` 递归正则）。\n' +
         '- 检索 finding 时按 trust_level 过滤：`high` = 已确认，`medium` = 待复核，`low` = 疑似假阳性。\n' +
         '- 定期检索（每 15 轮）避免重复核验已确认的漏洞，特别是多目标场景。\n' +
         '- 零命中时必读 note 字段，可能是 kinds 过滤过严或查询词不匹配 CVE 编号。',

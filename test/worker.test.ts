@@ -19,6 +19,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import {
@@ -677,4 +681,343 @@ test('报告载荷 schema 接受设计 §7.1 的完整示例，同时拒绝拼�
     payload: { facts: [{ fact: '把事实写在错字段名上' }] },
   });
   assert.ok(badItem.length > 0, 'facts 条目缺 statement 必须被拒（否则漂移又变成静默丢弃）');
+});
+
+// ───────────────────────── 证据落盘（"忘了 tee"的安全网） ─────────────────────────
+
+/**
+ * 2026-10-11 操作者实测 P0：`save_stdout_as_evidence` **静默失败**——
+ * `The "path" argument must be of type string. Received an instance of Promise`。
+ *
+ * 根因不在本文件这一层（在装配层的会话作用域包装器：解析器被 async 化，返回值变 Promise），
+ * 但**表现**在这里，而且这个功能的全部价值就是"容器一次性、忘了 tee 就永久丢失"的安全网，
+ * 因此它的每条路径都要有锁：成功（含超时/中止的半截输出）、失败开口、按会话解析优先。
+ */
+test('证据落盘：超时/中止的半截输出同样落盘，且返回容器路径与宿主路径', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-root-'));
+  const fake = makeDeps();
+  const deps: WorkerToolDeps = {
+    ...fake.deps,
+    evidenceRoot: root,
+    async execute() {
+      // 超时：`kind` 仍是 `executed`（那是计划层的结果），result.status 才是 timed_out。
+      return {
+        kind: 'executed' as const,
+        plan: PLAN,
+        result: { ok: false, status: 'timed_out', stdout: 'partial line\n', stderr: '' },
+      };
+    },
+  };
+  const tools = createWorkerTools(deps);
+  const out = (await tools.pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '超时半截输出',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+
+  assert.equal(out.partial_output, true, '超时要标注这是部分输出');
+  assert.equal(out.evidence_failed, undefined, '落盘成功不得带失败标志');
+  assert.equal(typeof out.evidence, 'string', '成功时给相对挂载根的路径');
+  assert.equal(out.evidence_container_path, `/work/${String(out.evidence)}`, '容器路径 = /work + 相对路径');
+  assert.equal(
+    readFileSync(String(out.evidence_host_path), 'utf8'),
+    'partial line\n',
+    '超时路径必须真的落盘——那正是最需要半截输出的场景（重跑 = 对目标再打一遍）',
+  );
+  assert.match(String(out.evidence), /^evidence\//, '落盘在 evidence/ 目录下');
+});
+
+test('证据落盘：失败时开口（evidence_failed + 原因），不再与成功同形', async () => {
+  // 让写盘必然失败：把一个**文件**当挂载根（`mkdirSync` 会 ENOTDIR/EEXIST）。
+  const asFile = join(mkdtempSync(join(tmpdir(), 'evidence-bad-')), 'not-a-dir');
+  writeFileSync(asFile, 'x', 'utf8');
+  const fake = makeDeps();
+  const deps: WorkerToolDeps = {
+    ...fake.deps,
+    evidenceRoot: asFile,
+    async execute() {
+      return {
+        kind: 'executed' as const,
+        plan: PLAN,
+        result: { ok: true, status: 'executed', stdout: 'captured\n', stderr: '' },
+      };
+    },
+  };
+  const tools = createWorkerTools(deps);
+  const out = (await tools.pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '写盘必失败',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+
+  assert.equal(out.evidence_failed, true, '写盘失败必须显式标记（此前只有一行与成功同形的说明）');
+  assert.match(String(out.evidence), /证据落盘失败/, '要说清是落盘失败');
+  assert.equal(out.evidence_host_path, undefined, '失败时不得给路径');
+  assert.equal((out.result as { stdout?: string }).stdout, 'captured\n', '输出仍要在返回值里（模型当场还能用）');
+});
+
+test('证据落盘：没有挂载根时明确说"输出只在返回值与 tool_run 里"', async () => {
+  const fake = makeDeps();
+  const tools = createWorkerTools(fake.deps); // 未配 evidenceRoot / evidenceRootFor
+  const out = (await tools.pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '无挂载',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+  assert.equal(out.evidence_failed, true);
+  assert.match(String(out.evidence), /未挂载工作目录/);
+  assert.match(String(out.evidence), /tool_run/, '要说清此刻还能去哪儿找这条输出');
+});
+
+test('证据落盘：按会话解析优先于静态配置（与容器 argv / 简报同源）', async () => {
+  const staticRoot = mkdtempSync(join(tmpdir(), 'evidence-static-'));
+  const sessionRoot = mkdtempSync(join(tmpdir(), 'evidence-session-'));
+  const fake = makeDeps();
+  const deps: WorkerToolDeps = {
+    ...fake.deps,
+    evidenceRoot: staticRoot,
+    evidenceRootFor: (workerSessionId: string) => (workerSessionId === 'ws-1' ? sessionRoot : undefined),
+    async execute() {
+      return {
+        kind: 'executed' as const,
+        plan: PLAN,
+        result: { ok: true, status: 'executed', stdout: 'session-kept\n', stderr: '' },
+      };
+    },
+  };
+  const tools = createWorkerTools(deps);
+  const out = (await tools.pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '按会话落盘',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+
+  // 解析器**必须**返回字符串（不是 Promise）：这一条就是那次 P0 的直接锁。
+  assert.equal(typeof out.evidence_host_path, 'string');
+  assert.equal(
+    readFileSync(String(out.evidence_host_path), 'utf8'),
+    'session-kept\n',
+    '证据要落在会话的目录（容器写的那一处），不是配置里的目录',
+  );
+  assert.match(String(out.evidence_host_path), /evidence-session-/);
+});
+
+// ─────────────────── 报告载荷：容忍 null、mode、一次报全部违规（诉求 #2） ───────────────────
+
+test('报告载荷：**不采信**字段容忍 null（含操作者实测的 payload.engagement_id: null）', () => {
+  const tools = createWorkerTools(makeDeps().deps);
+  const schema = (tools.submitReport as unknown as {
+    readonly parameters: Parameters<typeof validateJsonSchemaValue>[0];
+  }).parameters;
+
+  // 操作者实测（2026-10-11）：`payload.engagement_id: null` 被拒 «"payload.engagement_id" must be a
+  // string»，而字段说明写的是"不必填也不被采信" ⇒ 他必须整份重发几 KB 的 payload。
+  assert.deepEqual(
+    validateJsonSchemaValue(schema, {
+      status: 'report_ready',
+      objective: 'o',
+      summary: 's',
+      payload: {
+        engagement_id: null,
+        agent_session_id: null,
+        phase: null,
+        revision: null,
+        schema_version: null,
+        status: null,
+        summary: null,
+        status_note: null,
+        completed: null,
+        finished_at: null,
+        facts: [],
+      },
+    }),
+    [],
+    '不采信的字段必须接受任意值（含 null）——写 null 或不写都行',
+  );
+
+  // 可选**标量**（status_note / mode）同样容忍 null = 不填。
+  // **但 payload 不容忍**：`oneOf` 会把 payload 内部的细分违规塌成一条泛化信息（见下面的用例），
+  // 而"一次说清哪里错"是操作者的直接诉求 ⇒ 没有载荷请省略该字段，别写 null。
+  assert.deepEqual(
+    validateJsonSchemaValue(schema, { status: 'report_ready', objective: 'o', summary: 's', status_note: null, mode: null }),
+    [],
+    'status_note/mode 的 null 与"不填"同义',
+  );
+  const nullPayload = validateJsonSchemaValue(schema, {
+    status: 'report_ready',
+    objective: 'o',
+    summary: 's',
+    payload: null,
+  });
+  assert.equal(nullPayload.length, 1, 'payload:null 被拒（代价：一次重发；换来的是内部细分违规不被塌掉）');
+  assert.match(nullPayload[0] ?? '', /payload/);
+});
+
+test('报告载荷：mode 取值受检（replace/append），拼错要被拒而不是静默当 replace', () => {
+  const tools = createWorkerTools(makeDeps().deps);
+  const schema = (tools.submitReport as unknown as {
+    readonly parameters: Parameters<typeof validateJsonSchemaValue>[0];
+  }).parameters;
+
+  for (const mode of ['replace', 'append']) {
+    assert.deepEqual(
+      validateJsonSchemaValue(schema, { status: 'report_ready', objective: 'o', summary: 's', mode }),
+      [],
+      `${mode} 必须合法`,
+    );
+  }
+  assert.ok(
+    validateJsonSchemaValue(schema, { status: 'report_ready', objective: 'o', summary: 's', mode: 'merge' }).length > 0,
+    '拼错的 mode 必须被拒——静默当 replace 会让"我以为是追加"变成"整份替换"',
+  );
+});
+
+test('参数校验**一次给出全部违规**（宿主把它们用 "; " 连起来交给模型，不是错一个改一次）', () => {
+  const tools = createWorkerTools(makeDeps().deps);
+  const schema = (tools.submitReport as unknown as {
+    readonly parameters: Parameters<typeof validateJsonSchemaValue>[0];
+  }).parameters;
+
+  const violations = validateJsonSchemaValue(schema, {
+    // 故意错四处：status 取值非法、缺 objective 与 summary、payload 里两条 facts 各缺 statement、
+    // 还塞了一个未知字段。
+    status: 'done',
+    payload: { facts: [{}, { statement: 42 }], unknown_section: [] },
+  });
+  assert.ok(
+    violations.length >= 4,
+    `一次要给全部违规（实际 ${violations.length} 条）：${violations.join('; ')}`,
+  );
+  assert.ok(
+    violations.some((entry) => entry.includes('status')),
+    '要能看到 status 非法',
+  );
+  assert.ok(
+    violations.filter((entry) => entry.includes('facts')).length >= 2,
+    'facts 的两条错误都要出现（否则就是"错一个改一次"）',
+  );
+});
+
+test('证据落盘：登记为 artifact（返回 artifact_id/artifact_ref），登记失败开口但不影响落盘', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-artifact-'));
+  const registered: Parameters<NonNullable<WorkerToolDeps['recordEvidenceArtifact']>>[0][] = [];
+  const base = makeDeps();
+  const okDeps: WorkerToolDeps = {
+    ...base.deps,
+    evidenceRoot: root,
+    async execute() {
+      return {
+        kind: 'executed' as const,
+        plan: PLAN,
+        result: { ok: true, status: 'executed', stdout: 'captured\n', stderr: '' },
+      };
+    },
+    async recordEvidenceArtifact(input) {
+      registered.push(input);
+      return { artifactId: 'art-1' };
+    },
+  };
+  const out = (await createWorkerTools(okDeps).pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '登记证据',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+
+  assert.equal(out.artifact_id, 'art-1', '诉求 #5：报告要能引 artifact:<id>');
+  assert.equal(out.artifact_ref, 'artifact:art-1');
+  const call = only(registered);
+  assert.equal(call.byteSize, Buffer.byteLength('captured\n'));
+  assert.equal(call.contentHash, createHash('sha256').update('captured\n').digest('hex'), '哈希覆盖磁盘上的字节');
+  assert.equal(call.contentHash.length, 64);
+  assert.equal(call.containerPath, `/work/${String(out.evidence)}`, '容器路径与落盘路径一致');
+  assert.deepEqual(
+    [...call.targetHints],
+    ['93.184.216.34', 'example.com'],
+    '归属线索来自本次运行的已裁决地址与目标（服务端只做精确等值匹配）',
+  );
+
+  // 登记失败 ≠ 落盘失败：文件必须在，且失败原因要开口（不静默）
+  const failingDeps: WorkerToolDeps = {
+    ...okDeps,
+    async recordEvidenceArtifact() {
+      throw new Error('库不可用');
+    },
+  };
+  const failed = (await createWorkerTools(failingDeps).pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '登记失败',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+  assert.equal(failed.artifact_id, undefined);
+  assert.match(String(failed.evidence_artifact_error), /库不可用/);
+  assert.equal(failed.evidence_failed, undefined, '登记失败不得伪装成落盘失败');
+  assert.equal(readFileSync(String(failed.evidence_host_path), 'utf8'), 'captured\n', '文件照旧在磁盘上');
+
+  // 未接登记端口的部署：没有 artifact id，也没有错误（如实表示"没有这个能力"）
+  const plainDeps: WorkerToolDeps = { ...okDeps, recordEvidenceArtifact: undefined };
+  const plain = (await createWorkerTools(plainDeps).pentestExec.execute(
+    {
+      command: 'nmap -sS -Pn -p 80 10.0.0.5',
+      port: 80,
+      target_selector: 'http://10.0.0.5/',
+      purpose: '未接端口',
+      save_stdout_as_evidence: true,
+    },
+    EXEC,
+  )) as Record<string, unknown>;
+  assert.equal(plain.artifact_id, undefined);
+  assert.equal(plain.evidence_artifact_error, undefined);
+});
+
+test('报告：mode 与 status_note=null 的透传（追加模式整条特性靠它）', async () => {
+  const fake = makeDeps();
+  const tools = createWorkerTools(fake.deps);
+
+  // ① `mode: 'append'` 必须到服务端——不到就是"我以为是追加，实际整份替换"（最坏的一种静默）
+  await tools.submitReport.execute(
+    { status: 'report_ready', objective: 'o', summary: 's', payload: { facts: [{ statement: 'a' }] }, mode: 'append' },
+    EXEC,
+  );
+  assert.equal(only(fake.submitReportCalls).report.mode, 'append');
+
+  // ② 不传 mode ⇒ 不带该字段（让服务端的默认值（replace）说了算，而不是工具层猜）
+  await tools.submitReport.execute({ status: 'report_ready', objective: 'o', summary: 's', payload: {} }, EXEC);
+  assert.equal(Object.hasOwn(fake.submitReportCalls[1]!.report, 'mode'), false);
+
+  // ③ `status_note: null` 与"不填"同义：不得把 null 递给服务（那会在 `.slice` 上炸）
+  await tools.submitReport.execute(
+    { status: 'report_ready', objective: 'o', summary: 's', payload: {}, status_note: null },
+    EXEC,
+  );
+  assert.equal(Object.hasOwn(fake.submitReportCalls[2]!.report, 'statusNote'), false);
 });

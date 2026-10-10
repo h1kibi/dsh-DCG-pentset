@@ -914,6 +914,205 @@ describe('集成：真实 PostgreSQL（Worker 工具面 · 记忆与报告）', 
     });
   });
 
+  // ───────────────────── 证据登记（§9.2 artifacts；诉求 #5） ─────────────────────
+
+  it('证据登记：落盘文件登记成 artifact 后可按 id 读回；资产归属按精确等值解析', async () => {
+    // 在这之前 `pentest.artifacts` **全仓没有任何 INSERT** ⇒ 报告的 `source_refs:["artifact:<id>"]`
+    // 永远无法满足，模型只能把文件路径当纯文本写进报告（操作者 2026-10-11 实测诉求 #5）。
+    const storagePath = `C:/Projects/pentest/cdut/evidence/47.109.76.66/${randomUUID()}.txt`;
+    const containerPath = '/work/evidence/47.109.76.66/2026-10-11T1200Z-path-review.txt';
+
+    // ① 未登记资产时：**如实**记「解析不到」（不是"已知无归属"）
+    const unmatched = await tools.recordEvidenceArtifact({
+      workerSessionId,
+      storagePath,
+      containerPath,
+      mediaType: 'text/plain; charset=utf-8',
+      byteSize: 12,
+      contentHash: 'f'.repeat(64),
+      purpose: '路径复核',
+      targetSelector: 'https://not-registered.example/',
+      targetHints: ['203.0.113.9'],
+    });
+    const unmatchedRow = await client.query<{
+      kind: string;
+      storage_kind: string;
+      storage_path: string;
+      encrypted: boolean;
+      asset_ids: readonly string[];
+      metadata: Record<string, unknown>;
+      source_ref: string;
+    }>(
+      `SELECT kind, storage_kind, storage_path, encrypted, asset_ids, metadata, source_ref
+         FROM pentest.artifacts WHERE id = $1::uuid`,
+      [unmatched.artifactId],
+    );
+    assert.equal(unmatchedRow.rows[0]?.kind, 'evidence_stdout');
+    assert.equal(unmatchedRow.rows[0]?.storage_kind, 'file');
+    assert.equal(unmatchedRow.rows[0]?.storage_path, storagePath);
+    assert.equal(unmatchedRow.rows[0]?.encrypted, false, '宿主上的明文证据：不假装加密');
+    assert.equal(unmatchedRow.rows[0]?.source_ref, containerPath, '容器路径进 source_ref（人复核时照着找）');
+    assert.deepEqual(unmatchedRow.rows[0]?.asset_ids, []);
+    assert.equal(
+      unmatchedRow.rows[0]?.metadata['assetResolution'],
+      'no_match',
+      '解析不到资产要如实记账——空 asset_ids 在可见性公式里是放行的，不能让它看起来像"已知无归属"',
+    );
+
+    // ② 已登记资产时：归属必须落在 `asset_ids` 上（§8.6 写入侧义务）
+    const assetId = randomUUID();
+    await client.query(
+      `INSERT INTO pentest.assets (id, engagement_id, canonical_target, kind, first_seen_iteration)
+       VALUES ($1::uuid, $2::uuid, '93.184.216.34', 'ip', 1)`,
+      [assetId, engagementId],
+    );
+    const matched = await tools.recordEvidenceArtifact({
+      workerSessionId,
+      storagePath,
+      containerPath,
+      mediaType: 'text/plain; charset=utf-8',
+      byteSize: 12,
+      contentHash: 'e'.repeat(64),
+      purpose: '路径复核',
+      targetSelector: 'https://a.target.com/',
+      targetHints: ['93.184.216.34'],
+    });
+    const matchedRow = await client.query<{ asset_ids: readonly string[]; metadata: Record<string, unknown> }>(
+      'SELECT asset_ids, metadata FROM pentest.artifacts WHERE id = $1::uuid',
+      [matched.artifactId],
+    );
+    assert.deepEqual(matchedRow.rows[0]?.asset_ids, [assetId], '能确定归属就必须填齐 asset_ids');
+    assert.equal(matchedRow.rows[0]?.metadata['assetResolution'], 'matched');
+
+    // ③ 归属了资产、但该资产**还没进范围** ⇒ 读不到（§8.6：可见 ⟺ 非排除 ∧ (含已纳入 ∨ 无归属)）。
+    // 这条不是"顺手加"，而是这次登记与范围过滤的真实交界：填了 asset_ids 就等于把证据挂上了范围闸门，
+    // 因此"登记成功但读不回来"是**正确行为**，必须锁住，免得有人为了让测试变绿去清空 asset_ids。
+    await assert.rejects(
+      () => tools.readArtifact({ workerSessionId, artifactId: matched.artifactId }),
+      (error: unknown) => error instanceof PgWorkerToolRefusal && error.code === 'scope_violation',
+      '资产未纳入范围时，归属到该资产的证据不可读',
+    );
+
+    // ④ 把资产纳入范围后即可读回（§8.7）：文件存储 + 文本类 ⇒ 给受控引用（宿主路径），不发字节（§11.3）
+    await client.query(
+      `INSERT INTO pentest.asset_scope_versions (asset_id, scope_version, engagement_id, decision, decided_by)
+       VALUES ($1::uuid, 1, $2::uuid, 'included', 'human:fixture')`,
+      [assetId, engagementId],
+    );
+    const readBack = await tools.readArtifact({ workerSessionId, artifactId: matched.artifactId });
+    assert.equal(readBack.storageRef, storagePath);
+    assert.equal(readBack.byteSize, 12);
+    assert.equal(readBack.contentHash, 'e'.repeat(64));
+    assert.equal(readBack.inline, undefined, 'storage_kind=file 不发内容');
+    const access = await client.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM pentest.memory_access_log
+        WHERE engagement_id = $1::uuid AND access_kind = 'artifact_read'`,
+      [engagementId],
+    );
+    assert.ok(Number(access.rows[0]?.n) >= 1, '读取证据要留审计');
+  });
+
+  it('报告：mode=append 合并当前载荷（数组追加去重、标量覆盖），账本记合并后的有效载荷', async () => {
+    // 操作者诉求 #2（2026-10-11）：一份真实报告几 KB（21 条 facts + 5 条候选），补几条却要整份重发。
+    // 追加模式让模型只发增量；语义由 `mergeReportPayload` 定（数组追加去重/对象递归/其余覆盖）。
+    const base = await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '追加模式',
+        summary: '基底报告',
+        payload: { summary: '旧摘要', facts: ['a'], candidate_findings: [{ title: 't1' }] },
+      },
+    });
+    const appended = await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '追加模式',
+        summary: '补两条',
+        payload: { summary: '新摘要', facts: ['b'], candidate_findings: [{ title: 't2' }] },
+        mode: 'append',
+      },
+    });
+    assert.equal(appended.merged?.mode, 'append');
+    assert.equal(appended.merged?.baseReportId, base.reportId, '基底必须是"当前那一份"，不是某个历史版本');
+    assert.deepEqual(appended.merged?.sections, { facts: 2, candidate_findings: 2 }, '只数数组分段');
+
+    const mergedRow = await client.query<{ payload_json: Record<string, unknown> }>(
+      'select payload_json from pentest.worker_reports where id = $1::uuid',
+      [appended.reportId],
+    );
+    assert.deepEqual(mergedRow.rows[0]?.payload_json['facts'], ['a', 'b'], '数组追加');
+    assert.equal(mergedRow.rows[0]?.payload_json['summary'], '新摘要', '标量由新值覆盖');
+    assert.equal(
+      appended.findings.written,
+      2,
+      '候选结论按**合并后的载荷**投影（旧的那条被取代后重新写入 + 新的）',
+    );
+
+    // 幂等：同一份增量重发一次（超时重试、模型重试）不得把条目翻倍。
+    const again = await tools.submitReport({
+      workerSessionId,
+      leaseGeneration: 1,
+      report: {
+        status: 'report_ready',
+        objective: '追加模式',
+        summary: '重发同一份增量',
+        payload: { facts: ['b'], candidate_findings: [{ title: 't2' }] },
+        mode: 'append',
+      },
+    });
+    const againRow = await client.query<{ payload_json: Record<string, unknown> }>(
+      'select payload_json from pentest.worker_reports where id = $1::uuid',
+      [again.reportId],
+    );
+    assert.deepEqual(againRow.rows[0]?.payload_json['facts'], ['a', 'b'], '重复项按深等值去重，不翻倍');
+    assert.equal(again.merged?.baseReportId, appended.reportId, '基底是上一份追加结果（链条可回溯）');
+
+    // 账本：记的是**合并后的有效载荷** + 合并来源（只看 payload 无法分辨追加与整份重发）。
+    const reportEvents = await client.query<{ payload_json: Record<string, unknown> }>(
+      `select payload_json from pentest.context_events
+        where engagement_id = $1::uuid and worker_session_id = $2::uuid
+          and event_type = 'worker.report'
+        order by chain_seq desc limit 1`,
+      [engagementId, workerSessionId],
+    );
+    const lastEvent = reportEvents.rows[0]?.payload_json ?? {};
+    assert.deepEqual((lastEvent['payload'] as Record<string, unknown>)['facts'], ['a', 'b']);
+    assert.equal(lastEvent['mergedFrom'], appended.reportId, '账本要能看出"这次是追加"以及追加到了哪一份');
+
+    // 没有基底时**明确拒绝**（而不是静默当整份替换——那会丢掉此前那份载荷里模型没重发的内容）。
+    // 造法：`attempt` 是"会话重启"的维度（同一作业只能有一个存活会话，共享夹具里造不出第二个），
+    // 因此把当前会话推进到 attempt=2 ——那是一次合法重启后的状态：本 attempt 还没有任何报告。
+    await client.query('UPDATE pentest.worker_sessions SET attempt = 2 WHERE id = $1::uuid', [workerSessionId]);
+    try {
+      await assert.rejects(
+        () =>
+          tools.submitReport({
+            workerSessionId,
+            leaseGeneration: 1,
+            report: {
+              status: 'report_ready',
+              objective: '追加模式',
+              summary: '新 attempt 的第一次提交就想追加',
+              payload: { facts: ['x'] },
+              mode: 'append',
+            },
+          }),
+        (error: unknown) =>
+          error instanceof PgWorkerToolRefusal &&
+          error.code === 'classification_rejected' &&
+          /append/.test(String((error as { message?: unknown }).message)),
+        '没有基底可追加时必须拒绝，并说清是 append 模式的问题',
+      );
+    } finally {
+      // 后续用例的 SQL 硬编码 attempt = 1，测试内部状态必须还原（不是"顺手改夹具"）。
+      await client.query('UPDATE pentest.worker_sessions SET attempt = 1 WHERE id = $1::uuid', [workerSessionId]);
+    }
+  });
+
   it('报告：未提供状态便签时从 summary 派生并记录来源事件', async () => {
     const summary = '下一步核实允许的 Web 入口';
     const submitted = await tools.submitReport({

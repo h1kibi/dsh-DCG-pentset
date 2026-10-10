@@ -58,7 +58,7 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     enums: { enumerate_protocols: ['on', 'off'] },
   },
   http_probe: {
-    defaults: { port: 80, scheme: 'auto', follow_redirects: 0, collect: 'headers', verify_tls: 'true', include_chunks: 'true' },
+    defaults: { port: 80, scheme: 'auto', follow_redirects: 0, collect: 'headers', verify_tls: 'true', include_chunks: 'true', paths: '' },
     required: [],
     enums: {
       scheme: ['http', 'https', 'auto'],
@@ -68,7 +68,7 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     },
   },
   content_discover: {
-    defaults: { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5, verify_tls: 'true', path: '' },
+    defaults: { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5, verify_tls: 'true', path: '', entry_range: '' },
     required: [],
     enums: {
       // 注意：这里**没有** `auto`——内容发现必须先知道协议，猜协议会让整轮结果失真。
@@ -155,7 +155,16 @@ export interface ReconIntentInput {
   readonly technique: string;
   readonly targetSelector: string;
   readonly purpose: string;
-  readonly [input: string]: string | number | undefined;
+  /**
+   * 其余入参直接来自工具层（模型给的 JSON）：**布尔是常态**——模型看到 `enum: ['true','false']`
+   * 就传 `true`/`false`（2026-10-10 实测）。类型如实写出这一点，而不是写 `string | number`
+   * 再让回归锁靠 cast 去"骗过类型"：**类型说谎的地方，契约就没人守**。
+   *
+   * 两种布尔的下场不同，见 `buildStructuredIntent`：枚举参数被归一化成 `'true'`/`'false'`；
+   * 非枚举参数**一律拒绝**——`scripts: true` 归一成 `'true'` 会正好命中脚本名模式，
+   * 那是把类型错误变成静默的合法调用。
+   */
+  readonly [input: string]: string | number | boolean | undefined;
 }
 
 export type ReconIntentOutcome =
@@ -213,8 +222,27 @@ export function buildStructuredIntent(family: StructuredFamily, input: ReconInte
         expectedValues: domain,
       };
     }
-    // 枚举参数强制转换成字符串（LLM 看到 enum: ['true','false'] 常传布尔值）
-    params[paramName] = domain !== undefined ? String(value) : value;
+    // 枚举参数强制转换成字符串（LLM 看到 enum: ['true','false'] 常传布尔值；布尔在枚举里
+    // 就是 `'true'`/`'false'` 那一员，归一化不改变契约）。
+    if (domain !== undefined) {
+      params[paramName] = String(value);
+      continue;
+    }
+    // 非枚举参数收到布尔**一律拒绝**，而不是 `String(value)` 之后交给模板：
+    //     `scripts: true` → `'true'` 正好命中 `^[a-z0-9-]+(,…)*$` ⇒ 把类型错误变成**静默的合法调用**
+    // （`ports: true` 同理会变成"一个叫 true 的端口表达式"——结果对、理由错、不可预期）。
+    // 拒绝点在**工具层**：错误信息能直接说出"只有枚举参数接受布尔"，模型一次就能改对。
+    if (typeof value === 'boolean') {
+      return {
+        ok: false,
+        code: 'classification_rejected',
+        message: `${family} 的 technique=${input.technique} 参数 ${key} 收到布尔值 ${String(value)}——只有枚举参数接受布尔（会归一化成 'true'/'false'）`,
+        nextAction: `按模板声明的类型给值：${[...allowed].join('、')}（枚举参数才用 'true'/'false'）`,
+        errorType: 'parameter_validation',
+        expectedValues: [...allowed],
+      };
+    }
+    params[paramName] = value;
   }
   const missing = spec.required.filter((name) => params[name] === undefined);
   if (missing.length > 0) {
