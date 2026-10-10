@@ -478,11 +478,27 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
           },
         };
       }
-    } else if (row === undefined || row.disabled) {
-      // 旧会话：与既有语义一致（库侧决定可读性）。
-      return { skill: null, loadedNames };
+    } else if (row === undefined) {
+      // 库里没有这个 skill（被删除或从未存在过）
+      return {
+        skill: null,
+        loadedNames,
+        refusal: {
+          message: `skill ${input.skillName} 在库里不存在或已被删除`,
+          nextAction: '由人类确认技能库或新建会话',
+        },
+      };
+    } else if (row.disabled) {
+      // 库里存在但被禁用
+      return {
+        skill: null,
+        loadedNames,
+        refusal: {
+          message: `skill ${input.skillName} 已被停用；恢复启用后可加载`,
+          nextAction: '由人类确认是否恢复启用，或新建会话选用其它技能',
+        },
+      };
     }
-    if (row === undefined) return { skill: null, loadedNames };
     return {
       skill: {
         name: row.name,

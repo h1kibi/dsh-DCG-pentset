@@ -62,8 +62,9 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Context } from '@deepseek-ai/cordis';
-import { SessionSeq } from '@deepseek-ai/dsh-session';
 import type { SessionId } from '@deepseek-ai/dsh-session';
+// SessionSeq 在 0.1.5-rc.2 中不存在导出，实际就是 number
+type SessionSeq = number;
 import { deepFreeze } from '@deepseek-ai/dsh-util-values';
 
 import { describeError, HUMAN_QUESTION_TOOL, freeCommandNeedsApproval } from '../contracts.ts';

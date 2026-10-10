@@ -180,7 +180,7 @@ export function buildStructuredIntent(family: StructuredFamily, input: ReconInte
       return {
         ok: false,
         code: 'classification_rejected',
-        message: `${family} 的 technique=${input.technique} 不接受参数 ${key}`,
+        message: `${family} 的 technique=${input.technique} 不接受参数 ${key}（拼写错误或不支持该参数）`,
         nextAction: `本动作只接受：${[...allowed].join('、')}`,
       };
     }

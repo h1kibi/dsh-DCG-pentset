@@ -63,14 +63,14 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-session": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2",
-    "@deepseek-ai/dsh-util-values": "^0.1.5-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.2",
     "react": "^18.2.0"
   },
   "dependencies": {
     "@deepseek-ai/dsh-typert-protocol": "0.1.5-rc.2",
-    "pg": "^8.13.1"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
@@ -83,10 +83,12 @@
     "@deepseek-ai/dsh-session": "0.1.5-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.5-rc.2",
     "@eslint/js": "^10.0.1",
+    "@types/cytoscape": "^3.31.0",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
+    "cytoscape": "^3.34.3",
     "eslint": "^10.12.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",

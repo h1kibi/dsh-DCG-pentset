@@ -495,7 +495,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
           // 它们作为入参是必填/可选的兄弟字段，模型按设计示例整份塞进 `payload` 时不该被拒。
           schema_version: { type: 'integer', description: '报告 schema 版本（设计 §7.1 示例为 1）' },
           status: { type: 'string', enum: ['report_ready', 'blocked'], description: '与入参 status 同义；整份照抄设计示例时会出现' },
-          objective: { type: 'string', description: '与入参 objective 同义' },
+          objective: { type: 'string', description: '**顶层必填**；如果整份照抄设计示例到 payload 里，这里会重复' },
           summary: { type: 'string', description: '与入参 summary 同义' },
           status_note: { type: 'string', description: '与入参 status_note 同义（≤200 字符）' },
           completed: { type: 'array', items: { type: 'string' }, description: '已完成事项清单' },
@@ -1151,7 +1151,10 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；也接受容器路径写法（`/work/...`）；' +
       '空路径或 `.` 就是挂载根本身。' +
       '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
-      '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。',
+      '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。' +
+      '\n⚠️  **警告**：挂载根由人类在启动时配置。如果配置错误，你可能在读写**不属于本作业**的目录。' +
+      '每次 `op=list` 时请检查返回的 `root` 字段（应该是本作业的目录），或用 `op=list .` 浏览根目录确认；' +
+      '遇到怀疑属于其它作业的文件时停止写操作并通知人类。',
     parameters: {
       op: { type: 'string', required: true, description: 'list | read | write' },
       path: { type: 'string', required: true, description: '相对挂载根的路径（空或 `.` 就是根；目录用于 list/search）' },

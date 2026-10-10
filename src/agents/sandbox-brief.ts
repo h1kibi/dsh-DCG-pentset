@@ -191,7 +191,7 @@ export function renderSandboxBrief(
   ];
 
   // 结构化动作参数指南：各个 technique 的参数表（在两条通道对比表与工具分组之后）
-  if (toolAllow.includes('pentest_recon') || toolAllow.includes('pentest_vuln_check')) {
+  if (toolAllow.includes('pentest_recon') || toolAllow.includes('pentest_scan') || toolAllow.includes('pentest_vuln_check')) {
     sections.push('', renderTechniqueParamsGuide());
   }
 
