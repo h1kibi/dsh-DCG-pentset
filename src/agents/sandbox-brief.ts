@@ -190,9 +190,11 @@ export function renderSandboxBrief(
     '不做爆破与喷洒（单账号 ≤5 次、间隔 ≥1s，且要人类逐条放行）；不把数据批量外传；范围外地址一律不打。',
   ];
 
-  // 结构化动作参数指南：各个 technique 的参数表（在两条通道对比表与工具分组之后）
-  if (toolAllow.includes('pentest_recon') || toolAllow.includes('pentest_scan')) {
-    sections.push('', renderTechniqueParamsGuide());
+  // 结构化动作参数指南：各个 technique 的参数表（在两条通道对比表与工具分组之后）。
+  // **按在场的工具分节**：不在能力快照里的工具，简报一个字都不提——否则模型照着参数表去调，
+  // 拿到的是"没这个工具"，而它会以为是自己写错了（2026-10-10 操作者实测）。
+  if (hasRecon || hasScan) {
+    sections.push('', renderTechniqueParamsGuide({ recon: hasRecon, vuln: hasScan }));
   }
 
   return sections.join('\n');

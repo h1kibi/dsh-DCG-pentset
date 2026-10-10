@@ -26,6 +26,7 @@ import type { MainStatus, ScopeTarget, TransitionType } from '../src/contracts.t
 import { isLegalStatusEdge } from '../src/workflow/phases.ts';
 import { computeDraftHash, computeHandoffHash } from '../src/workflow/handoff.ts';
 
+import { DEFAULT_PHASE_TOOL_ALLOW } from '../src/workflow/model.ts';
 import { PgWorkflowService } from '../src/workflow/pg-workflow.ts';
 import { WorkflowRejection } from '../src/workflow/model.ts';
 import type { RlsScopePort, WorkflowServiceDeps } from '../src/workflow/model.ts';
@@ -397,42 +398,23 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     const frozen = sessions.created.at(-1);
     assert.ok(frozen, '会话工厂必须被调用');
     assert.equal(frozen.dshSessionId, started.dshSessionId);
-    // 内置默认能力声明的就是这一份（其中 pentest_exec 是触及目标的出口；
-    // ask_user_question 是官方提问通道，让 Agent 能把岔路口摆成可点的选项；
-    // pentest_prepare_handoff 让「进入下一阶段」有明确去处（指路到控制台按钮），不反问人类——它一度
-    // 只存在于工具注册表里、没进这份默认装载，等于那个修复没生效，故在此钉住；
-    // skill_load 是 skill 正文的唯一读取入口（能力快照只给名字+描述）——它同样一度缺失，
-    // 结果是 21 份 skill 的正文一条都取不到（2026-10-06 补）；
-    // pentest_recon 是同一批新增的**结构化侦察**入口，只发给需要它的阶段——
-    // 本用例用的阶段是情报收集，因此它在列表里；其它阶段的工具面由
-    // `test/action-templates.test.ts` 的边界断言钉住。
+    // **只验装配，不复制内容**：内容（每个阶段到底带哪些工具）由
+    // `test/action-templates.test.ts` 的边界断言钉住；这里要防的是"省略却拿到空集"
+    // 这类**装配**缺陷——若在此处再抄一份清单，每次裁定都要改两处（2026-10-10 就被戳中一次）。
+    const expected = DEFAULT_PHASE_TOOL_ALLOW['intelligence-gathering'];
     assert.deepEqual(
       [...frozen.toolAllow].sort(),
-      [
-        'artifact_read',
-        'ask_user_question',
-        'memory_read',
-        'memory_search',
-        'pentest_exec',
-        'pentest_prepare_handoff',
-        'pentest_recon',
-        'pentest_request_action_approval',
-        'pentest_submit_report',
-        // 作业目录读写：不进范围裁决的**非目标**通道（2026-10-07）——空范围作业里
-        // 它是唯一能读到作业资料的入口，因此每个阶段（含情报收集）默认都带。
-        'pentest_workdir',
-        'pentest_write_status_note',
-        'skill_load',
-      ],
-      '省略时必须拿到阶段能力的默认工具面，而不是空集',
+      [...expected].sort(),
+      '省略时必须拿到该阶段能力声明的默认工具面（不是空集，也不是别的阶段的）',
     );
-
-    // 同一份列表也必须落库：会话重建（复用/重做）时靠它还原冻结能力。
-    const row = await pool.query(
-      `select tool_filter from pentest.worker_sessions where id = $1::uuid`,
-      [started.workerSessionId],
-    );
-    assert.deepEqual([...row.rows[0]!.tool_filter.allow].sort(), [...frozen.toolAllow].sort());
+    // 三条**点名**的哨兵：各自对应一次真实事故，值得在失败信息里一眼看到。
+    for (const [tool, why] of [
+      ['pentest_exec', '触及目标的唯一出口：空集会让 Agent 连命令都跑不了'],
+      ['skill_load', 'skill 正文的唯一读取入口（一度缺失，21 份正文一条都取不到）'],
+      ['pentest_prepare_handoff', '「进入下一阶段」的去处（一度只在注册表里、没进默认装载）'],
+    ] as const) {
+      assert.ok(frozen.toolAllow.includes(tool), `${tool} 必须在默认面里：${why}`);
+    }
   });
 
   test('提问通道两侧必须齐备：渗透模式预设挂官方工具行', async () => {

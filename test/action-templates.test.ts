@@ -52,10 +52,18 @@ function dispatcherKeys(constant: string): readonly string[] {
 }
 
 const registry = defaultRegistry();
-/** 两族各自的模板清单 + 工具名（族 → 前缀；模板 id 与族前缀同一份来源）。 */
-const FAMILIES: readonly { family: StructuredFamily; tool: string; phase: string }[] = [
-  { family: 'recon', tool: 'pentest_recon', phase: 'intelligence-gathering' },
-  { family: 'vuln', tool: 'pentest_scan', phase: 'vulnerability-analysis' },
+/**
+ * 两族各自的模板清单 + 工具名 + **默认承载它的阶段**。
+ *
+ * `pentest_scan` 自 2026-10-10（操作者裁定）起**同时发给情报收集与漏洞分析**：
+ * 情报阶段做配置暴露核查时，手搓 curl 会把正文写进证据，而 `exposure_check` / `http_check`
+ * 这类只读核验动词只报存在性/长度/哈希/形态、从不回显内容——同一件事，结构化通道姿态更严。
+ * 两个阶段拿它做的事不同（情报：记录事实；漏洞分析：判定候选），因此这条边界是**承载面**
+ * 的边界，不是"只能一个阶段用"的边界。
+ */
+const FAMILIES: readonly { family: StructuredFamily; tool: string; phases: readonly string[] }[] = [
+  { family: 'recon', tool: 'pentest_recon', phases: ['intelligence-gathering'] },
+  { family: 'vuln', tool: 'pentest_scan', phases: ['intelligence-gathering', 'vulnerability-analysis'] },
 ];
 const templatesOf = (family: StructuredFamily) =>
   registry.list().filter((spec) => spec.template.id.startsWith(`${family}_`));
@@ -268,10 +276,10 @@ describe('容器侧一致性（源码扫描：分发器与模板不许漂移）'
 });
 
 describe('能力边界：结构化工具只发给需要它的阶段；skill_load 每个阶段都要有', () => {
-  for (const { tool, phase } of FAMILIES) {
-    it(`${tool} 只出现在 ${phase} 的默认工具面里`, () => {
+  for (const { tool, phases } of FAMILIES) {
+    it(`${tool} 只出现在 ${phases.join(' / ')} 的默认工具面里`, () => {
       const carriers = PHASES.filter((candidate) => DEFAULT_PHASE_TOOL_ALLOW[candidate].includes(tool));
-      assert.deepEqual([...carriers], [phase]);
+      assert.deepEqual([...carriers], [...phases], '承载阶段与裁定不一致（多一个或少一个都会让提示词与工具面对不上）');
     });
   }
 
@@ -531,6 +539,37 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     assert.ok(verbStart > 0);
     const verbBody = DISPATCHER.slice(verbStart, DISPATCHER.indexOf('\ndef ', verbStart + 1));
     assert.match(verbBody, /params\.get\("path"\)/, '容器侧未读取 path 参数');
+  });
+
+  it('exposure_check 的形态判据：签名与正文同为 bytes，比对**不得解码**（2026-10-10 实测崩过）', () => {
+    // 实况：`signature.lower() in body.decode(...)` ⇒ `bytes in str` ⇒ TypeError，
+    // 而且只在"真的命中候选"时触发（更早的冒烟全落在"与对照同形"分支）⇒ 一路漏到实测。
+    const sigStart = DISPATCHER.indexOf('EXPOSURE_SIGNATURES = {');
+    assert.ok(sigStart > 0, '分发器里找不到 EXPOSURE_SIGNATURES');
+    const sigBlock = DISPATCHER.slice(sigStart, DISPATCHER.indexOf('\n}', sigStart));
+    // 两种引号都要认：正文含引号的签名写成 `b'"swagger"'`（单引号包 bytes、内部是双引号）。
+    const entries = [...sigBlock.matchAll(/"([a-z_]+)":\s*(b?['"])/g)].map((m) => ({
+      key: m[1] ?? '',
+      prefix: m[2] ?? '',
+    }));
+    assert.ok(entries.length >= 9, `签名条目太少：${String(entries.length)}`);
+    const notBytes = entries.filter((e) => e.prefix !== 'b"' && e.prefix !== "b'").map((e) => e.key);
+    assert.deepEqual(notBytes, [], '签名必须是 bytes 字面量（与 resp.read() 的 bytes 一致；str 会在比对处 TypeError）');
+
+    const fnStart = DISPATCHER.indexOf('def classify_exposure(');
+    assert.ok(fnStart > 0, '分发器里找不到 classify_exposure');
+    const fnBody = DISPATCHER.slice(fnStart, DISPATCHER.indexOf('\ndef ', fnStart + 1));
+    // **只看代码行**：注释里会引用旧写法（"曾经写成 …decode(…)"），那不是实现。
+    const cmpLine = fnBody
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .find((line) => line.includes('signature.lower()'));
+    assert.ok(cmpLine !== undefined, 'classify_exposure 里找不到签名比对那一行');
+    assert.ok(
+      !cmpLine.includes('.decode('),
+      '签名比对不得解码：签名与正文同为 bytes，混用 str 会 TypeError（这条崩只在命中候选时出现）',
+    );
+    assert.match(cmpLine, /body\.lower\(\)/, '应按 bytes 比对（body.lower()）');
   });
 
   it('每个结构化动词的超时：容器默认表与宿主模板一致（port_scan 曾是 300s vs 900s）', () => {

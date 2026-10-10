@@ -308,7 +308,14 @@ export class SessionFlow {
       //
       // 空数组在 dsh 里等于「该会话没有任何全局工具」——连 `pentest_exec` 都没有，
       // 而且 dsh 不报错（静默给出一个无法工作的会话）。人类之前确认过的工具集
-      // 应当在同阶段重做时延续；要改能力应走切换阶段或从控制台显式指定。
+      // 应当在同阶段重做时延续。
+      //
+      // **注意这条的边界**（2026-10-10 校正）：本函数只沿用**该会话冻结时**的那一份，
+      // 因此**阶段默认面后来的变化不会通过重做生效**（例如 2026-10-10 情报阶段新开
+      // `pentest_scan`，旧会话重做仍没有它）。想拿到新的默认面要**新建会话**（控制台
+      // 「启动 Agent」省略 toolAllow ⇒ 用阶段默认）。这里曾写「要改能力应走切换阶段或
+      // 从控制台显式指定」——**后半句已不成立**：逐项编辑器在 2026-10-07 被撤下，
+      // 能力边界只由 Profile 与阶段默认决定，重做只能延续（不能被用来放宽）。
       const inherited = await this.#core.loadSessionTooling(currentId);
       await this.#core.createDshSessionOrMarkFailed({
         sessionKind: 'phase',

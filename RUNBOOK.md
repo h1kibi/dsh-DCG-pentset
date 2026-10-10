@@ -1060,10 +1060,24 @@ npm run typecheck && npm run lint && npm test && npm run verify
 | `whois 47.109.76.66` **完全无输出**（rDNS 也空），归属无法确证 | 客户端 5.5.17 的默认路径先问 IANA 取转介，**IANA 把 47/8 转介给 `whois.arin.net`**，而该主机在**本沙箱不可达**（`:43` 连不上；实测宿主可通、沙箱内 43 端口对其他 whois 主机是通的）⇒ 默认路径既不换家也不报错，只留 0 字节 | `whois_query` 改为**显式转介链 + 兜底**：IANA → 它指的那家 → 答不出记录则按 `apnic/ripe/lacnic/afrinic/arin` 顺序再试，取第一条含记录字段（`inetnum:/netrange:/orgname:` …）的答复；每跳独立超时且总时长受本次预算约束。实测该目标 8 秒内给出 `inetnum 47.104.0.0-47.111.255.255 / netname ALISOFT / descr Aliyun Computing Co., LTD / abuse didong.jc@alibaba-inc.com` 一类可引用字段 |
 | `pentest_exec` 超时口径读起来自相矛盾（"5 分钟，不是 15 分钟"＋"15 分钟是上限"） | 两句话分散在三行里，且没说清"上限按动作定" | 合成一段：**15 分钟是沙箱天花板、不是任何动作的默认**；自由命令 5 分钟、结构化动作更小；按 5 分钟切段 |
 | `port_scan` 批次扫描：宿主按 15 分钟规划，容器 5 分钟就砍 | 容器 `DEFAULT_TOOL_TIMEOUT_MS["port_scan"]` 是 300s（其余 13 个动词都与模板一致，**只此一处**），而 `budget_ms` 取 `min(注入值, 本表)` ⇒ 本表就是天花板 | 容器侧抬到 900_000 与模板对齐；新增**超时对拍回归锁**（`test/action-templates.test.ts` 解析分发器表，逐动词与宿主模板比对） |
+| 情报阶段看不到 `pentest_scan`（含 `exposure_check`），"配置暴露核查"只能手搓 `curl` | 该工具只发给漏洞分析阶段；2026-10-07 撤下逐项编辑器后没有人类入口能加工具 ⇒ 能力边界只由 Profile 与阶段默认决定 | 把 `pentest_scan` 加入情报收集默认工具面（见下方裁定说明）；提示词改为**按在场工具分节**渲染参数指南 + 一致性锁；`recon-web-surface` 补第 8/9 行 |
+| **`exposure_check` 只要命中候选就崩**：`internal_error: TypeError: 'in <string>' requires string as left operand, not bytes` | `classify_exposure` 写成 `signature.lower() in body.decode(...)`，而 `EXPOSURE_SIGNATURES` 是 **bytes** 字面量（`b"ref:"` / `b'"swagger"'`）⇒ `bytes in str` 必崩；它只在"真的命中候选"时走到，更早的冒烟全落在"与对照同形"分支，**且该纯函数从无单测**（注释里"可无 socket 单测"的意图从未落地） | 改为 **bytes 对 bytes**（`signature.lower() in body.lower()`，不解码）；加文本锁钉住"签名表是 bytes 且比对不得 decode"；实测（自建夹具、只读 GET）：`.git/HEAD`/`.env` → `looks_like=true`、`swagger.json` → `control=same` 判为软 404、**不回显正文** |
 
 **顺带澄清（不是缺陷）**：`ffuf 1.1.0` **有**跳过证书校验的开关，且 `content_discover` 在
 `verify_tls=false` + https 时已经传 `-k`（实测 `ffuf -k -h` 正常解析，说明该版本接受 `-k`）。
 「ffuf 不能打自签目标」这条**不成立**，可放心用结构化通道做自签/IP 目标的目录枚举。
+
+**情报阶段现在也有只读核验面**（2026-10-10 操作者裁定，设计文档同轮记录）：操作者任务要求
+「配置暴露核查」，而当时 `pentest_scan`（含 `exposure_check`）只发给漏洞分析阶段，且撤下逐项
+编辑器后**没有人类入口**能为情报会话加工具 ⇒ 只能手搓 `curl`，代价是"把 `/lists/config` 正文
+写进证据"，而结构化通道在同一件事上**从不回显正文**。因此把 `pentest_scan` 加入情报收集的
+默认工具面；两个阶段的**判据差异不变**（情报记录事实、漏洞分析判定候选）。三件配套：
+
+- 提示词**按在场的工具分节渲染**参数指南（此前只要有一个结构化工具就整篇渲染，于是没有
+  `pentest_scan` 的阶段也会被介绍它的参数表——模型照着去调，得到"没这个工具"）；
+- `recon-web-surface` 技能补第 8/9 行：配置面暴露 → `exposure_check`（项名 `git,env,swagger,…`，
+  ≤10，**不是路径**）、基线核验 → `http_check`；
+- **已有会话不受影响**：能力快照在创建时冻结，要用新面请**新建会话**（或用同阶段重做）。
 
 ## 6.5.14 本机跑测试需要独立的 `pentest` 测试库（2026-10-10 补）
 

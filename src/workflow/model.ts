@@ -388,6 +388,13 @@ export const DEFAULT_PHASE_TOOL_ALLOW: Readonly<Record<Phase, readonly string[]>
     // 它们不需要逐条人批（类别是 active_probing / passive_collection），
     // 但只打已裁决地址、参数只有枚举——比让它手写 nmap 命令既安全又可复现。
     'pentest_recon',
+    // **情报阶段也要只读核验面**（2026-10-10 操作者裁定）：`pentest_scan` 的四个 technique
+    // 全是只读事实采集（安全头/Cookie/CORS/方法/错误泄露、配置面暴露、TLS 协议与套件、
+    // 协议级握手），类别同为 `active_probing`（免批），且 `exposure_check` **只报存在性/长度/
+    // 哈希/形态、从不回显内容**。此前它只发给漏洞分析，结果是情报阶段被迫**手搓 curl**：
+    // 操作者实测的代价是"把 /lists/config 正文前 1200 字符写进证据"——同一件事，结构化通道
+    // 的姿态更严（不回显）。判定"这条候选成不成立"仍属漏洞分析；本阶段用它**记录事实**。
+    'pentest_scan',
     EXEC_TOOL_NAME,
   ],
   'threat-modeling': [

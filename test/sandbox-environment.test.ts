@@ -19,7 +19,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { SANDBOX_TEMPLATE_DIR, SANDBOX_TOOL_GROUPS, SANDBOX_TOOLBELT, SANDBOX_WORDLISTS } from '../src/contracts.ts';
+import { PHASES, SANDBOX_TEMPLATE_DIR, SANDBOX_TOOL_GROUPS, SANDBOX_TOOLBELT, SANDBOX_WORDLISTS } from '../src/contracts.ts';
+import { DEFAULT_PHASE_TOOL_ALLOW } from '../src/workflow/model.ts';
 import { renderSandboxBrief } from '../src/agents/sandbox-brief.ts';
 import { DEFAULT_SANDBOX_LIMITS, SANDBOX_TMPFS_SIZE } from '../src/execution/docker-sandbox.ts';
 import { RECON_TECHNIQUES, VULN_TECHNIQUES } from '../src/execution/techniques.ts';
@@ -164,6 +165,49 @@ describe('沙箱环境声明 ↔ 提示词：渲染出来的东西必须真的�
     assert.match(brief, /不(做)?爆破|禁爆破/, '必须写明默认不做爆破');
     assert.match(brief, /可达 ≠ 授权/, '必须写明可达不等于授权');
     assert.match(brief, /长输出先落盘/, '必须教它长输出先落盘再筛（否则会被截断）');
+  });
+
+  it('提示词只介绍**该会话真调得到**的结构化工具（2026-10-10 实测：情报阶段被介绍了不在面的工具）', () => {
+    for (const phase of PHASES) {
+      const allow = DEFAULT_PHASE_TOOL_ALLOW[phase];
+      const brief = renderSandboxBrief('phase', [], allow, phase);
+      for (const [tool, techniques, intro] of [
+        [
+          'pentest_recon',
+          Object.keys(RECON_TECHNIQUES),
+          '以下是 `pentest_recon` 工具各个 technique 的参数说明。',
+        ],
+        [
+          'pentest_scan',
+          Object.keys(VULN_TECHNIQUES),
+          '以下是 `pentest_scan` 工具各个 technique 的参数说明。',
+        ],
+      ] as const) {
+        const inFace = allow.includes(tool);
+        if (inFace) {
+          assert.ok(brief.includes(intro), `${phase}：面里有 ${tool}，简报却没有它的参数指南`);
+          assert.ok(brief.includes(`\`${tool}\`（technique：`), `${phase}：通道那一行必须点名 ${tool}`);
+          for (const technique of techniques) {
+            assert.ok(brief.includes(technique), `${phase}：面里有 ${tool}，简报却漏了 technique ${technique}`);
+          }
+        } else {
+          // 判据分两层，避开两个误报源：
+          //   · 参数指南整节（标题 + 每个 technique 的示例调用）——这是"介绍它怎么用"；
+          //   · 通道那一行（`` `X`（technique：…）``）。
+          // **不算**误报的：环境事实里提到镜像里的**容器动词**（如「沙箱的 `port_scan` 动词已内置」）
+          // ——那是镜像里的包装器名字，手写命令同样用得上，不是"介绍一个调不到的工具"。
+          assert.ok(!brief.includes(intro), `${phase}：面里没有 ${tool}，简报却整节介绍它的参数表`);
+          assert.ok(!brief.includes(`\`${tool}\`（technique：`), `${phase}：面里没有 ${tool}，通道那一行却点名了它`);
+          assert.ok(
+            !brief.includes(`${tool}(technique=`),
+            `${phase}：面里没有 ${tool}，简报却给出示例调用——模型会去调一个不存在的工具`,
+          );
+        }
+      }
+    }
+    const noStructured = renderSandboxBrief('phase', [], ['memory_search', 'pentest_exec'], 'exploitation');
+    assert.ok(!noStructured.includes('结构化侦察动作参数指南'), '没有结构化工具时不得渲染侦察参数指南');
+    assert.ok(!noStructured.includes('结构化漏洞核验动作参数指南'), '没有结构化工具时不得渲染核验参数指南');
   });
 
   it('intake 简报是短的、且不介绍任何目标工具（那段能力它没有）', () => {

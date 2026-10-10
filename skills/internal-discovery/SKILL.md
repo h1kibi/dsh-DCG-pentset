@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, MITRE ATT&CK T1046/T1018]
-  smoked: "沙箱实测@7548dbc3a2ae：5 块原文配方合并进同一容器实跑（靶标 172.29.0.2:8080）——①台账按正文结构铺好 /tmp/scope.json 后 `jq -r … | @tsv` 出 `cidr 172.29.0.0/16 8080-8080,9000-9000`（rc=0）；②`-sn -PE -PS8080 -n` 单个 /24 → 8 台存活（.1–.8，含全部靶标 .2–.7；另有一次抓到别的 agent 容器 .9/.10）、2–8s；同一配方填 /16 实测 2493s > 900s 墙钟 ⇒ 本轮给该步补了 /24 粒度、分批与「-oG 是覆盖写」纪律；③`-sT -Pn -n -iL /tmp/alive.txt -p 8080 -oG` → `172.29.0.2 Ports: 8080/open/tcp//http-proxy///`（其余 closed，rc=0）；④`--script=banner` 对本靶无 banner 段（如实留 unknown）；⑤awk 落地 + `jq -n --rawfile hosts`（jq 1.6、空文件也 rc=0）产出 {\"discovered\":[\"172.29.0.2\"],\"method\":\"icmp+declared-ports\"}。历史：沙箱实测@7548dbc3a2ae：8 台存活 + 8080/open；步骤 5 由 `<(...)`+`--slurpfile` 修成 awk 落地 + `--rawfile`"
+  smoked: "沙箱实测@a95b0affb2cd：5 块原文配方合并进同一容器实跑（靶标 172.29.0.2:8080）——①台账按正文结构铺好 /tmp/scope.json 后 `jq -r … | @tsv` 出 `cidr 172.29.0.0/16 8080-8080,9000-9000`（rc=0）；②`-sn -PE -PS8080 -n` 单个 /24 → 8 台存活（.1–.8，含全部靶标 .2–.7；另有一次抓到别的 agent 容器 .9/.10）、2–8s；同一配方填 /16 实测 2493s > 900s 墙钟 ⇒ 本轮给该步补了 /24 粒度、分批与「-oG 是覆盖写」纪律；③`-sT -Pn -n -iL /tmp/alive.txt -p 8080 -oG` → `172.29.0.2 Ports: 8080/open/tcp//http-proxy///`（其余 closed，rc=0）；④`--script=banner` 对本靶无 banner 段（如实留 unknown）；⑤awk 落地 + `jq -n --rawfile hosts`（jq 1.6、空文件也 rc=0）产出 {\"discovered\":[\"172.29.0.2\"],\"method\":\"icmp+declared-ports\"}。历史：沙箱实测@a95b0affb2cd：8 台存活 + 8080/open；步骤 5 由 `<(...)`+`--slurpfile` 修成 awk 落地 + `--rawfile`"
 ---
 
 # 内网资产发现（internal-discovery）

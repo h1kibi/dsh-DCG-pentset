@@ -500,22 +500,38 @@ function renderTechniqueGuide(guide: TechniqueGuide): string {
   return lines.join('\n');
 }
 
-/** 渲染结构化动作参数指南（注入到沙箱简报的两条通道对比表之后）。 */
-export function renderTechniqueParamsGuide(): string {
-  const sections = [
-    '═══ 结构化侦察动作参数指南 ═══',
-    '',
-    '以下是 `pentest_recon` 工具各个 technique 的参数说明。',
-    '优先用结构化通道：参数少、免手写命令、①②③阶段免批。',
-    '',
-    ...RECON_GUIDES.map(renderTechniqueGuide),
-    '',
-    '═══ 结构化漏洞核验动作参数指南 ═══',
-    '',
-    '以下是 `pentest_scan` 工具各个 technique 的参数说明。',
-    '',
-    ...VULN_GUIDES.map(renderTechniqueGuide),
-  ];
-
+/**
+ * 渲染结构化动作参数指南（注入到沙箱简报的两条通道对比表之后）。
+ *
+ * **按在场的工具分节渲染**（2026-10-10 修）：此前只要有一个结构化工具在面里就整篇渲染，
+ * 于是情报阶段的简报里出现了「`pentest_scan` 各 technique 参数说明」——而那个工具当时
+ * 不在该会话的能力快照里，模型照着参数表去调，得到的是"没这个工具"。**提示词只描述
+ * 真实可调用的东西**，这条与"只宣传真实存在的通道"是同一条纪律。
+ */
+export function renderTechniqueParamsGuide(include: {
+  readonly recon: boolean;
+  readonly vuln: boolean;
+}): string {
+  const sections: string[] = [];
+  if (include.recon) {
+    sections.push(
+      '═══ 结构化侦察动作参数指南 ═══',
+      '',
+      '以下是 `pentest_recon` 工具各个 technique 的参数说明。',
+      '优先用结构化通道：参数少、免手写命令、①②③阶段免批。',
+      '',
+      ...RECON_GUIDES.map(renderTechniqueGuide),
+      '',
+    );
+  }
+  if (include.vuln) {
+    sections.push(
+      '═══ 结构化漏洞核验动作参数指南 ═══',
+      '',
+      '以下是 `pentest_scan` 工具各个 technique 的参数说明。',
+      '',
+      ...VULN_GUIDES.map(renderTechniqueGuide),
+    );
+  }
   return sections.join('\n');
 }
