@@ -1514,7 +1514,7 @@ export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
           : `把动作的端口收窄到已授权集合，或让人类修订范围条目`;
       return fail(
         'port_not_allowed',
-        `目标 ${req.host} 在范围内，但${describeScopePorts(reqPorts)}未被范围条目授权；` +
+        `目标 ${req.host} 在范围内，但${describeScopePorts(reqPorts)} 未被范围条目授权；` +
           `该目标已授权端口：${authorized}。${hint}（${DOC} 端口的协议依赖性）`,
         req,
       );
