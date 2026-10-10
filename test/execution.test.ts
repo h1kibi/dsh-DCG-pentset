@@ -32,12 +32,14 @@ import {
   buildDisplayCommand,
   createRegistry,
   findForbiddenPayload,
-  portForScope,
+  scopePortsFor,
   validateParams,
   type ParamBag,
   type ActionTemplateSpec,
   type TemplateRegistry,
 } from '../src/execution/templates.ts';
+import { SCAN_PRESETS } from '../src/execution/port-expr.ts';
+import type { ScopePorts } from '../src/contracts.ts';
 import {
   canonicalTargetString,
   canonicalizeCommand,
@@ -159,8 +161,8 @@ type ValidateResult = { ok: true; params: ParamBag } | { ok: false; error: ToolE
 interface PolicyState {
   classify?: (input: { templateId: string }) => Promise<ClassifyResult>;
   validate?: (plan: ExecutionPlan) => Promise<ValidateResult>;
-  scope?: (input: { target: string; protocol: Protocol; port?: number }) => Promise<ScopeVerdict>;
-  scopeCalls: Array<{ target: string; protocol: Protocol; port?: number; scopeVersion: number }>;
+  scope?: (input: { target: string; protocol: Protocol; port?: number; ports?: ScopePorts }) => Promise<ScopeVerdict>;
+  scopeCalls: Array<{ target: string; protocol: Protocol; port?: number; ports?: ScopePorts; scopeVersion: number }>;
   includedHosts: Set<string>;
   excludedHosts: Set<string>;
   unresolvedHosts: Set<string>;
@@ -296,9 +298,20 @@ function makeHarness(
   };
 
   const policyService: PolicyService = {
-    evaluateScope: async ({ target, protocol, port, scopeVersion }) => {
-      policy.scopeCalls.push({ target, protocol, ...(port === undefined ? {} : { port }), scopeVersion });
-      if (policy.scope !== undefined) return policy.scope({ target, protocol, ...(port === undefined ? {} : { port }) });
+    evaluateScope: async ({ target, protocol, port: explicitPort, ports, scopeVersion }) => {
+      policy.scopeCalls.push({
+        target,
+        protocol,
+        ...(explicitPort === undefined ? {} : { port: explicitPort }),
+        ...(ports === undefined ? {} : { ports }),
+        scopeVersion,
+      });
+      if (policy.scope !== undefined) {
+        return policy.scope({ target, protocol, ...(explicitPort === undefined ? {} : { port: explicitPort }), ...(ports === undefined ? {} : { ports }) });
+      }
+      // 单端口区间集合还原成标量 port，供下面的 URL 规范化复用；多端口/无端口不影响本夹具的判定。
+      const single = ports !== undefined && ports.kind === 'ranges' && ports.ranges.length === 1 ? ports.ranges[0] : undefined;
+      const port = explicitPort ?? (single !== undefined && single.from === single.to ? single.from : undefined);
       const normalized = normalize(target, port);
       if (normalized === undefined) return { ok: false, code: 'malformed_target', detail: '无法规范化' };
       if (policy.unresolvedHosts.has(normalized.host)) {
@@ -701,11 +714,45 @@ test('free_command 的 command_b64 在入口就校验 base64 形状（非法值�
   );
 });
 
-test('portForScope 解析四种端口来源', () => {
-  assert.equal(portForScope(specOf('http_read'), { method: 'GET', path: '/', follow_redirects: 'false' }), undefined);
-  assert.equal(portForScope(specOf('tcp_connect'), { port: 8443 }), 8443);
-  assert.equal(portForScope(specOf('icmp_ping'), { count: 1, size: 32 }), undefined);
-  assert.equal(portForScope(specOf('dns_lookup'), { record_type: 'A' }), 53);
+test('scopePortsFor 解析端口来源的五种形态', () => {
+  // 端口来自选择器（URL 自带端口）⇒ 未显式指定时按默认 web 端口核验（历史口径）。
+  assert.deepEqual(scopePortsFor(specOf('http_read'), { method: 'GET', path: '/', follow_redirects: 'false' }), {
+    kind: 'web-default',
+  });
+  // 单端口整数参数 ⇒ 单元素区间集合。
+  assert.deepEqual(scopePortsFor(specOf('tcp_connect'), { port: 8443 }), {
+    kind: 'ranges',
+    ranges: [{ from: 8443, to: 8443 }],
+  });
+  // 无端口维度（ICMP / 本地）⇒ 跳过端口判定。
+  assert.deepEqual(scopePortsFor(specOf('icmp_ping'), { count: 1, size: 32 }), { kind: 'none' });
+  // 固定端口。
+  assert.deepEqual(scopePortsFor(specOf('dns_lookup'), { record_type: 'A' }), {
+    kind: 'ranges',
+    ranges: [{ from: 53, to: 53 }],
+  });
+  // 端口表达式 / 档位（2026-10-10 P0 修复的核心）：显式表达式逐段解析。
+  assert.deepEqual(scopePortsFor(specOf('recon_port_scan'), { scope: 'top100', ports: '3002', ping: 'skip' }), {
+    kind: 'ranges',
+    ranges: [{ from: 3002, to: 3002 }],
+  });
+  assert.deepEqual(scopePortsFor(specOf('recon_port_scan'), { scope: 'top100', ports: '80,8000-8002', ping: 'skip' }), {
+    kind: 'ranges',
+    ranges: [
+      { from: 80, to: 80 },
+      { from: 8000, to: 8002 },
+    ],
+  });
+  // 档位 `top100` 的端口集由 nmap 决定，宿主侧不可枚举 ⇒ unbounded（要求全 TCP 授权才放行）。
+  assert.deepEqual(scopePortsFor(specOf('recon_port_scan'), { scope: 'top100', ports: 'none', ping: 'skip' }), {
+    kind: 'unbounded',
+    what: 'nmap top100 档位',
+  });
+  // `common_services` 是显式清单 ⇒ 可逐段核验。
+  assert.deepEqual(scopePortsFor(specOf('recon_port_scan'), { scope: 'common_services', ports: 'none', ping: 'skip' }), {
+    kind: 'ranges',
+    ranges: SCAN_PRESETS.common_services,
+  });
 });
 
 // ───────────────────────────── 幂等键与摘要 ─────────────────────────────
@@ -822,9 +869,19 @@ test('准入把模板注册的协议与端口来源交给范围判定', async ()
   await h.admit({ templateId: 'tcp_connect', targetSelector: HOST, params: { port: 8443 } });
   await h.admit({ templateId: 'icmp_ping', targetSelector: HOST, params: { count: 2, size: 64 } });
   await h.admit({ templateId: 'dns_lookup', targetSelector: HOST, params: { record_type: 'A' } });
-  assert.deepEqual(h.policy.scopeCalls[0], { target: HOST, protocol: 'tcp', port: 8443, scopeVersion: 1 });
-  assert.deepEqual(h.policy.scopeCalls[1], { target: HOST, protocol: 'icmp', scopeVersion: 1 });
-  assert.deepEqual(h.policy.scopeCalls[2], { target: HOST, protocol: 'udp', port: 53, scopeVersion: 1 });
+  assert.deepEqual(h.policy.scopeCalls[0], {
+    target: HOST,
+    protocol: 'tcp',
+    ports: { kind: 'ranges', ranges: [{ from: 8443, to: 8443 }] },
+    scopeVersion: 1,
+  });
+  assert.deepEqual(h.policy.scopeCalls[1], { target: HOST, protocol: 'icmp', ports: { kind: 'none' }, scopeVersion: 1 });
+  assert.deepEqual(h.policy.scopeCalls[2], {
+    target: HOST,
+    protocol: 'udp',
+    ports: { kind: 'ranges', ranges: [{ from: 53, to: 53 }] },
+    scopeVersion: 1,
+  });
 });
 
 test('未注册模板被拒绝，绝不降级为低风险放行', async () => {

@@ -44,7 +44,7 @@ import { derivePlanHash } from './idempotency.ts';
 import { executionGateForAudit } from '../workflow/reconcile.ts';
 import { normalizeCidr, rangeAddressesOf } from '../policy/scope.ts';
 import {
-  portForScope,
+  scopePortsFor,
   validateParams,
   type ActionTemplateSpec,
   type ParamBag,
@@ -581,7 +581,7 @@ export const scopeGate: AdmissionGate = {
       state.resolveAddresses([]);
       return pass();
     }
-    const port = portForScope(spec, state.params);
+    const ports = scopePortsFor(spec, state.params);
     // **范围批次**（`allowTargetRange`）：选择器可以是一个网段 ⇒ **逐地址裁决**，
     // 一台越界就**整条拒绝**——授权一点没放宽，只是把"283 次单台"收成一次动作
     // （2026-10-08 操作者实测：全段普查被拆成逐 IP，扫描预算大头花在这里）。
@@ -608,7 +608,7 @@ export const scopeGate: AdmissionGate = {
           scopeVersion: binding.scopeVersion,
           target: address,
           protocol: spec.protocol,
-          ...(port === undefined ? {} : { port }),
+          ports,
         });
         if (!one.ok) {
           return reject(
@@ -647,7 +647,7 @@ export const scopeGate: AdmissionGate = {
       scopeVersion: binding.scopeVersion,
       target: state.intent.targetSelector,
       protocol: spec.protocol,
-      ...(port === undefined ? {} : { port }),
+      ports,
     });
     if (!scope.ok) {
       // §10.2.2：任何范围校验失败都记录 `scope_violation` 事件（含原始目标、规范化结果、

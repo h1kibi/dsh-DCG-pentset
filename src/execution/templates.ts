@@ -26,10 +26,12 @@ import type {
   ActionTemplate,
   NormalizedTarget,
   Protocol,
+  ScopePorts,
   TemplateParam,
   ToolError,
 } from '../contracts.ts';
 import { targetLiteral } from './idempotency.ts';
+import { resolveScanPorts } from './port-expr.ts';
 import { FREE_COMMAND_TEMPLATE_ID } from '../contracts.ts';
 
 /** 参数取值：模板声明的取值范围只允许标量（字符串或整数）。 */
@@ -53,7 +55,18 @@ type PortSource =
   | { readonly kind: 'target' }
   | { readonly kind: 'param'; readonly param: string }
   | { readonly kind: 'fixed'; readonly port: number }
-  | { readonly kind: 'none' };
+  | { readonly kind: 'none' }
+  /**
+   * **端口表达式**（多端口动作，2026-10-10）。`param` 是表达式参数
+   * （如 `80,443,8000-8100`，取值 `none` 表示改按档位）；`presetParam` 是档位参数
+   * （`top100` / `common_services` / `full_tcp`…）——**只有**确实存在"按档位扫"的动作才声明它。
+   *
+   * 与 `none` 的区别是**实质性的**：`none` 表示"不接触目标端口"（跳过端口判定），
+   * 而本类型表示"将要触及一组端口"——范围闸门把表达式解析成端口集合逐个核验，
+   * 全部落在授权集合内才放行。没有它，多端口扫描只能声明 `none`，
+   * 闸门回落默认 web 端口 ⇒ 单端口范围条目下服务识别不可用（实测 P0）。
+   */
+  | { readonly kind: 'ports-param'; readonly param: string; readonly presetParam?: string };
 
 /** 注册的模板：契约里的 `ActionTemplate` 加上服务端持有的命令构造与协议/端口来源。 */
 export interface ActionTemplateSpec {
@@ -332,19 +345,41 @@ function describeParam(p: TemplateParam): string {
 
 // ───────────────────────────── 端口来源解析 ─────────────────────────────
 
-/** 供范围判定使用的端口；`undefined` 表示该动作没有端口维度。 */
-export function portForScope(spec: ActionTemplateSpec, params: ParamBag): number | undefined {
-  switch (spec.portSource.kind) {
+/**
+ * 范围判定用的端口维度（见契约 `ScopePorts`）。
+ *
+ * 与旧 `portForScope` 的关键差别：**不返回 `undefined` 让调用方回落默认端口**。
+ * "没有端口维度"（`none`）与"将要触及一组端口"（`ranges`）是两种不同的东西，
+ * 必须由本函数显式表达——旧实现把前者也送进默认 web 端口核验，
+ * 正是 2026-10-10 实测 P0（显式 ports=3002 被判成要打 80|443）的机制。
+ */
+export function scopePortsFor(spec: ActionTemplateSpec, params: ParamBag): ScopePorts {
+  const source = spec.portSource;
+  switch (source.kind) {
     case 'target':
-      return undefined;
+      return { kind: 'web-default' };
     case 'param': {
-      const raw = params[spec.portSource.param];
-      return typeof raw === 'number' ? raw : undefined;
+      const raw = params[source.param];
+      return typeof raw === 'number'
+        ? { kind: 'ranges', ranges: [{ from: raw, to: raw }] }
+        : { kind: 'web-default' };
     }
     case 'fixed':
-      return spec.portSource.port;
+      return { kind: 'ranges', ranges: [{ from: source.port, to: source.port }] };
     case 'none':
-      return undefined;
+      return { kind: 'none' };
+    case 'ports-param': {
+      const expr = params[source.param];
+      const preset = source.presetParam === undefined ? undefined : params[source.presetParam];
+      const resolved = resolveScanPorts(
+        typeof expr === 'string' ? expr : undefined,
+        typeof preset === 'string' ? preset : undefined,
+      );
+      if (resolved.ok) return resolved.ports;
+      // 指令式参数在校验层已挡（validateParams）；走到这里说明注册表与校验漂移——
+      // 按最保守口径处理：端口集不可枚举。
+      return { kind: 'unbounded', what: `未解析的端口表达式（${resolved.detail}）` };
+    }
   }
 }
 
@@ -451,6 +486,27 @@ export function createRegistry(specs: readonly ActionTemplateSpec[]): TemplateRe
       if (decl === undefined || decl.kind !== 'integer') {
         throw new Error(`模板 ${id} 的端口来源参数 ${portSource.param} 必须是已声明的 integer 参数`);
       }
+    }
+    if (portSource.kind === 'ports-param') {
+      const exprDecl = spec.template.parameters.find((p) => p.name === portSource.param);
+      if (exprDecl === undefined || exprDecl.kind !== 'string') {
+        throw new Error(`模板 ${id} 的端口表达式参数 ${portSource.param} 必须是已声明的 string 参数`);
+      }
+      if (portSource.presetParam !== undefined) {
+        const presetDecl = spec.template.parameters.find((p) => p.name === portSource.presetParam);
+        if (presetDecl === undefined || presetDecl.kind !== 'enum') {
+          throw new Error(`模板 ${id} 的端口档位参数 ${portSource.presetParam} 必须是已声明的 enum 参数`);
+        }
+        // 档位必须是宿主侧可解析的已知集合：未知档位在闸门处只能按"不可枚举"处理，
+        // 那是安全兜底而不是设计意图——在校验期就让拼写错误暴露。
+        for (const value of presetDecl.values ?? []) {
+          const probe = resolveScanPorts('none', value);
+          if (!probe.ok) throw new Error(`模板 ${id} 的档位 ${value} 无法在宿主侧解析：${probe.detail}`);
+        }
+      }
+      // 表达式解析器必须对典型形态可用（形状的最终校验在容器分发器，闸门以宿主解析为准）。
+      const probeExpr = resolveScanPorts('80,443', undefined);
+      if (!probeExpr.ok) throw new Error(`模板 ${id} 的端口表达式解析器不可用：${probeExpr.detail}`);
     }
     if (portSource.kind === 'fixed') {
       const port = portSource.port;
@@ -623,14 +679,16 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       maxOutputBytes: 2 * 1024 * 1024,
     },
     protocol: 'tcp',
-    // 多端口扫描没有单一端口维度：如实声明 none（`carries` 里写清实际可达范围）。
-    portSource: { kind: 'none' },
+    // 端口维度是**表达式或档位**（2026-10-10 P0 修复）：闸门据此解析出将要触及的
+    // 端口集合逐个核验；此前声明 none 会回落默认 web 端口，把显式 ports="3002"
+    // 判成"要打 80|443"，单端口范围条目下服务识别不可用。
+    portSource: { kind: 'ports-param', param: 'ports', presetParam: 'scope' },
     // 选择器可以是网段：本模板下发的是一条 nmap，宿主逐地址裁决后把地址集合注入容器。
     // 这是"全段普查"从 283 次单台变成一次批扫的落点（见 `allowTargetRange` 的说明）。
     allowTargetRange: true,
     carries: {
       scope: '扫描档位：top100 / top1000 / common_services（约 30 个常见服务端口）/ full_tcp（全 65535，需人类显式选择）',
-      ports: 'none 表示按 scope；也可以给显式表达式（如 80,443,8000-8100，最多 64 段）——此时 scope 被忽略',
+      ports: 'none 表示按 scope；也可以给显式表达式（如 80,443,8000-8100，最多 64 段）——此时 scope 被忽略。**表达式里的每个端口都必须落在范围条目的已授权端口内**（越界即整条拒绝）',
       ping: 'syn=SYN 扫描（-PS，需 NET_RAW）/ connect=全连接（-sT）/ skip=不判存活直接扫（-Pn）',
     },
     commandTemplate: 'port_scan target={target} scope={scope} ports={ports} ping={ping}',
@@ -649,9 +707,10 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       maxOutputBytes: 512 * 1024,
     },
     protocol: 'tcp',
-    portSource: { kind: 'none' },
+    // `ports` 必填且不允许 none ⇒ 没有档位参数（`presetParam` 不声明）。
+    portSource: { kind: 'ports-param', param: 'ports' },
     carries: {
-      ports: '要识别服务的端口表达式（先用 recon_port_scan 拿到开放端口，再对它做指纹）',
+      ports: '要识别服务的端口表达式（先用 recon_port_scan 拿到开放端口，再对它做指纹）。**每个端口都必须落在范围条目的已授权端口内**',
       intensity: 'light=--version-intensity 2（快，噪音小）/ normal=5（更准，探测包更多）',
     },
     commandTemplate: 'service_probe target={target} ports={ports} intensity={intensity}',

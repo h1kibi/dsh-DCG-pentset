@@ -36,6 +36,7 @@ import type {
   PortRange,
   Protocol,
   RunMarker,
+  ScopePorts,
   ScopeRejectionCode,
   ScopeTarget,
   ScopeVerdict,
@@ -794,6 +795,7 @@ export class PgPolicyService implements PolicyService {
     target: string;
     protocol: Protocol;
     port?: number;
+    ports?: ScopePorts;
   }): Promise<ScopeVerdict> {
     const loaded = await this.#loadScopeFor(input.engagementId, input.scopeVersion);
     if (!loaded.ok) return loaded;
@@ -803,6 +805,7 @@ export class PgPolicyService implements PolicyService {
       target: input.target,
       protocol: input.protocol,
       ...(input.port === undefined ? {} : { port: input.port }),
+      ...(input.ports === undefined ? {} : { ports: input.ports }),
       scope: loaded.value,
       ...(adjudicated === undefined ? {} : { adjudicatedAddresses: adjudicated }),
     });

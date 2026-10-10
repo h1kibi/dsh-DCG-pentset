@@ -940,3 +940,62 @@ test('P0-3 批次：网段展开成连续地址，超上限与 IPv6 一律如实
   assert.equal(v6.ok, false);
   assert.match(v6.detail, /只支持 IPv4/);
 });
+
+// ═════════════════════════ K. 请求侧端口维度（ScopePorts，2026-10-10 P0） ═════════════════════════
+//
+// 复现（操作者实测）：范围条目只剩 `47.109.76.66:3002/tcp` 时，
+// `port_scan(ports="3002")` / `service_probe(ports="3002")` 被以
+// 「端口 80|443 未被范围条目授权」拒绝——显式端口进了命令，却没有进范围闸门。
+// 根因：多端口动作在 portSource 里声明 `none`，闸门回落默认 web 端口。
+// 下锁：四形态各自的判定语义，防止再次漂移。
+
+/** 单端口范围条目：10.0.0.9 仅 3002/tcp。 */
+const SINGLE_PORT = scope([target('ip', '10.0.0.9', ['tcp'], [port(3002)])]);
+
+test('K1 显式端口表达式落在授权集合内即放行（复现缺陷的回归锁）', () => {
+  // port_scan(ports="3002") ⇒ ranges [{3002,3002}]
+  expectOk(evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: SINGLE_PORT, ports: { kind: 'ranges', ranges: [port(3002)] } }));
+  // service_probe(ports="3002,3003")：3003 未授权 ⇒ 整条拒绝，且消息里同时给出两边
+  const detail = expectRejected(
+    evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: SINGLE_PORT, ports: { kind: 'ranges', ranges: [port(3002), port(3003)] } }),
+    'port_not_allowed',
+  );
+  assert.match(detail, /3003/, '未授权的具体端口必须在拒绝消息里出现');
+  assert.match(detail, /3002/, '该目标实际被授权的端口也必须在拒绝消息里出现');
+});
+
+test('K2 无端口维度（DNS/WHOIS/CT）不再被端口闸门误伤', () => {
+  // 旧实现把它们当成"要打 80|443"，单端口条目下这些动作全部不可用。
+  expectOk(evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: SINGLE_PORT, ports: { kind: 'none' } }));
+});
+
+test('K3 档位扫描（不可枚举）只有全 TCP 授权才放行', () => {
+  const detail = expectRejected(
+    evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: SINGLE_PORT, ports: { kind: 'unbounded', what: 'nmap top100 档位' } }),
+    'port_not_allowed',
+  );
+  assert.match(detail, /top100/);
+  assert.match(detail, /显式 ports 表达式/, '拒绝必须给出可自愈的下一步');
+  const anyPort = scope([target('ip', '10.0.0.9', ['tcp'], [ANY_PORT])]);
+  expectOk(evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: anyPort, ports: { kind: 'unbounded', what: 'nmap top100 档位' } }));
+});
+
+test('K4 显式全段表达式与 ANY_PORT 条目互认；单端口条目拒绝', () => {
+  const anyPort = scope([target('ip', '10.0.0.9', ['tcp'], [ANY_PORT])]);
+  expectOk(evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: anyPort, ports: { kind: 'ranges', ranges: [port(1, 65535)] } }));
+  expectRejected(
+    evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: SINGLE_PORT, ports: { kind: 'ranges', ranges: [port(1, 65535)] } }),
+    'port_not_allowed',
+  );
+});
+
+test('K5 排除项的端口判定：无端口维度不命中，端口集任一重叠即命中', () => {
+  const withExclusion = scope([target('ip', '10.0.0.9', ['tcp'], [port(3002)])], [target('ip', '10.0.0.9', ['tcp'], [port(3002)])]);
+  // 无端口维度（DNS 查询）不接触目标端口 ⇒ 不因排除项端口命中（目标本身仍可能因其它排除项被拒）。
+  expectOk(evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: withExclusion, ports: { kind: 'none' } }));
+  // 端口集与排除端口重叠 ⇒ 命中排除（排除从严）。
+  expectRejected(
+    evaluateScope({ target: '10.0.0.9', protocol: 'tcp', scope: withExclusion, ports: { kind: 'ranges', ranges: [port(3002)] } }),
+    'excluded',
+  );
+});

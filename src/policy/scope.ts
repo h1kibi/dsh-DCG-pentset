@@ -15,6 +15,7 @@ import type {
   PortRange,
   Protocol,
   ScopeDecision,
+  ScopePorts,
   ScopeRejectionCode,
   ScopeTarget,
   ScopeVerdict,
@@ -1155,7 +1156,8 @@ interface RequestShape {
   readonly v6?: readonly number[];
   readonly scheme?: string;
   readonly protocol: Protocol;
-  readonly candidatePorts: readonly number[];
+  /** 本次动作将要触及的端口维度（见 `ScopePorts` 的四种形态）。 */
+  readonly ports: ScopePorts;
 }
 
 /**
@@ -1196,8 +1198,72 @@ function hostMatches(entry: NormalizedScopeEntry, req: RequestShape): boolean {
   }
 }
 
-function portCovered(ranges: readonly PortRange[], candidates: readonly number[]): boolean {
-  return candidates.some((port) => ranges.some((range) => port >= range.from && port <= range.to));
+/** 默认 web 端口（80/443）的区间形态：`web-default` 维度的候选集合。 */
+const WEB_DEFAULT_RANGES: readonly PortRange[] = [
+  { from: 80, to: 80 },
+  { from: 443, to: 443 },
+];
+
+/**
+ * **包含项**的端口判定：本次动作将要触及的端口**每一个**都必须被该条目覆盖。
+ *
+ * 四条语义分支（与 `ScopePorts` 一一对应，见契约注释）：
+ *   - `none`：不接触目标端口 ⇒ 跳过（DNS / WHOIS / CT / 本地处理；旧实现把它们当成
+ *     "要打 80|443"，单端口条目下这些动作全部不可用——2026-10-10 实测缺陷的同族）；
+ *   - `web-default`：未显式指定端口的 web 动作，80/443 **之一**被覆盖即可（历史口径）；
+ *   - `ranges`：显式端口表达式的解析结果，全部须被覆盖（越界即整条拒绝，§10.2.2）；
+ *   - `unbounded`：档位扫描（nmap `--top-ports`），只有在条目覆盖全 TCP 时才成立。
+ */
+function portSatisfied(ranges: readonly PortRange[], ports: ScopePorts): boolean {
+  switch (ports.kind) {
+    case 'none':
+      return true;
+    case 'web-default':
+      return WEB_DEFAULT_RANGES.some((c) => ranges.some((r) => r.from <= c.from && c.to <= r.to));
+    case 'ranges':
+      return ports.ranges.every((c) => ranges.some((r) => r.from <= c.from && c.to <= r.to));
+    case 'unbounded':
+      // 覆盖全 TCP（1-65535）：`ANY_PORT`（0-65535）满足；逐端口清单永远不满足。
+      return ranges.some((r) => r.from <= 1 && r.to >= 65535);
+  }
+}
+
+/** **排除项**的端口判定：任一重叠即命中（排除从严）。 */
+function portOverlaps(ranges: readonly PortRange[], ports: ScopePorts): boolean {
+  const overlap = (cands: readonly PortRange[]): boolean =>
+    cands.some((c) => ranges.some((r) => c.from <= r.to && r.from <= c.to));
+  switch (ports.kind) {
+    case 'none':
+      return false;
+    case 'web-default':
+      return overlap(WEB_DEFAULT_RANGES);
+    case 'ranges':
+      return overlap(ports.ranges);
+    case 'unbounded':
+      // 端口集不可枚举 ⇒ 只要条目声明了任何端口，就无法排除重叠。
+      return ranges.length > 0;
+  }
+}
+
+/** 人类可读的端口维度描述（拒绝消息用）。 */
+export function describeScopePorts(ports: ScopePorts): string {
+  switch (ports.kind) {
+    case 'none':
+      return '（无端口维度）';
+    case 'web-default':
+      return '默认 web 端口 80、443';
+    case 'ranges':
+      return `端口 ${ports.ranges.map((r) => (r.from === r.to ? String(r.from) : `${r.from}-${r.to}`)).join('、')}`;
+    case 'unbounded':
+      return `${ports.what}（端口集由 nmap 决定，不可枚举）`;
+  }
+}
+
+/** 条目已授权端口的人类可读描述（拒绝消息用）。 */
+function describeEntryPorts(ranges: readonly PortRange[]): string {
+  if (ranges.length === 0) return '（无）';
+  if (ranges.some((r) => r.from <= 1 && r.to >= 65535)) return '全 TCP（1-65535）';
+  return ranges.map((r) => (r.from === r.to ? String(r.from) : `${r.from}-${r.to}`)).join('、');
 }
 
 /**
@@ -1221,17 +1287,20 @@ interface EntryMatch {
   readonly port: boolean;
 }
 
-function matchEntry(entry: NormalizedScopeEntry, req: RequestShape): EntryMatch {
+/**
+ * 条目匹配。`mode` 决定端口判定的方向——两个方向**必须**用不同的覆盖关系：
+ *   - `include`：「将要触及的端口每一个都被覆盖」才放行（从严，§10.2.2 越界即拒绝）；
+ *   - `exclude`：「与排除端口集合有任一重叠」即命中（从严，排除优先于包含）。
+ *
+ * 历史教训（2026-10-10 操作者实测 P0）：此前只有一个方向无关的 `.some()` 判定，
+ * 且"没有端口维度"被实现成"回落默认 web 端口"，导致显式 `ports="3002"` 的多端口扫描
+ * 被判成"要打 80|443"。现在请求侧用 `ScopePorts` 显式区分四种形态。
+ */
+function matchEntry(entry: NormalizedScopeEntry, req: RequestShape, mode: 'include' | 'exclude'): EntryMatch {
+  const ranges = effectivePorts(entry);
   const host = hostMatches(entry, req);
   const protocol = entry.protocols.includes(req.protocol);
-  // 没有端口维度的动作只看目标与协议（§10.2.2 端口的协议依赖性）。
-  //
-  // 「没有端口维度」有两个来源，语义相同：ICMP 本身没有端口；以及模板显式声明
-  // `portSource: { kind: 'none' }` 的动作（DNS 查询、WHOIS、证书透明度日志——
-  // 它们要么发往解析器、要么发往第三方，端口不属于**目标**）。这两类在请求里都表现为
-  // `candidatePorts` 为空。若空集合仍走端口判定，它们会被判成「端口不在范围内」而永远不可用
-  // （2026-10-06 新增结构化侦察模板族时实测到）。
-  const port = req.candidatePorts.length === 0 ? true : portCovered(effectivePorts(entry), req.candidatePorts);
+  const port = mode === 'include' ? portSatisfied(ranges, req.ports) : portOverlaps(ranges, req.ports);
   return { host, protocol, port };
 }
 
@@ -1258,7 +1327,11 @@ function better<T extends OutcomeKind>(current: T | null, candidate: T): T {
 
 function decisionCandidates(req: RequestShape): readonly string[] {
   const out = [req.host, `${req.hostKind}:${req.host}`];
-  if (req.kind === 'url' && req.scheme) out.push(`url:${req.scheme}://${req.host}:${req.candidatePorts[0] ?? ''}`);
+  // URL 形态的资产裁决键带端口：`web-default` 时按 80（历史口径，http URL 的缺省端口）。
+  if (req.kind === 'url' && req.scheme) {
+    const first = req.ports.kind === 'ranges' ? req.ports.ranges[0]?.from : req.ports.kind === 'web-default' ? 80 : undefined;
+    out.push(`url:${req.scheme}://${req.host}:${first ?? ''}`);
+  }
   if (req.hostKind === 'domain') {
     const dot = req.host.indexOf('.');
     if (dot > 0) out.push(`domain:*.${req.host.slice(dot + 1)}`);
@@ -1273,6 +1346,11 @@ interface EvaluateScopeInput {
   /** 动作协议。URL 目标可由 scheme 推导；其余形态未声明即按协议未确定拒绝。 */
   readonly protocol?: Protocol;
   readonly port?: number;
+  /**
+   * 请求侧的端口维度（多端口/无端口动作）。与 `port` 同时给出时**本字段优先**；
+   * 两者都缺省时保持历史口径（默认 web 端口 80/443 之一）。见契约 `ScopePorts`。
+   */
+  readonly ports?: ScopePorts;
   readonly scope: ScopeRuleSet | LoadedScope;
   /** DNS 裁决结果（按规范化主机键注入）。域名目标缺失或为空即拒绝连接，不退化按域名拨号。 */
   readonly adjudicatedAddresses?: AdjudicatedAddresses;
@@ -1352,6 +1430,15 @@ export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
 
   const hostKind: 'domain' | 'ip' = normalized.kind === 'ip' ? 'ip' : isIpLiteral(normalized.host) ? 'ip' : 'domain';
   const hostForm = hostKind === 'ip' ? tryNormalizeAddress(normalized.host) : null;
+  // 请求侧端口维度：调用方显式给出（多端口/无端口动作）优先；否则单端口；否则历史默认 web 端口。
+  const reqPorts: ScopePorts =
+    input.ports !== undefined
+      ? input.ports
+      : protocol === 'icmp'
+        ? { kind: 'none' }
+        : explicitPort !== undefined
+          ? { kind: 'ranges', ranges: [{ from: explicitPort, to: explicitPort }] }
+          : { kind: 'web-default' };
   const req: RequestShape = {
     kind: normalized.kind,
     host: normalized.host,
@@ -1360,12 +1447,12 @@ export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
     ...(hostForm?.v6 ? { v6: hostForm.v6 } : {}),
     ...(normalized.scheme !== undefined ? { scheme: normalized.scheme } : {}),
     protocol,
-    candidatePorts: protocol === 'icmp' ? [] : explicitPort !== undefined ? [explicitPort] : DEFAULT_HOST_PORTS,
+    ports: reqPorts,
   };
 
   // ── 排除项优先于包含项（§10.2.2「排除项」） ──
   for (const exclusion of loaded.exclusions) {
-    const m = matchEntry(exclusion, req);
+    const m = matchEntry(exclusion, req, 'exclude');
     if (m.host && m.protocol && m.port) {
       return fail('excluded', `目标 ${req.host} 命中排除项 ${exclusion.key}，排除项优先于包含项（${DOC} 排除项）`, req);
     }
@@ -1400,7 +1487,7 @@ export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
   // ── 包含项 ──
   let outcome: OutcomeKind | null = null;
   for (const entry of loaded.targets) {
-    const m = matchEntry(entry, req);
+    const m = matchEntry(entry, req, 'include');
     if (!m.host) continue;
     if (m.protocol && m.port) {
       outcome = better(outcome, 'ok');
@@ -1415,11 +1502,23 @@ export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
   switch (outcome) {
     case 'ok':
       break;
-    case 'port_not_allowed':
+    case 'port_not_allowed': {
+      // 拒绝消息必须可自愈：带上"本次要打什么"与"该主机实际被授权什么"。
+      // 只说"未授权"会让模型反复试探（2026-10-10 实测：显式 ports=3002 却被
+      // 以 80|443 拒绝，两边都没在消息里对上）。
+      const hostEntry = loaded.targets.find((entry) => hostMatches(entry, req));
+      const authorized = hostEntry === undefined ? '（无同主机条目）' : describeEntryPorts(effectivePorts(hostEntry));
+      const hint =
+        reqPorts.kind === 'unbounded'
+          ? `改用显式 ports 表达式（只列已授权端口），或让人类把该目标的端口授权放宽为全 TCP`
+          : `把动作的端口收窄到已授权集合，或让人类修订范围条目`;
       return fail(
         'port_not_allowed',
-        `目标 ${req.host} 在范围内，但端口 ${req.candidatePorts.join('|')} 未被范围条目授权（${DOC} 端口的协议依赖性）`,
+        `目标 ${req.host} 在范围内，但${describeScopePorts(reqPorts)}未被范围条目授权；` +
+          `该目标已授权端口：${authorized}。${hint}（${DOC} 端口的协议依赖性）`,
+        req,
       );
+    }
     case 'protocol_not_allowed':
       return fail(
         'protocol_not_allowed',
@@ -1445,7 +1544,7 @@ export function evaluateScope(input: EvaluateScopeInput): ScopeVerdict {
         ...(form.v4 ? { v4: form.v4 } : {}),
         ...(form.v6 ? { v6: form.v6 } : {}),
         protocol,
-        candidatePorts: req.candidatePorts,
+        ports: req.ports,
       };
       for (const exclusion of loaded.exclusions) {
         if (hostMatches(exclusion, addrReq)) {

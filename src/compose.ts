@@ -57,7 +57,7 @@ import { createExecutionService } from './execution/service.ts';
 import type { AuditProbe } from './execution/service.ts';
 import { createGateFailureSink, type GateFailureLedger, type SystemPausePort } from './execution/gate-failures.ts';
 import type { ActionTemplateSpec, ParamBag } from './execution/templates.ts';
-import { buildNormalizedCommand, createRegistry, portForScope, validateParams } from './execution/templates.ts';
+import { buildNormalizedCommand, createRegistry, scopePortsFor, validateParams } from './execution/templates.ts';
 import { normalizeCidr, rangeAddressesOf } from './policy/scope.ts';
 import { canonicalTargetString, derivePlanHash } from './execution/idempotency.ts';
 import { DockerSandbox } from './execution/docker-sandbox.ts';
@@ -903,7 +903,7 @@ function approvalPlanValidatorFor(
         binding.lease.generation !== context.leaseGeneration
       ) return undefined;
 
-      const port = portForScope(spec, params as ParamBag);
+      const ports = scopePortsFor(spec, params as ParamBag);
       // **范围批次**（`allowTargetRange`）：与受理闸门**同一口径**的逐地址裁决。
       // 少了这一支，"人类修改后放行"这条路径对网段选择器过不去（`evaluateScope` 只吃单个目标），
       // 而两条路径必须同强度——否则改一条命令就能绕过一处判定。
@@ -918,7 +918,7 @@ function approvalPlanValidatorFor(
           engagementId: context.engagementId,
           scopeVersion: context.scopeVersion,
           protocol: spec.protocol,
-          ...(port === undefined ? {} : { port }),
+          ports,
         };
         for (const address of expanded.value) {
           const one = await policy.evaluateScope({ ...scoped, target: address });
@@ -934,7 +934,7 @@ function approvalPlanValidatorFor(
           scopeVersion: context.scopeVersion,
           target: targetSelector,
           protocol: spec.protocol,
-          ...(port === undefined ? {} : { port }),
+          ports,
       });
         if (!scope.ok) return undefined;
         normalizedTarget = canonicalTargetString(scope.normalized);

@@ -721,6 +721,29 @@ export interface PortRange {
  */
 export const ANY_PORT: PortRange = { from: 0, to: 65535 };
 
+/**
+ * **请求侧**的端口维度（范围判定用）。与条目侧 `ScopeTarget.ports` 相对：
+ * 条目声明"授权什么"，这里声明"这次动作将要触及什么"。
+ *
+ * 为什么需要它（2026-10-10 操作者实测 P0）：多端口动作（`port_scan` / `service_probe`）
+ * 的端口是**表达式**（`80,443,8000-8100`）或**档位**（nmap `--top-ports`），此前它们
+ * 在 `portSource` 里被迫声明为 `none`，范围闸门于是回落默认 web 端口，把
+ * `ports="3002"` 的显式调用判成"要打 80|443"并拒绝——单端口范围条目下整个服务识别能力为空。
+ * 把"无端口维度"与"端口集是表达式"分开之后，前者跳过端口判定，后者按实际端口集核验。
+ */
+export type ScopePorts =
+  /** 动作不接触目标端口（DNS 查询、WHOIS、CT 日志、本地处理）⇒ 端口判定跳过。 */
+  | { readonly kind: 'none' }
+  /** 未显式指定端口（URL 无端口、缺省参数）⇒ 按默认 web 端口 80/443 之一核验（历史口径）。 */
+  | { readonly kind: 'web-default' }
+  /** 动作将要触及的端口集合 ⇒ **每一个**都必须被同一条目覆盖（越界即整条拒绝）。 */
+  | { readonly kind: 'ranges'; readonly ranges: readonly PortRange[] }
+  /**
+   * 端口集由外部工具决定、无法枚举（nmap `--top-ports` 档位）⇒
+   * 只有在条目授权了**全 TCP**（`ANY_PORT`）时才通过——否则无法证明不越界。
+   */
+  | { readonly kind: 'unbounded'; readonly what: string };
+
 /** 规范化后的目标。 */
 export interface NormalizedTarget {
   readonly kind: 'domain' | 'ip' | 'url';
@@ -2875,6 +2898,11 @@ export interface PolicyService {
     target: string;
     protocol: Protocol;
     port?: number;
+    /**
+     * 多端口/无端口维度（与 `port` 互斥；两者同时给出时以本字段为准）。
+     * 缺省（两者都缺）保持历史口径：按默认 web 端口 80/443 之一的核验。
+     */
+    ports?: ScopePorts;
   }): Promise<ScopeVerdict>;
   classifyAction(input: { templateId: string; params: Readonly<Record<string, string | number>> }):
     Promise<{ ok: true; actionClass: ActionClass } | { ok: false; code: ErrorCode; detail: string }>;

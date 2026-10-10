@@ -29,6 +29,7 @@ import {
 } from '../src/contracts.ts';
 import { defaultRegistry, validateParams } from '../src/execution/templates.ts';
 import { PROFILE_DEFAULTS } from '../src/policy/behavior-profile.ts';
+import { SCAN_PRESETS } from '../src/execution/port-expr.ts';
 import {
   STRUCTURED_TECHNIQUES,
   TARGET_TOOL_NAMES,
@@ -412,6 +413,67 @@ describe('阶段提升类别：只作用自由命令通道，只提升不降低'
         (PER_ACTION_APPROVAL_CLASSES as readonly string[]).includes(actionClass),
         `${phase} 提升到 ${String(actionClass)}，但它不在 PER_ACTION_APPROVAL_CLASSES 里`,
       );
+    }
+  });
+});
+
+/**
+ * 扫描档位与容器分发器的**逐字对拍**（2026-10-10）。
+ *
+ * 宿主侧的范围闸门必须知道「这次动作将要触及哪些端口」才能核验授权
+ * （`SCAN_PRESETS`）。它与容器实际执行的 `NMAP_SCOPE_ARGS` 是同一份知识的两个消费者：
+ * 漂移的后果是双向的——闸门放行容器却扫了别处（越权），或闸门拒绝容器本可精确执行的扫描
+ * （能力为空，2026-10-10 实测 P0 就是后者的一种）。
+ *
+ * 因此这里**解析分发器源码**取真实清单，不手抄；`top100`/`top1000` 在 nmap 内部决定，
+ * 宿主侧如实标为不可枚举（`null`），此测试同时钉住这一点。
+ */
+describe('扫描档位：宿主闸门与容器分发器逐字对拍', () => {
+  /**
+   * 从分发器的 `NMAP_SCOPE_ARGS` 取档位名。
+   *
+   * 不复用 `dispatcherKeys`：它的键名正则只接受 `[a-z_]`，而这里的档位名含数字（`top100`）。
+   * 直接对这一段用更宽的正则，避免为一个用途改宽公共助手。
+   */
+  const scopeArgsBlock = (() => {
+    const start = DISPATCHER.indexOf('NMAP_SCOPE_ARGS = {');
+    assert.ok(start > 0, '分发器里找不到 NMAP_SCOPE_ARGS');
+    const end = DISPATCHER.indexOf('\n}', start);
+    assert.ok(end > start, 'NMAP_SCOPE_ARGS 的闭合括号没找到');
+    return DISPATCHER.slice(start, end);
+  })();
+  const presetNames = [...scopeArgsBlock.matchAll(/^\s{4}"([a-z0-9_]+)":/gm)].map((m) => m[1] ?? '');
+
+  it('档位名集合两处一致', () => {
+    assert.deepEqual([...Object.keys(SCAN_PRESETS)].sort(), [...presetNames].sort());
+  });
+
+  it('common_services 的端口清单逐字一致（顺序也一致：两侧都是人类可读的清单）', () => {
+    // 源码里这串清单被**跨行拼接**（相邻字符串字面量），必须把所有纯数字/逗号字面量按序接起来。
+    const commonPart = scopeArgsBlock.slice(
+      scopeArgsBlock.indexOf('"common_services"'),
+      scopeArgsBlock.indexOf('"full_tcp"'),
+    );
+    const pieces = [...commonPart.matchAll(/"([\d,]+)"/g)].map((m) => m[1] ?? '');
+    assert.ok(pieces.length > 0, '分发器里找不到 common_services 的端口清单');
+    const fromDispatcher = pieces.join('').split(',').map((n) => Number(n));
+    const fromHost = (SCAN_PRESETS.common_services ?? []).map((r) => r.from);
+    // 宿主侧每条都是单端口区间（起止相同），逐位对拍。
+    assert.ok((SCAN_PRESETS.common_services ?? []).every((r) => r.from === r.to), 'common_services 在宿主侧是逐端口清单');
+    assert.deepEqual(fromHost, fromDispatcher);
+  });
+
+  it('full_tcp 的范围一致；top100/top1000 在宿主侧如实标为不可枚举', () => {
+    assert.deepEqual(SCAN_PRESETS.full_tcp, [{ from: 1, to: 65535 }]);
+    assert.equal(SCAN_PRESETS.top100, null);
+    assert.equal(SCAN_PRESETS.top1000, null);
+  });
+
+  it('两个多端口模板声明了 ports-param（不能退回 none——那会让闸门回落默认 web 端口）', () => {
+    for (const id of ['recon_port_scan', 'recon_service_probe']) {
+      const spec = registry.get(id);
+      assert.ok(spec !== undefined, `模板 ${id} 未注册`);
+      assert.equal(spec.portSource.kind, 'ports-param', `${id} 的 portSource 必须是 ports-param`);
     }
   });
 });
