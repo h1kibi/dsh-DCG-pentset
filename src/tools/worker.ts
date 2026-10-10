@@ -917,13 +917,24 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         description:
           '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_probe / content_discover / web_crawl / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
       },
-      wordlist: { type: 'string', enum: ['common_dirs', 'raft_small', 'subdomains_5k'], description: '字典档位' },
+      wordlist: {
+        type: 'string',
+        enum: ['common_dirs', 'raft_small', 'api_endpoints', 'quickhits'],
+        description:
+          '字典档位：common_dirs / raft_small（通用目录）、api_endpoints（API 路由命名）、quickhits（高价值小文件）',
+      },
       extensions: {
         type: 'string',
         enum: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'],
         description: 'content_discover 追加的扩展名',
       },
       rate: { type: 'integer', description: 'content_discover 的每秒请求数上限（1-20）' },
+      path: {
+        type: 'string',
+        description:
+          'content_discover 的基准路径前缀（空串或省略 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会归一）。' +
+          '在 /api/ 这类子路径下枚举时必须给，否则只会打根路径；不得含 `..` 段或查询串',
+      },
       depth: { type: 'integer', description: 'web_crawl 深度（1-3）' },
       max_pages: { type: 'integer', description: 'web_crawl 页数上限（1-500）' },
       record_types: { type: 'string', description: 'dns_enum 的记录类型（逗号分隔，最多 8 个）' },

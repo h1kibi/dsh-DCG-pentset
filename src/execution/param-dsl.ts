@@ -270,7 +270,7 @@ export const RECON_PARAM_SPECS = Object.freeze({
     },
     wordlist: {
       type: 'enum' as const,
-      values: ['common_dirs', 'raft_small'],
+      values: ['common_dirs', 'raft_small', 'api_endpoints', 'quickhits'],
       description: '字典选择',
       default: 'common_dirs',
     },
@@ -291,6 +291,11 @@ export const RECON_PARAM_SPECS = Object.freeze({
       values: ['true', 'false'],
       description: '校验 TLS 证书',
       default: 'true',
+    },
+    path: {
+      type: 'string' as const,
+      description: '基准路径前缀（空串 = 站点根；如 api 或 v1/api）',
+      default: '',
     },
   } as const satisfies ParamSpec,
 

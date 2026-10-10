@@ -477,3 +477,59 @@ describe('扫描档位：宿主闸门与容器分发器逐字对拍', () => {
     }
   });
 });
+
+/**
+ * 字典档位与容器分发器的**逐字对拍**（2026-10-10）。
+ *
+ * 操作者实测：镜像里装了 `api-endpoints.txt` / `quickhits.txt`（Dockerfile 早就 fetch 了），
+ * 但 `WORDLIST_FILES` 与参数面都只有三档，`wordlist=api_endpoints` 被参数校验直接拒——
+ * 落差卡住整个 API 面枚举。以下锁钉住"宿主枚举 == 容器允许表"，并钉住 path 前缀的存在。
+ */
+describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
+  /** 解析分发器的 `WORDLIST_ALLOWED`：`"verb": ("a", "b"),`。 */
+  function dispatcherWordlists(verb: string): readonly string[] {
+    const start = DISPATCHER.indexOf('WORDLIST_ALLOWED = {');
+    assert.ok(start > 0, '分发器里找不到 WORDLIST_ALLOWED');
+    const end = DISPATCHER.indexOf('\n}', start);
+    assert.ok(end > start, 'WORDLIST_ALLOWED 的闭合括号没找到');
+    const block = DISPATCHER.slice(start, end);
+    const line = block.match(new RegExp(`"${verb}":\\s*\\(([^)]*)\\)`));
+    assert.ok(line !== null, `分发器 WORDLIST_ALLOWED 里没有 ${verb}`);
+    return [...(line[1] ?? '').matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1] ?? '');
+  }
+
+  it('content_discover：technique 枚举、模板枚举与容器允许表三处一致', () => {
+    const fromDispatcher = dispatcherWordlists('content_discover');
+    const fromTechnique = STRUCTURED_TECHNIQUES.recon.content_discover?.enums?.wordlist ?? [];
+    assert.deepEqual([...fromTechnique].sort(), [...fromDispatcher].sort(), 'techniques.ts 与分发器漂移');
+    const spec = registry.get('recon_content_discover');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'wordlist');
+    assert.ok(declared !== undefined && declared.kind === 'enum');
+    assert.deepEqual([...(declared.values ?? [])].sort(), [...fromDispatcher].sort(), '模板与分发器漂移');
+  });
+
+  it('dns_brute：模板枚举与容器允许表一致（DNS 字典不得混进目录枚举的动作）', () => {
+    const fromDispatcher = dispatcherWordlists('dns_brute');
+    const spec = registry.get('recon_dns_brute');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'wordlist');
+    assert.ok(declared !== undefined && declared.kind === 'enum');
+    assert.deepEqual([...(declared.values ?? [])].sort(), [...fromDispatcher].sort());
+    assert.ok(!fromDispatcher.includes('api_endpoints'), 'api_endpoints 是 Web 内容字典，不应出现在 dns_brute');
+  });
+
+  it('content_discover 的 path 前缀在宿主模板与容器实现两侧都存在', () => {
+    const spec = registry.get('recon_content_discover');
+    assert.ok(spec !== undefined);
+    assert.ok(
+      spec.template.parameters.some((p) => p.name === 'path'),
+      '模板未声明 path：API 面只能扫根路径（2026-10-10 实测缺口）',
+    );
+    assert.match(spec.commandTemplate, /path=\{path\}/, 'path 必须进入命令模板（声明即必须进入命令）');
+    const verbStart = DISPATCHER.indexOf('def content_discover(');
+    assert.ok(verbStart > 0);
+    const verbBody = DISPATCHER.slice(verbStart, DISPATCHER.indexOf('\ndef ', verbStart + 1));
+    assert.match(verbBody, /params\.get\("path"\)/, '容器侧未读取 path 参数');
+  });
+});

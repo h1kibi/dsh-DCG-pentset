@@ -62,12 +62,15 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     },
   },
   content_discover: {
-    defaults: { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5, verify_tls: 'true' },
+    defaults: { port: 80, scheme: 'http', wordlist: 'common_dirs', extensions: 'none', rate: 5, verify_tls: 'true', path: '' },
     required: [],
     enums: {
       // 注意：这里**没有** `auto`——内容发现必须先知道协议，猜协议会让整轮结果失真。
       scheme: ['http', 'https'],
-      wordlist: ['common_dirs', 'raft_small'],
+      // 与容器分发器 `WORDLIST_ALLOWED["content_discover"]` 逐字一致（CI 对拍）。
+      // api_endpoints / quickhits 是 2026-10-10 补的：镜像早就装了，参数面没暴露，
+      // FastAPI 关掉 /openapi.json 后 API 面枚举没有通道。
+      wordlist: ['common_dirs', 'raft_small', 'api_endpoints', 'quickhits'],
       extensions: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'],
       verify_tls: ['true', 'false'],
     },

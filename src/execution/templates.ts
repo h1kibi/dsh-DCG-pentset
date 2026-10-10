@@ -794,10 +794,13 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       parameters: [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
         { name: 'scheme', kind: 'enum', values: ['http', 'https'] },
-        { name: 'wordlist', kind: 'enum', values: ['common_dirs', 'raft_small'] },
+        { name: 'wordlist', kind: 'enum', values: ['common_dirs', 'raft_small', 'api_endpoints', 'quickhits'] },
         { name: 'extensions', kind: 'enum', values: ['none', 'php', 'asp', 'aspx', 'jsp', 'html', 'txt', 'json', 'multi'] },
         { name: 'rate', kind: 'integer', min: 1, max: 20 },
         { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
+        // 基准路径（2026-10-10）：`/api/` 这类前缀此前无法表达，API 面只能靠 JS 逆向猜。
+        // 空串 = 站点根；形状与容器侧 `PATH_PREFIX_RE` 同一字符集，`..` 段由容器侧拒绝。
+        { name: 'path', kind: 'string', pattern: "^[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,160}$" },
       ],
       targetPlaceholder: 'target',
       timeoutMs: 300_000,
@@ -808,13 +811,14 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
     carries: {
       port: '目标 Web 端口',
       scheme: 'http / https（https 默认**校验**证书；自签/纯 IP 目标要显式 verify_tls=false，那次结果不证明证书链可信）',
-      wordlist: '字典档位（镜像内固定三份：common_dirs / raft_small / subdomains_5k 中的目录类两份）',
+      wordlist: '字典档位：common_dirs / raft_small（通用目录）、api_endpoints（API 路由命名）、quickhits（高价值小文件）。镜像里另有 DNS 字典，但那是 dns_brute 的档位，不给本动作用',
       extensions: '追加的扩展名集合；multi = 常见的 7 种',
       rate: '每秒请求数上限（1-20）；并发被钉在 min(10, rate)',
       verify_tls: VERIFY_TLS_CARRY,
+      path: '基准路径前缀（空串 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会被归一）。用于在 `/api/` 这类子路径下枚举，而不是只打根路径',
     },
     commandTemplate:
-      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate} verify_tls={verify_tls}',
+      'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate} verify_tls={verify_tls} path={path}',
   },
   {
     template: {

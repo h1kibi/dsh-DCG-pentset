@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@5ee07609c870：按 fx-web 172.29.0.2:8080 逐块跑正文 12 段原文配方（占位符换真值，第 6/7/7b 块因 /tmp 不跨容器合并进同一条 -c），12 段全部实测执行、无一因配方缺陷失败。①第1块可达性 curl 得 code=200 size=171 type=text/html redirect=（正文样例 size=484 是别的夹具，2xx 判据成立）；②第2块 GET -D 得 HTTP/1.0 200 OK、Server: SimpleHTTP/0.6 Python/3.10.21、Content-type: text/html、Content-Length: 171；③第2b块 OPTIONS 得 501 Unsupported method ('OPTIONS')、无 Allow 头——正合正文「SimpleHTTP 不支持 OPTIONS，501 不代表端点不存在」；④第3块取到 <title>fixture</title>，第3b块页面 sha256=05a7e484143388ea8dcb76aae72bc83030e937fab39b45e0585dbf51b4f48501；⑤第4块 robots.txt=200/34，sitemap.xml、sitemap_index.xml、.well-known/security.txt 均 404/469；第4b块 robots 正文 User-agent: */Disallow: /private/，而实测 /private/ =404/469，印证「Disallow 只是声明」；⑥第5块 4 条随机路径全为 404 469，软 404 签名成立、-fs 469 可用；⑦第6块 ffuf -w common.txt -t 5 -p 0.2 -fs 469 命中 /.git(301→/.git/)、/.git/HEAD(200/21)、/index.html(200/171)、/robots.txt(200/34)，合正文「形如 /.git/HEAD、/robots.txt、/index.html」，耗时约 203s；⑧第7块 jq 复核逐条输出 URL+code/size/redirect，第7b块标题富化把 index.html 认成 <title>fixture</title>、其余命中无标题；⑨第8块 http://example.invalid/ 解析失败 exit=6，退化判据成立。附带同镜像核实：ffuf 1.1.0、whatweb 0.5.5、httpx、dirb/katana/wfuzz/gospider/dirsearch 全部在；common.txt 4723 行、raft-small-directories.txt 20116 行；common.txt 实测不含 .env/page2.html/swagger.json，故第6块未命中这三条是字典覆盖使然而非靶标缺失；dirb 默认字典（4612 词）命中 /.git/HEAD、/index.html、/robots.txt（本轮未命中 .env 或 /.git，与正文 2026-10-06 记录的 dirb 命中列表不同）；katana -d 2 抓到 / 与 /page2.html；wfuzz 跑通（4723 请求、exit 0）"
+  smoked: "沙箱实测@5ee07609c870：（2026-10-06 首轮）按 fx-web 172.29.0.2:8080 逐块跑正文 12 段原文配方（占位符换真值，第 6/7/7b 块因 /tmp 不跨容器合并进同一条 -c），12 段全部实测执行、无一因配方缺陷失败。①第1块可达性 curl 得 code=200 size=171 type=text/html redirect=（正文样例 size=484 是别的夹具，2xx 判据成立）；②第2块 GET -D 得 HTTP/1.0 200 OK、Server: SimpleHTTP/0.6 Python/3.10.21、Content-type: text/html、Content-Length: 171；③第2b块 OPTIONS 得 501 Unsupported method ('OPTIONS')、无 Allow 头——正合正文「SimpleHTTP 不支持 OPTIONS，501 不代表端点不存在」；④第3块取到 <title>fixture</title>，第3b块页面 sha256=05a7e484143388ea8dcb76aae72bc83030e937fab39b45e0585dbf51b4f48501；⑤第4块 robots.txt=200/34，sitemap.xml、sitemap_index.xml、.well-known/security.txt 均 404/469；第4b块 robots 正文 User-agent: */Disallow: /private/，而实测 /private/ =404/469，印证「Disallow 只是声明」；⑥第5块 4 条随机路径全为 404 469，软 404 签名成立、-fs 469 可用；⑦第6块 ffuf -w common.txt -t 5 -p 0.2 -fs 469 命中 /.git(301→/.git/)、/.git/HEAD(200/21)、/index.html(200/171)、/robots.txt(200/34)，合正文「形如 /.git/HEAD、/robots.txt、/index.html」，耗时约 203s；⑧第7块 jq 复核逐条输出 URL+code/size/redirect，第7b块标题富化把 index.html 认成 <title>fixture</title>、其余命中无标题；⑨第8块 http://example.invalid/ 解析失败 exit=6，退化判据成立。附带同镜像核实：ffuf 1.1.0、whatweb 0.5.5、httpx、dirb/katana/wfuzz/gospider/dirsearch 全部在；common.txt 4723 行、raft-small-directories.txt 20116 行；common.txt 实测不含 .env/page2.html/swagger.json，故第6块未命中这三条是字典覆盖使然而非靶标缺失；dirb 默认字典（4612 词）命中 /.git/HEAD、/index.html、/robots.txt（本轮未命中 .env 或 /.git，与正文 2026-10-06 记录的 dirb 命中列表不同）；katana -d 2 抓到 / 与 /page2.html；wfuzz 跑通（4723 请求、exit 0）"按 fx-web 172.29.0.2:8080 逐块跑正文 12 段原文配方（占位符换真值，第 6/7/7b 块因 /tmp 不跨容器合并进同一条 -c），12 段全部实测执行、无一因配方缺陷失败。①第1块可达性 curl 得 code=200 size=171 type=text/html redirect=（正文样例 size=484 是别的夹具，2xx 判据成立）；②第2块 GET -D 得 HTTP/1.0 200 OK、Server: SimpleHTTP/0.6 Python/3.10.21、Content-type: text/html、Content-Length: 171；③第2b块 OPTIONS 得 501 Unsupported method ('OPTIONS')、无 Allow 头——正合正文「SimpleHTTP 不支持 OPTIONS，501 不代表端点不存在」；④第3块取到 <title>fixture</title>，第3b块页面 sha256=05a7e484143388ea8dcb76aae72bc83030e937fab39b45e0585dbf51b4f48501；⑤第4块 robots.txt=200/34，sitemap.xml、sitemap_index.xml、.well-known/security.txt 均 404/469；第4b块 robots 正文 User-agent: */Disallow: /private/，而实测 /private/ =404/469，印证「Disallow 只是声明」；⑥第5块 4 条随机路径全为 404 469，软 404 签名成立、-fs 469 可用；⑦第6块 ffuf -w common.txt -t 5 -p 0.2 -fs 469 命中 /.git(301→/.git/)、/.git/HEAD(200/21)、/index.html(200/171)、/robots.txt(200/34)，合正文「形如 /.git/HEAD、/robots.txt、/index.html」，耗时约 203s；⑧第7块 jq 复核逐条输出 URL+code/size/redirect，第7b块标题富化把 index.html 认成 <title>fixture</title>、其余命中无标题；⑨第8块 http://example.invalid/ 解析失败 exit=6，退化判据成立。附带同镜像核实：ffuf 1.1.0、whatweb 0.5.5、httpx、dirb/katana/wfuzz/gospider/dirsearch 全部在；common.txt 4723 行、raft-small-directories.txt 20116 行；common.txt 实测不含 .env/page2.html/swagger.json，故第6块未命中这三条是字典覆盖使然而非靶标缺失；dirb 默认字典（4612 词）命中 /.git/HEAD、/index.html、/robots.txt（本轮未命中 .env 或 /.git，与正文 2026-10-06 记录的 dirb 命中列表不同）；katana -d 2 抓到 / 与 /page2.html；wfuzz 跑通（4723 请求、exit 0） ＋2026-10-10 补验（同一镜像）：2026-10-10 补验（同一镜像 5ee07609c870；两条通道各一遍，夹具为容器内 python http.server 的 /api/{ads,auth,.config}）：结构化 content_discover ①wordlist=api_endpoints、path= 空 → 2 命中（/api/ads、/api/auth 301）；②wordlist=common_dirs、path=api → 3 命中（新增 /api/.config 200）；③对照 path= 空同字典 → 仅根路径（/index.html），证明前缀真实生效；非法 path（../etc、a?b）与 wordlist=subdomains_5k 均被 usage_error 拒绝。第 6b 段的两条 ffuf 原文配方同镜像复跑：A（api-endpoints.txt 站点根）2 命中、B（common.txt 前 800 行截断 + /api/ 前缀）3 命中。"
 ---
 
 # Web 面清点（recon-web-surface）
@@ -39,7 +39,8 @@ metadata:
 | 2 响应头与指纹 | `http_probe` | `collect=tech`（技术栈推断 + 关键响应头） |
 | 2b 安全响应头 | `http_probe` | `collect=security_headers`（六个头的有无） |
 | 4 robots / sitemap | `http_probe` | `collect=robots` 或 `collect=sitemap` |
-| 6 目录/文件枚举 | `content_discover` | `wordlist=common_dirs`、`extensions=none`、`rate=5` |
+| 6 目录/文件枚举 | `content_discover` | `wordlist=common_dirs`、`extensions=none`、`rate=5`；要枚举子路径再加 `path=api` |
+| 6b API 路由枚举 | `content_discover` | `wordlist=api_endpoints`（条目自带 `api/` 前缀，**站点根直接用**）；或通用字典 + `path=<你的前缀>`；`quickhits` 找高价值小文件 |
 | 7 命中复核与富化 | `http_probe` / `web_crawl` | `collect=tech`；`depth=2 max_pages=100` |
 
 ### 1. 站点可达性与状态码
@@ -134,6 +135,24 @@ ffuf -u http://<目标>:<端口>/FUZZ \
   **不要**为了"更全"把四个都跑一遍——每个都在打目标，每个都算一次动作。
 - **需要 JS 感知的爬取**（现代前端、单页应用）时用 `katana -u <目标> -silent -d 2`（实测抓到 `/`、`/page2.html`）；
   `gospider` 更快但只看静态链接；结构化通道的 `web_crawl` 是同一条链的免审批版本，先考虑它。
+
+### 6b. API 路由枚举（基准路径 + 命名字典）
+```bash
+# A. 命名字典（条目自带 api/ 前缀，站点根直接跑）
+ffuf -u http://<目标>:<端口>/FUZZ -w /usr/share/wordlists/api-endpoints.txt \
+  -t 5 -p 0.05 -ac -of json -o /tmp/api-named.json -s
+# B. 通用字典 + 基准路径（枚举 /api/ 下的文件；前缀按页面/JS 里读到的实际层级换）
+ffuf -u http://<目标>:<端口>/api/FUZZ -w /usr/share/wordlists/common.txt \
+  -t 5 -p 0.05 -ac -of json -o /tmp/api-prefix.json -s
+```
+期望：命中行形如 `/api/auth`（301，目录）、`/api/.config`（200）——**路径存在**即可入账为面。
+判据：`-ac` 已滤掉软 404；301/401/403 只证明**路由存在**，不得写成"存在漏洞"，按第 7 步复核后再下结论。
+注意事项：
+- **先看字典有没有自带前缀再决定要不要拼前缀**：`api-endpoints.txt` 的条目就写作 `api/auth/login`，**站点根**跑它就会打 `/api/...`；再套一层 `/api/FUZZ` 会变成 `/api/api/...`（实测 0 命中）。不带前缀的字典（`common.txt` / `quickhits.txt`）才需要你在 URL 里拼 `/api/`。
+- 结构化通道一步到位：`content_discover` 的 `wordlist=api_endpoints`（配 `path=` 空）或 `wordlist=common_dirs` + `path=api`（两侧斜杠会归一，`..` 段与查询串会被拒）。
+- 关掉 `/openapi.json`、`/docs` 的目标没有接口清单可用，字典命名枚举是**主通道**——不要因为文档 404 就放弃面测绘。
+- 命中数少不代表没有面：换前缀层级（`/api/v1/`）、换字典（`quickhits.txt` 找 `.env`/`.git/HEAD`）各跑一轮，并把"跑过哪些前缀/字典"写进覆盖说明。
+- 单层级跑完不命中时如实写"未覆盖"——**不要**把 `/api/FUZZ` 的结果冒充全站枚举。
 
 ### 7. 命中复核与富化
 ```bash
