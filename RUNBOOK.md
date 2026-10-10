@@ -1063,6 +1063,19 @@ npm run typecheck && npm run lint && npm test && npm run verify
 | 情报阶段看不到 `pentest_scan`（含 `exposure_check`），"配置暴露核查"只能手搓 `curl` | 该工具只发给漏洞分析阶段；2026-10-07 撤下逐项编辑器后没有人类入口能加工具 ⇒ 能力边界只由 Profile 与阶段默认决定 | 把 `pentest_scan` 加入情报收集默认工具面（见下方裁定说明）；提示词改为**按在场工具分节**渲染参数指南 + 一致性锁；`recon-web-surface` 补第 8/9 行 |
 | **`exposure_check` 只要命中候选就崩**：`internal_error: TypeError: 'in <string>' requires string as left operand, not bytes` | `classify_exposure` 写成 `signature.lower() in body.decode(...)`，而 `EXPOSURE_SIGNATURES` 是 **bytes** 字面量（`b"ref:"` / `b'"swagger"'`）⇒ `bytes in str` 必崩；它只在"真的命中候选"时走到，更早的冒烟全落在"与对照同形"分支，**且该纯函数从无单测**（注释里"可无 socket 单测"的意图从未落地） | 改为 **bytes 对 bytes**（`signature.lower() in body.lower()`，不解码）；加文本锁钉住"签名表是 bytes 且比对不得 decode"；实测（自建夹具、只读 GET）：`.git/HEAD`/`.env` → `looks_like=true`、`swagger.json` → `control=same` 判为软 404、**不回显正文** |
 
+### 6.5.13.3 同日第四轮实测（3 条）的修复：静默失败的三张脸
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| `grep -oE '[a-zA-Z0-9_\-/]{3,}'` 报 `Invalid range end`，**stdout 为空**、看起来像"页面里确实没有路由/API 路径" | ERE 的字符类里**反斜杠不是转义符**：`\`→`/` 成了**倒置区间**（rc=2）；而命令写成 `… \| grep … \| head -30` 时**管道末尾把 rc 掩成 0** ⇒ 失败与"干净的阴性结果"同形 | ① `pentest_exec`/`pentest_recon`/`pentest_scan` 的返回值在 **stderr 非空时自己开口**：`stderr_nonempty: true` + `stderr` + `stderr_warning`（写明"管道会吃掉退出码"这条机制与排查方向）；② 新增结构化取证通道 `http_probe collect=endpoints` |
+| 路由/端点只能手写 `curl \| grep`（"避免手写正则"） | 没有服务端固定形态的抽取器 | `collect=endpoints`：**固定三种形态**（属性 href/src/action、引号内绝对路径、fetch/axios 第一实参），每条短行带 `hits`；**空结果会自我解释**（"这不等于页面里没有端点" + 下一步）；三处枚举（模板/technique/容器）由锁对拍 |
+| `curl … \| head -30` 输出里塞进几百行（响应体是**一整行**的 RSC/JSON，`head` 按行截断 ⇒ 一条都不切） | `head` 的语义是"行"，对单行内容失效 | 抽端点走 `collect=endpoints`（输出天然短行）；手工场景按**字节**截（`cut -c1-400` / `fold -w 200`）——写进 `recon-web-surface` 常见失败表 |
+| `verify_tls` 指引过度泛化：形成"IP 目标 → 传 false"的条件反射，报告里堆无谓的"未校验证书"免责声明 | 五处措辞（`templates.ts` 的 carries、两处 scheme、`worker.ts` 两处 schema、参数指南四处）都写成"自签/纯 IP 目标必须 false" | 统一改成**"能用默认就用默认"**：证书有效时（含 SAN 覆盖该 IP 的正经证书）默认即可连通；**只有校验真的失败**才 false，并写明"报告里堆免责声明会稀释结论"。五处同句，避免再次漂移 |
+
+**这轮的方法论**：三条现象都是"**看起来正常的失败**"——空 stdout、rc=0、条数少。修法遵循同一条纪律：
+**让工具自己开口**（stderr 标记、空结果自我解释、`scaninfo/hosts_up` 这类可分辨计数），而不是指望
+人（或模型）去留意沉默。
+
 ### 6.5.13.2 同日第三轮实测（4 条）的修复：零命中的可分辨性 + 档位交集
 
 | 现象 | 根因 | 修复 |

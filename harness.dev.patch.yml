@@ -46,7 +46,7 @@
           sandbox:
             allowedImages:
               - name: 127.0.0.1:5005/pentest-tools
-                digest: sha256:266173b38d52049885961e973813570e6ff1045a48b72cc838224c71c345cfdc
+                digest: sha256:cdbcf67150058642ac20880fbf621cc6611e0f018e899d1d79d9813766d077a2
             # 出网由**网络是否 internal** 决定：`buildDockerArgs` 只透传 `--network <名>`，
             # **不注入任何代理变量**（2026-10-07 更正：上一版这里写着"出网必须经下面的代理"，
             # 与实现矛盾——照它去搭代理会搭出一台没人使用的代理，然后得到"沙箱不出网"）。

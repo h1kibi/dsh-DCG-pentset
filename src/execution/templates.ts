@@ -126,7 +126,9 @@ interface ForbiddenPayloadRule {
  * 就必须真有那一行 —— 实现在 `pentest-tool` 的 `tls_verify_line()`（2026-10-07 首版曾写成假承诺）。
  */
 const VERIFY_TLS_CARRY =
-  '**默认 true**（校验证书）。自签/IP 目标要连通必须显式 false —— 此后该次结果不再能证明"证书链可信"，报告里会写明未校验';
+  '**默认 true**（校验证书）；**能用默认就用默认** —— 证书有效时（含 SAN 覆盖该 IP 的正经证书）默认即可连通，' +
+  '「纯 IP 目标」也不例外。**只有校验真的失败**（自签 / 链不全 / SAN 不含该名字）才显式 false；' +
+  '此后该次结果不再能证明"证书链可信"，报告里会写明未校验。别条件反射地关校验：报告里堆这种免责声明会稀释真正要看的结论';
 
 const FORBIDDEN_PAYLOAD_RULES: readonly ForbiddenPayloadRule[] = Object.freeze([
   {
@@ -785,7 +787,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         { name: 'port', kind: 'integer', min: 1, max: 65535 },
         { name: 'scheme', kind: 'enum', values: ['http', 'https', 'auto'] },
         { name: 'follow_redirects', kind: 'integer', min: 0, max: 3 },
-        { name: 'collect', kind: 'enum', values: ['headers', 'security_headers', 'robots', 'sitemap', 'tech'] },
+        { name: 'collect', kind: 'enum', values: ['headers', 'security_headers', 'robots', 'sitemap', 'tech', 'endpoints'] },
         { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
@@ -798,7 +800,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       port: 'HTTP(S) 端口',
       scheme: 'auto 先试 https 再试 http',
       follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
-      collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）',
+      collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）/ **endpoints=端点与路由抽取**（固定三种形态：属性 href/src/action、引号内的绝对路径、fetch/axios 调用第一实参；每条是短行、带 hits，空结果会明说「这不等于页面里没有端点」——手写 grep 抽这类东西时失败是静默的）',
       verify_tls: VERIFY_TLS_CARRY,
     },
     commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls}',
@@ -827,7 +829,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
     portSource: { kind: 'param', param: 'port' },
     carries: {
       port: '目标 Web 端口',
-      scheme: 'http / https（https 默认**校验**证书；自签/纯 IP 目标要显式 verify_tls=false，那次结果不证明证书链可信）',
+      scheme: 'http / https（https 默认**校验**证书；**校验失败时**才显式 verify_tls=false——IP 目标若有正经证书，默认就能通）',
       wordlist: '字典档位：common_dirs / raft_small（通用目录）、api_endpoints（API 路由命名）、quickhits（高价值小文件）。镜像里另有 DNS 字典，但那是 dns_brute 的档位，不给本动作用',
       extensions: '追加的扩展名集合；multi = 常见的 7 种',
       rate: '每秒请求数上限（1-20）；并发被钉在 min(10, rate)',
@@ -857,7 +859,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
     portSource: { kind: 'param', param: 'port' },
     carries: {
       port: '目标 Web 端口',
-      scheme: 'http / https（https 默认**校验**证书；自签/纯 IP 目标要显式 verify_tls=false）',
+      scheme: 'http / https（https 默认**校验**证书；**校验失败时**才显式 verify_tls=false）',
       depth: '爬取深度（1-3）',
       max_pages: '页数硬上限（1-500）；只跟同主机链接，单页最多读 512KiB',
       verify_tls: VERIFY_TLS_CARRY,

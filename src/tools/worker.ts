@@ -409,6 +409,33 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     },
   } as const;
 
+/**
+ * 容器 **stderr 非空**时的醒目字段（2026-10-10 操作者实测 P0）。
+ *
+ * 实况：`grep -oE '[a-zA-Z0-9_\-/]{3,}'` 在容器里报 `grep: Invalid range end`（ERE 的字符类里
+ * `\` 不是转义符，`\`→`/` 成了倒置区间 ⇒ rc=2），但命令写成 `… | grep … | head -30` 时
+ * **管道末尾把 rc 掩成 0**，stdout 又是空的 ⇒ 看起来就是"页面里确实没有路由/API 路径"这类
+ * **干净的阴性结论**。操作者原话：「这正是 skill 文档里反复警告的那类『看起来正常、其实是漏报』」。
+ *
+ * 因此：stderr 非空**必须在返回值里自己开口**，别让它只躺在 `result.stderr` 里等人翻。
+ * 同时把「管道会吃掉退出码」这条写进提醒——那是这个陷阱的机制，不说清下次还会踩。
+ */
+function stderrMarker(result: { readonly stderr?: unknown } | null): Record<string, unknown> {
+  const raw = result?.stderr;
+  if (typeof raw !== 'string') return {};
+  const text = raw.trim();
+  if (text === '') return {};
+  return {
+    stderr_nonempty: true,
+    stderr: text.slice(0, 800),
+    stderr_warning:
+      'stderr 非空：先判断它是「警告」还是「命令根本没跑成」再据此下结论。**管道会吃掉退出码**' +
+      '（`a | grep x | head` 的 rc 是 head 的 0），所以只看 rc/空 stdout 会把失败当成"干净的阴性结果"。' +
+      '排查方向：单独重跑那一段、或用 `set -o pipefail`、或换成 python3（正则语义更可控）。',
+  };
+}
+
+
   const submitReport = defineTool({
     name: 'pentest_submit_report',
     description:
@@ -823,7 +850,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       let evidenceNote: string | null = null;
       // 先收窄再取 result：`blocked` 变体没有 `result` 字段（类型系统盯着这一点）。
       const executed = outcome.kind === 'blocked' ? null : outcome;
-      const resultView = executed?.result as { readonly stdout?: unknown; readonly status?: unknown } | null;
+      const resultView = executed?.result as
+        | { readonly stdout?: unknown; readonly status?: unknown; readonly stderr?: unknown }
+        | null;
       const partial = resultView?.status === 'timed_out' || resultView?.status === 'cancelled';
       if (args.save_stdout_as_evidence === true && outcome.kind !== 'blocked') {
         const root = deps.evidenceRoot;
@@ -851,6 +880,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
               result: outcome.result,
               // 超时/中止时明确标注"这是部分输出"：消费方不该把它当完整结果（§10.3 同一条纪律）。
               ...(partial ? { partial_output: true } : {}),
+              // **stderr 非空就自己开口**（见 `stderrMarker` 的说明：空 stdout + 被管道掩掉的
+              // 退出码 = 看起来像"干净的阴性结果"）。
+              ...stderrMarker(resultView),
               ...(evidenceNote === null ? {} : { evidence: evidenceNote.replace(/^evidence: /, '') }),
               ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
             },
@@ -921,14 +953,15 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       follow_redirects: { type: 'integer', description: 'http_probe 的跳转上限（0-3；跨主机跳转一律拒绝）' },
       collect: {
         type: 'string',
-        enum: ['headers', 'security_headers', 'robots', 'sitemap', 'tech'],
-        description: 'http_probe 的采集面',
+        enum: ['headers', 'security_headers', 'robots', 'sitemap', 'tech', 'endpoints'],
+        description:
+          'http_probe 的采集面。**endpoints=端点/路由抽取**：固定三种形态（属性 href/src/action、引号内的绝对路径、fetch/axios 调用第一实参），每条短行带 hits。**手写 grep 抽路由的失败是静默的**（ERE 字符类里反斜杠不是转义 ⇒ 倒置区间报 Invalid range end，而 `| head` 会把 rc 掩成 0，空 stdout 看起来就像「页面里没有路径」）——要抽路由优先用它',
       },
       verify_tls: {
         type: 'string',
         enum: ['true', 'false'],
         description:
-          '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_probe / content_discover / web_crawl / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
+          '是否校验 TLS 证书，**默认 true**（**能用默认就用默认**：证书有效时默认就能通，IP 目标也一样）。只有**校验真的失败**（自签/链不全/SAN 不匹配）才传 false——此后该次结果不再证明证书链可信，报告里会写明未校验；而报告里堆这种免责声明会稀释真正要看的结论。适用：http_probe / content_discover / web_crawl / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
       },
       wordlist: {
         type: 'string',
@@ -1017,6 +1050,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
           : {
               plan: outcome.plan,
               result: outcome.result,
+              // 与 `pentest_exec` 同一口径：stderr 非空就自己开口（空 stdout + 被管道掩掉的 rc
+              // = 看起来像"干净的阴性结果"）。
+              ...stderrMarker(outcome.result as { readonly stderr?: unknown }),
               ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
             },
       );
@@ -1056,7 +1092,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         type: 'string',
         enum: ['true', 'false'],
         description:
-          '是否校验 TLS 证书，**默认 true**；自签/纯 IP 目标必须显式 false 才连得上（那次结果不再证明证书链可信，报告里会写明未校验）。适用：http_check / exposure_check',
+          '是否校验 TLS 证书，**默认 true**（**能用默认就用默认**：证书有效时默认就能通，IP 目标也一样）。只有**校验真的失败**（自签/链不全/SAN 不匹配）才传 false——此后该次结果不再证明证书链可信，报告里会写明未校验；而报告里堆这种免责声明会稀释真正要看的结论。适用：http_check / exposure_check',
       },
       sni: { type: 'string', description: 'tls_weakness 的 SNI；none 表示用目标名' },
       enumerate_protocols: { type: 'string', enum: ['on', 'off'], description: 'tls_weakness 必须为 on' },
@@ -1109,6 +1145,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
           : {
               plan: outcome.plan,
               result: outcome.result,
+              // 与 `pentest_exec` 同一口径：stderr 非空就自己开口（空 stdout + 被管道掩掉的 rc
+              // = 看起来像"干净的阴性结果"）。
+              ...stderrMarker(outcome.result as { readonly stderr?: unknown }),
               ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
             },
       );

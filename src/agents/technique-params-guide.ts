@@ -157,6 +157,7 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
           { value: 'robots', note: 'robots.txt 内容' },
           { value: 'sitemap', note: 'sitemap.xml 内容' },
           { value: 'tech', note: '技术栈推断（框架/语言/中间件）' },
+          { value: 'endpoints', note: '**端点/路由抽取**：固定三种形态（href/src/action、引号内绝对路径、fetch/axios 第一实参），短行带 hits；空结果会明说「不等于页面里没有端点」——手写 grep 抽路由失败是静默的' },
         ],
       },
       {
@@ -171,10 +172,11 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         type: 'enum',
         required: false,
         default: 'true',
-        description: '是否验证 TLS 证书（测试环境自签名证书可设 false）',
+        description:
+          '是否验证 TLS 证书：**能用默认就用默认**（证书有效时默认就能通，IP 目标也一样）；只有**校验真的失败**（自签/链不全/SAN 不匹配）才设 false',
         options: [
-          { value: 'true', note: '验证证书（默认）' },
-          { value: 'false', note: '跳过验证' },
+          { value: 'true', note: '验证证书（默认；证书有效时就用它）' },
+          { value: 'false', note: '跳过验证（校验失败时才用；此后该次结果不再证明证书链可信）' },
         ],
       },
     ],
@@ -245,10 +247,11 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         type: 'enum',
         required: false,
         default: 'true',
-        description: '是否验证 TLS 证书',
+        description:
+          '是否验证 TLS 证书：**能用默认就用默认**（证书有效时默认就能通，IP 目标也一样）；只有**校验真的失败**（自签/链不全/SAN 不匹配）才设 false',
         options: [
-          { value: 'true', note: '验证证书（默认）' },
-          { value: 'false', note: '跳过验证' },
+          { value: 'true', note: '验证证书（默认；证书有效时就用它）' },
+          { value: 'false', note: '跳过验证（校验失败时才用；此后该次结果不再证明证书链可信）' },
         ],
       },
       {
@@ -370,10 +373,11 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         type: 'enum',
         required: false,
         default: 'true',
-        description: '是否验证 TLS 证书',
+        description:
+          '是否验证 TLS 证书：**能用默认就用默认**（证书有效时默认就能通，IP 目标也一样）；只有**校验真的失败**（自签/链不全/SAN 不匹配）才设 false',
         options: [
-          { value: 'true', note: '验证证书（默认）' },
-          { value: 'false', note: '跳过验证' },
+          { value: 'true', note: '验证证书（默认；证书有效时就用它）' },
+          { value: 'false', note: '跳过验证（校验失败时才用；此后该次结果不再证明证书链可信）' },
         ],
       },
     ],
@@ -414,10 +418,11 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         type: 'enum',
         required: false,
         default: 'true',
-        description: '是否验证 TLS 证书',
+        description:
+          '是否验证 TLS 证书：**能用默认就用默认**（证书有效时默认就能通，IP 目标也一样）；只有**校验真的失败**（自签/链不全/SAN 不匹配）才设 false',
         options: [
-          { value: 'true', note: '验证证书（默认）' },
-          { value: 'false', note: '跳过验证' },
+          { value: 'true', note: '验证证书（默认；证书有效时就用它）' },
+          { value: 'false', note: '跳过验证（校验失败时才用；此后该次结果不再证明证书链可信）' },
         ],
       },
     ],

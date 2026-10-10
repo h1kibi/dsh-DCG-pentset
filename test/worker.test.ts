@@ -538,6 +538,34 @@ test('pentest_exec：命令与端口原样转发（命令编码为 base64，端�
   assert.equal(approvalIntent.templateId, 'direct_command');
   assert.deepEqual(approvalIntent.params, second.params, '放行申请与执行的 params 必须一致');
 });
+test('stderr 非空时返回值必须自己开口（空 stdout + 被管道掩掉的 rc = 看着像"干净的阴性结果"）', async () => {
+  // 实况（2026-10-10 操作者实测）：`grep -oE '[a-zA-Z0-9_\-/]{3,}'` 在容器里报
+  // `grep: Invalid range end`（rc=2），但写成 `… | grep … | head -30` 时管道末尾把 rc 掩成 0，
+  // stdout 又是空的 ⇒ 看起来就像"页面里确实没有路由/API 路径"。
+  const fake = makeDeps();
+  const marked = createWorkerTools({
+    ...fake.deps,
+    execute: async () => ({
+      kind: 'executed' as const,
+      plan: PLAN,
+      result: { status: 'ok', stdout: '', stderr: 'grep: Invalid range end\n' },
+    }),
+  });
+  const withStderr = (await marked.pentestExec.execute(
+    { command: 'cat x | grep -oE y | head -3', port: 80, target_selector: 'http://t/', purpose: '抽路由' },
+    EXEC,
+  )) as Record<string, unknown>;
+  assert.equal(withStderr.stderr_nonempty, true, 'stderr 非空必须在返回值里显式标注');
+  assert.match(String(withStderr.stderr), /Invalid range end/);
+  assert.match(String(withStderr.stderr_warning), /管道会吃掉退出码/, '要写清机制：管道掩掉 rc 才是这个陷阱');
+
+  const clean = (await createWorkerTools(fake.deps).pentestExec.execute(
+    { command: 'id', port: 80, target_selector: 'http://t/', purpose: '无 stderr 的对照' },
+    EXEC,
+  )) as Record<string, unknown>;
+  assert.equal(Object.hasOwn(clean, 'stderr_nonempty'), false, 'stderr 为空时不得凭空加噪');
+});
+
 test('pentest_exec：宿主取消信号原样传给执行依赖', async () => {
   const fake = makeDeps();
   const tools = createWorkerTools(fake.deps);

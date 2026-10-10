@@ -546,6 +546,30 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     assert.match(verbBody, /params\.get\("path"\)/, '容器侧未读取 path 参数');
   });
 
+  it("http_probe 的 collect 枚举：模板 / technique / 容器三处一致（endpoints 是 2026-10-10 补的）", () => {
+    // 手写 grep 抽路由的失败是**静默**的（倒置区间报 Invalid range end，而 `| head` 把 rc 掩成 0，
+    // 空 stdout 看起来就是"页面里没有路径"）⇒ 给一条服务端固定形态的通道。三处枚举必须同源。
+    const start = DISPATCHER.indexOf('def http_probe(');
+    const verbBody = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef ', start + 1));
+    const m = /parse_enum\(params, "collect", \(([^)]*)\)\)/.exec(verbBody);
+    assert.ok(m !== null, '容器侧找不到 collect 的 parse_enum');
+    const fromContainer = [...(m[1] ?? '').matchAll(/"([a-z_]+)"/g)].map((x) => x[1] ?? '');
+    assert.ok(fromContainer.includes('endpoints'), '容器侧必须有 endpoints 抽取');
+    const spec = registry.get('recon_http_probe');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'collect');
+    assert.ok(declared !== undefined && declared.kind === 'enum');
+    assert.deepEqual([...(declared.values ?? [])].sort(), [...fromContainer].sort(), '模板与容器漂移');
+    const fromTechnique = STRUCTURED_TECHNIQUES.recon.http_probe?.enums?.collect ?? [];
+    assert.deepEqual([...fromTechnique].sort(), [...fromContainer].sort(), 'techniques.ts 与容器漂移');
+    // 抽取器只认这三种固定形态（服务端拥有形态，模型给不了自由正则）。
+    // 模式表在**模块级**（`ENDPOINT_PATTERNS`），不在动词体内——作用域别写窄。
+    for (const kind of ['attr', 'quoted', 'call']) {
+      assert.ok(DISPATCHER.includes(`("${kind}",`), `抽取器缺 ${kind} 形态`);
+    }
+    assert.match(verbBody, /这不等于「页面里没有端点」/, '空结果必须自我解释（否则又是静默阴性）');
+  });
+
   it('exposure_check 的形态判据：签名与正文同为 bytes，比对**不得解码**（2026-10-10 实测崩过）', () => {
     // 实况：`signature.lower() in body.decode(...)` ⇒ `bytes in str` ⇒ TypeError，
     // 而且只在"真的命中候选"时触发（更早的冒烟全落在"与对照同形"分支）⇒ 一路漏到实测。

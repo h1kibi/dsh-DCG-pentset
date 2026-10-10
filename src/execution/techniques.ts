@@ -62,7 +62,7 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     required: [],
     enums: {
       scheme: ['http', 'https', 'auto'],
-      collect: ['headers', 'security_headers', 'robots', 'sitemap', 'tech'],
+      collect: ['headers', 'security_headers', 'robots', 'sitemap', 'tech', 'endpoints'],
       verify_tls: ['true', 'false'],
     },
   },
