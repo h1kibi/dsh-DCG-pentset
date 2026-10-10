@@ -635,6 +635,58 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     assert.match(DISPATCHER, /def compress_ports\(/, '交集要能压成紧凑端口表达式（可复核）');
   });
 
+  it('http_probe 的 include_chunks：三处一致，且 chunk 跟随是**同主机 + 有界**的（2026-10-11 实测：路由只在 chunk 里）', () => {
+    const spec = registry.get('recon_http_probe');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'include_chunks');
+    assert.ok(declared !== undefined && declared.kind === 'enum', '模板必须声明 include_chunks');
+    assert.match(spec.commandTemplate, /include_chunks=\{include_chunks\}/, '新参数必须进入命令形态');
+    assert.ok('include_chunks' in spec.carries, '新参数必须有 carries');
+    assert.equal(
+      STRUCTURED_TECHNIQUES.recon.http_probe?.defaults.include_chunks,
+      'true',
+      '默认必须是 true：SPA 的路由常常只在 chunk 里，默认关掉等于把发现路径藏起来',
+    );
+    assert.equal(STRUCTURED_TECHNIQUES.recon.http_probe?.enums?.include_chunks?.length, 2);
+    // 容器侧：读到该参数；只跟同主机；条数/字节有硬上限；命中带来源。
+    const start = DISPATCHER.indexOf('def http_probe(');
+    const verbBody = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef ', start + 1));
+    assert.match(verbBody, /include_chunks/, '容器侧未读取 include_chunks');
+    assert.match(verbBody, /same_host_chunk_paths\(/, '必须用同主机过滤（跨主机要重新裁决）');
+    assert.match(verbBody, /fetch_chunks\(/, '必须走有界的 chunk 抓取');
+    assert.match(verbBody, /kind=\{kind\}@|@\{chunk_path\}|f"\{kind\}@/, 'chunk 命中必须标出来源（可复核）');
+    const helper = DISPATCHER.slice(DISPATCHER.indexOf('def same_host_chunk_paths('), DISPATCHER.indexOf('def fetch_chunks('));
+    assert.match(helper, /!=\s*host/, '跨主机的引用必须被跳过');
+    assert.match(DISPATCHER, /CHUNK_FETCH_LIMIT = \d+/, 'chunk 条数必须有常量上限');
+    assert.match(DISPATCHER, /CHUNK_BYTES_LIMIT = \d+/, 'chunk 字节必须有常量上限');
+  });
+
+  it('零命中的判别字段：summary 里 `scanned=` 必须把「没扫」与「扫了全关」分开（2026-10-11）', () => {
+    const body = DISPATCHER.slice(DISPATCHER.indexOf('def nmap_ports('), DISPATCHER.indexOf('\ndef port_scan('));
+    assert.match(body, /scanned=\{scanned\}|scanned=\{/, '正常收尾必须带 scanned=');
+    const verb = DISPATCHER.slice(DISPATCHER.indexOf('def port_scan('), DISPATCHER.indexOf('\ndef service_probe('));
+    assert.match(verb, /open_ports=not_scanned/, '空交集的 open_ports 不能写成数字 0（与"扫了全关"同形）');
+    assert.match(verb, /scanned=false/, '空交集必须显式 scanned=false');
+  });
+
+  it('content_discover 的 summary 必须给出覆盖依据（entries/duration/错误迹象）（2026-10-11）', () => {
+    // 旧 summary 只有 `hits=N autocalibration=…`：跑完了干净 vs 跑一半报一堆错**同形**。
+    const start = DISPATCHER.indexOf('def content_discover(');
+    const body = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef web_crawl(', start));
+    for (const field of ['entries_scanned=', 'duration_ms=', 'stderr_lines=', 'stderr_errorish=']) {
+      assert.ok(body.includes(field), `summary 缺 ${field}`);
+    }
+    assert.match(body, /warn: ffuf 的 stderr 里有/, '有错误迹象时必须显式 warn（别让人从干净数字里读结论）');
+  });
+
+  it('exposure_check 的字段名不再误导：hashed_bytes 与 content_length 是两件事（2026-10-11）', () => {
+    const start = DISPATCHER.indexOf('def exposure_check(');
+    const body = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef ', start + 1));
+    assert.ok(body.includes('hashed_bytes='), '读入字节数应叫 hashed_bytes');
+    assert.ok(body.includes('content_length='), '目标自报长度应叫 content_length');
+    assert.ok(!body.includes('declared_length='), '旧的 declared_length 名字会与 bytes 并排误读，必须消失');
+  });
+
   it('每个结构化动词的超时：容器默认表与宿主模板一致（port_scan 曾是 300s vs 900s）', () => {
     // 容器侧是**天花板**（budget_ms 取 min(注入值, 本表)）：比宿主模板小 ⇒
     // 宿主按模板规划、容器提前砍，批次扫描在离完成很远的地方被截断而不自知。

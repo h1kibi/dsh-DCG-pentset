@@ -812,6 +812,13 @@ export type ApprovalDecision =
 /** 幂等键派生输入。服务端计算，不采信 Agent 传值（设计文档 §10.2）。 */
 export interface IdempotencyInput {
   readonly workerSessionId: string;
+  /**
+   * 受审模板标识。**必须在键里**：两个模板可以产出逐字相同的命令
+   * （`recon_tls_inspect` 与 `vuln_tls_weakness` 都下发 `tls_probe …`），
+   * 而「同一个动作」由（模板，参数）决定，不由命令文本决定——不含模板时
+   * 第二个动作会被拒为"幂等键命中已有运行但计划摘要不同"（2026-10-11 实测）。
+   */
+  readonly templateId: string;
   readonly actionClass: ActionClass;
   readonly normalizedTarget: string;
   readonly normalizedCommand: string;

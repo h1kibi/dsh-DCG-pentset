@@ -708,7 +708,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       scope: '扫描档位：top100 / top1000 / common_services（约 30 个常见服务端口）/ full_tcp（全 65535，需人类显式选择）',
       ports: 'none 表示按 scope；也可以给显式表达式（如 80,443,8000-8100，最多 64 段）——此时 scope 被忽略。**表达式里的每个端口都必须落在范围条目的已授权端口内**（越界即整条拒绝）',
       ping: 'syn=SYN 扫描（-PS，需 NET_RAW）/ connect=全连接（-sT）/ skip=不判存活直接扫（-Pn）',
-      restrict_to_scope: '**true 时把档位限制到 `ports` 指定的授权集合**：容器算 `top-N ∩ ports` 并在报告里给出 `used_ports`（N 取自镜像 nmap-services 频率列，与 nmap 自己的取舍逐位一致）。用于「要扫 top-100，但范围只授权了少数端口」。**需要同时给出 `ports` 表达式**（用范围条目里已授权的端口）；交集为空时报 `scope_intersection: empty` 且**不扫描**（那不是「0 开放」）',
+      restrict_to_scope: '**交集扫描**（三条路先分清）：① 只给 `ports=<授权端口>` ⇒ `scope` 被忽略、就扫这几个端口，**不需要本开关**；② 只给档位 ⇒ 范围只授权其中一部分时会被闸门拒（档位不可枚举）；③ `restrict_to_scope=true` + **同时给 `ports`** ⇒ 扫「档位 ∩ 授权集合」，容器算 `top-N ∩ ports`（N 取自镜像 nmap-services 频率列，与 nmap 自己的取舍逐位一致）并回报 `used_ports`。空交集时 `scope_intersection: empty` + `scanned=false`（那不是「0 开放」）',
     },
     commandTemplate: 'port_scan target={target} scope={scope} ports={ports} ping={ping} restrict_to_scope={restrict_to_scope}',
   },
@@ -788,6 +788,10 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         { name: 'scheme', kind: 'enum', values: ['http', 'https', 'auto'] },
         { name: 'follow_redirects', kind: 'integer', min: 0, max: 3 },
         { name: 'collect', kind: 'enum', values: ['headers', 'security_headers', 'robots', 'sitemap', 'tech', 'endpoints'] },
+        // chunk 跟随（2026-10-11 操作者实测：对 SPA 而言**这是唯一有效的路由发现路径**——
+        // 首页只抽到 20 条，而 `/_next/static/chunks/*.js` 里另有 11 条 /api/*，含核心发现，
+        // 字典枚举全都没命中）。只跟**同主机**的 .js 引用，条数与字节都有硬上限。
+        { name: 'include_chunks', kind: 'enum', values: ['true', 'false'] },
         { name: 'verify_tls', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
@@ -800,10 +804,11 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       port: 'HTTP(S) 端口',
       scheme: 'auto 先试 https 再试 http',
       follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
+      include_chunks: '**endpoints 专用**：是否跟随同主机的 `.js` 引用（`/_next/static/chunks/*` 这类）再抽一遍——路由常常**只在 chunk 里**。只跟同主机（跨主机一律跳过，与重定向同一纪律），上限 8 条 / 每条 256KiB / 合计 1MiB；命中会标出 `kind=quoted@<chunk 路径>` 供复核',
       collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）/ **endpoints=端点与路由抽取**（固定三种形态：属性 href/src/action、引号内的绝对路径、fetch/axios 调用第一实参；每条是短行、带 hits，空结果会明说「这不等于页面里没有端点」——手写 grep 抽这类东西时失败是静默的）',
       verify_tls: VERIFY_TLS_CARRY,
     },
-    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls}',
+    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls} include_chunks={include_chunks}',
   },
   {
     template: {

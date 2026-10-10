@@ -88,7 +88,7 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         required: false,
         default: 'false',
         description:
-          '**交集扫描**：true 时把档位限制到 `ports` 里的授权集合（容器算 `top-N ∩ ports` 并回报 `used_ports`）。用于"要扫 top-100，但范围只授权了少数端口"；**必须同时给 `ports`**，空交集会明确报 `scope_intersection: empty` 且不扫描',
+          '**交集扫描**。三条路先分清：① 只给 `ports=<授权端口>` ⇒ 就扫这几个端口（`scope` 被忽略），**不需要本开关**；② 只给档位 ⇒ 范围只授权一部分时会被闸门拒；③ 本开关 + **同时给 `ports`** ⇒ 扫「档位 ∩ 授权集合」并回报 `used_ports`。空交集：`scope_intersection: empty` + `scanned=false`（不是"0 开放"）',
         options: [
           { value: 'true', note: '算 top-N ∩ ports（nmap-services 频率列，与 nmap 自身取舍逐位一致）' },
           { value: 'false', note: '不交集（默认）；显式 ports 会**整个取代**档位' },
@@ -158,6 +158,18 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
           { value: 'sitemap', note: 'sitemap.xml 内容' },
           { value: 'tech', note: '技术栈推断（框架/语言/中间件）' },
           { value: 'endpoints', note: '**端点/路由抽取**：固定三种形态（href/src/action、引号内绝对路径、fetch/axios 第一实参），短行带 hits；空结果会明说「不等于页面里没有端点」——手写 grep 抽路由失败是静默的' },
+        ],
+      },
+      {
+        name: 'include_chunks',
+        type: 'enum',
+        required: false,
+        default: 'true',
+        description:
+          '**endpoints 专用**：是否跟随同主机的 `.js` 引用（`/_next/static/chunks/*`）再抽一遍。SPA 的路由**常常只在 chunk 里**，建议保持默认 true',
+        options: [
+          { value: 'true', note: '跟随（默认）：只跟同主机，≤8 条 / 每条 256KiB；命中标出 `@<chunk 路径>`' },
+          { value: 'false', note: '只看本页字节（页面很重或只想看首屏时用）' },
         ],
       },
       {

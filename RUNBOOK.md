@@ -1063,6 +1063,20 @@ npm run typecheck && npm run lint && npm test && npm run verify
 | 情报阶段看不到 `pentest_scan`（含 `exposure_check`），"配置暴露核查"只能手搓 `curl` | 该工具只发给漏洞分析阶段；2026-10-07 撤下逐项编辑器后没有人类入口能加工具 ⇒ 能力边界只由 Profile 与阶段默认决定 | 把 `pentest_scan` 加入情报收集默认工具面（见下方裁定说明）；提示词改为**按在场工具分节**渲染参数指南 + 一致性锁；`recon-web-surface` 补第 8/9 行 |
 | **`exposure_check` 只要命中候选就崩**：`internal_error: TypeError: 'in <string>' requires string as left operand, not bytes` | `classify_exposure` 写成 `signature.lower() in body.decode(...)`，而 `EXPOSURE_SIGNATURES` 是 **bytes** 字面量（`b"ref:"` / `b'"swagger"'`）⇒ `bytes in str` 必崩；它只在"真的命中候选"时走到，更早的冒烟全落在"与对照同形"分支，**且该纯函数从无单测**（注释里"可无 socket 单测"的意图从未落地） | 改为 **bytes 对 bytes**（`signature.lower() in body.lower()`，不解码）；加文本锁钉住"签名表是 bytes 且比对不得 decode"；实测（自建夹具、只读 GET）：`.git/HEAD`/`.env` → `looks_like=true`、`swagger.json` → `control=same` 判为软 404、**不回显正文** |
 
+### 6.5.13.4 第五轮实测（2026-10-11）：幂等键、chunk 路由、以及"同形字段"的收尾
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| `tls_inspect` 之后调 `tls_weakness`（参数相同）被拒 `idempotent_replay`「幂等键命中已有运行但计划摘要不同」 | **幂等键不含 `templateId`**，而两个模板的 `commandTemplate` **逐字相同**（都下发 `tls_probe …`）⇒ 键相撞、摘要不同（摘要含模板）。操作者只能给 `sni` 塞个等价取值换个键 | 键纳入 `templateId`（键的语义是「同一个**受审动作**」，动作身份由（模板，参数）决定，不是命令文本）+ 撞键回归锁；四处重算键的测试夹具同步补 `templateId` |
+| `collect=endpoints` 只解析 HTML：首页 20 条，而**真正的路由只在 chunk 里**（自测：`/_next/static/chunks/*.js` 另有 11 条 `/api/*`，含核心发现；三份字典全都没命中） | 抽取器只读本次响应的字节，不跟随引用 | 新增 `include_chunks`（默认 **true**）：跟随**同主机**的 `.js` 引用再抽一遍（跨主机一律跳过，与重定向同一纪律），上限 8 条 / 每条 256KiB / 合计 1MiB；命中带来源 `kind=quoted@<chunk 路径>` 供复核；三处枚举加锁 |
+| `restrict_to_scope` 的文档与人实际行为矛盾：参数表暗示"不给 true 就会被闸门拒"，而显式 `ports=` 本来就合法 | 文案把"**只想扫授权端口**"与"**要保留档位口径**"两种意图写成了一条 | 三处（schema / carries / 指南）改写成**三条路**：① 只给 `ports` ⇒ 就扫这几个端口（不需开关）；② 只给档位 ⇒ 授权不全时被拒；③ 开关 + `ports` ⇒ 扫交集 |
+| 空交集时 `summary` 与「扫了但全关」**同形**（`open_ports=0 hosts_up=0`） | 复用同一个字段名表达"没扫"与"扫了是 0" | 加**判别字段** `scanned=true/false`；空交集写 `scanned=false open_ports=not_scanned hosts_up=n/a`；全 down 写 `scanned=false open_ports=0`（并已有 `warn:`） |
+| `content_discover` 只回 `hits=N autocalibration=…`，分不清"跑完干净"与"跑一半报一堆错" | summary 不含覆盖依据 | summary 补齐 `entries_scanned / wordlist_lines / ext_multiplier / duration_ms / ffuf_exit / stderr_lines / stderr_errorish`；有错误迹象时显式 `warn:` + stderr 头部 |
+| `workdir` 多根部署写新文件必被拒（`/work` 读写 + `/mnt/engagement` 只读） | 旧规则"多根 + 新文件必须带前缀"没区分**可写根是否唯一** | 唯一可写根时**相对路径直接落它**（回报实际落点）；只有多个**可写**根才要求前缀（错误消息也改成"多个可写根"） |
+| `exposure_check` 的 `bytes=4096 declared_length=8596` 并排像"大小对不上=可疑" | 名字没说清"读进来算哈希的截断量" vs "目标自报长度" | 改名 `hashed_bytes` / `content_length`（含 control 行），旧名加锁消失 |
+| `collect=robots` 报 `status: 200` 同时 `robots: missing`（200 是主页面的） | robots 自己的状态没自陈 | 补 `robots_status` / `sitemap_status`（404 就写 404） |
+| `tls_inspect` 的 `cert_subject` 是空的，看着像解析器没带出来 | ACME 给 IP 签的证书常见**空 DN**（身份只在 SAN）；openssl 输出就是 `subject=` | 空值时写 `cert_subject: （空 DN）` + 说明"身份在 SAN 里"（issuer 同理）；实测空 DN 证书确认 SAN 行照常给出 |
+
 ### 6.5.13.3 同日第四轮实测（3 条）的修复：静默失败的三张脸
 
 | 现象 | 根因 | 修复 |

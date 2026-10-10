@@ -430,20 +430,29 @@ export function writeWorkdir(
   if (target.rel === '') {
     throw new WorkdirError('is_dir', 'path 指向挂载根本身：请给出文件名');
   }
+  // 多根 + 新文件：只有当**可写根不止一个**时才真的有歧义。
+  // 2026-10-11 操作者实测：`/work`（读写）+ `/mnt/engagement`（只读）这种部署里，相对路径写新文件
+  // 必被拒——而写入**只可能**去 `/work`。那是在逼人抄一遍容器路径，不是消歧。
+  let effective = target;
   if (!target.explicit && !existsSync(target.abs) && roots.length > 1) {
-    // 多根 + 新文件 = 写哪儿都说得通 ⇒ 必须由调用方指明，不能替它猜。
-    throw new WorkdirError(
-      'bad_path',
-      `本部署声明了多个挂载根（${roots.map((r) => r.containerPath).join('、')}）：` +
-        `写入新文件必须带容器路径前缀指明写到哪个根（例如 ${roots[0]?.containerPath ?? ''}/目录/文件.md）`,
-    );
+    const writable = roots.filter((root) => root.readOnly !== true);
+    if (writable.length !== 1) {
+      throw new WorkdirError(
+        'bad_path',
+        `本部署声明了多个**可写**挂载根（${writable.map((r) => r.containerPath).join('、')}）：` +
+          `写入新文件必须带容器路径前缀指明写到哪个根（例如 ${writable[0]?.containerPath ?? ''}/目录/文件.md）`,
+      );
+    }
+    // 唯一可写根 ⇒ 没有歧义，直接落它（相对路径语义不变）。
+    effective = resolveInRoots(writable, rawPath);
   }
-  assertRealPathInside(target);
-  mkdirSync(dirname(target.abs), { recursive: true });
-  writeFileSync(target.abs, content, 'utf8');
+  assertRealPathInside(effective);
+  mkdirSync(dirname(effective.abs), { recursive: true });
+  writeFileSync(effective.abs, content, 'utf8');
   return {
-    path: target.rel,
-    containerPath: `${target.root.containerPath.replace(/\/+$/, '')}/${target.rel}`,
+    // 用**实际落点**回报（唯一可写根重定向后，`target` 与 `effective` 可能不同根）。
+    path: effective.rel,
+    containerPath: `${effective.root.containerPath.replace(/\/+$/, '')}/${effective.rel}`,
     bytes,
   };
 }

@@ -967,6 +967,9 @@ export function createExecutionService(deps: ExecutionServiceDeps): ExecutionSer
     // 换凭证 = 新动作，必须换键。
     const idempotencyKey = deriveIdempotencyKey({
       workerSessionId: input.workerSessionId,
+      // 模板进键：侦察动词与核验动词命中同一底层探测时（命令文本逐字相同、模板不同），
+      // 它们是**两个受审动作**，不该互相封禁（2026-10-11 操作者实测 P0）。
+      templateId: spec.template.id,
       actionClass,
       normalizedTarget,
       normalizedCommand,

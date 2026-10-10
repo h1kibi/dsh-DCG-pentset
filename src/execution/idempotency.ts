@@ -53,10 +53,21 @@ export function canonicalizeCommand(command: string): string {
 
 // ───────────────────────────── 派生 ─────────────────────────────
 
-/** `sha256(会话 ‖ 动作类别 ‖ 规范化目标 ‖ 规范化命令 ‖ 放行凭证)`。 */
+/**
+ * `sha256(会话 ‖ 模板 ‖ 动作类别 ‖ 规范化目标 ‖ 规范化命令 ‖ 放行凭证)`。
+ *
+ * **模板为什么必须在键里**（2026-10-11 操作者实测 P0）：两个模板可以产出**逐字相同**的命令——
+ * `recon_tls_inspect`（情报）与 `vuln_tls_weakness`（核验）都下发
+ * `tls_probe target=… port=… sni=… enumerate_protocols=…`。不含模板时它们的键相同、而计划摘要
+ * 不同（摘要含 `templateId`）⇒ 第二个动作被拒为「幂等键命中已有运行但计划摘要不同」——
+ * 操作者只能靠给 `sni` 塞个等价的不同取值来换个键，把同一份检查白跑一遍。
+ * 键的语义是「**同一个受审动作**」，而动作身份由（模板，参数）共同决定，不是命令文本。
+ */
 export function deriveIdempotencyKey(input: IdempotencyInput): string {
   const fields = [
     input.workerSessionId,
+    // 模板进键：不同模板 = 不同受审动作，哪怕命令文本相同（见上面的说明）。
+    input.templateId,
     input.actionClass,
     // 规范化目标已是规范文本（由裁决结果生成），原样进入派生，避免二次解释。
     input.normalizedTarget,

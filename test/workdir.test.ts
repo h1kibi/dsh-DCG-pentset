@@ -178,6 +178,27 @@ test('多根时按相对路径命中（并回报命中的那个根）', () => {
   assert.equal(readWorkdir(both, '/mnt/second/only-b.md').text, 'b');
 });
 
+test('多根但只有一个可写时，新文件落到它（不逼调用方抄容器路径）', () => {
+  // 2026-10-11 操作者实测：`/work`（读写）+ `/mnt/engagement`（只读）这种部署里，
+  // 相对路径写新文件被拒，而**写入只可能去 /work**——那是在逼人抄路径，不是消歧。
+  const writeRoot = roots();
+  const readOnlyRoot = roots();
+  const both: readonly WorkdirRoot[] = [
+    { ...writeRoot.root, containerPath: '/work' },
+    { ...readOnlyRoot.root, containerPath: '/mnt/engagement', readOnly: true },
+  ];
+  const written = writeWorkdir(both, '新文件.md', 'x');
+  assert.equal(written.containerPath, '/work/新文件.md', '唯一可写根就是落点，且回报实际落点');
+  assert.equal(readWorkdir([{ hostPath: writeRoot.dir, containerPath: '/work' }], '新文件.md').text, 'x');
+  // 只读根里**不能**凭空出现这个文件。
+  assert.throws(
+    () => readWorkdir([{ hostPath: readOnlyRoot.dir, containerPath: '/mnt/engagement' }], '新文件.md'),
+    '只读根不该被写入',
+  );
+  // 显式容器路径仍然照旧（写到只读根要按只读拒绝，而不是静默改道）。
+  expectError(() => writeWorkdir(both, '/mnt/engagement/x.md', 'x'), 'read_only', '显式指向只读根');
+});
+
 test('多根 + 写新文件必须带前缀（不替调用方猜写到哪个根）', () => {
   const a = roots();
   const b = roots();

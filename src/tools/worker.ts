@@ -943,7 +943,11 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
         type: 'string',
         enum: ['true', 'false'],
         description:
-          'port_scan 的**交集扫描**：true 时把档位限制到 `ports` 里的授权集合（容器算 `top-N ∩ ports`，报告给出 `used_ports`）。用于「要扫 top-100，但范围只授权了少数端口」——否则档位会被范围闸门按"不可枚举"拒绝，而你在沙箱里查不到 nmap 的 top-N 清单。**必须同时给 `ports` 表达式**',
+          'port_scan 的**交集扫描**。**先分清三条路**（2026-10-11 实测：旧文档把这条写成"否则会被闸门拒"，那是错的）——' +
+          '① 只给 `ports=<授权端口>`：`scope` 被忽略，**就扫这几个端口**，完全合法，**不需要本开关**；' +
+          '② 只给 `scope=<档位>`（`ports=none`）：扫整个档位，而范围只授权了其中一部分时会被闸门拒（档位不可枚举）；' +
+          '③ 本开关 = true 且**同时给 `ports`**：扫「档位 ∩ 授权集合」（容器算 `top-N ∩ ports`，回报 `used_ports`）——' +
+          '"想按 top-100 的口径覆盖、但只能打授权的那几个端口"时用它。空交集会明说 `scope_intersection: empty` 且 `scanned=false`（**别读成"0 开放"**）',
       },
       intensity: { type: 'string', enum: ['light', 'normal'], description: 'service_probe 的指纹强度' },
       scripts: { type: 'string', description: 'nse_safe 的只读脚本名（逗号分隔，白名单由沙箱强制）' },
@@ -951,6 +955,12 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       enumerate_protocols: { type: 'string', enum: ['on', 'off'], description: 'tls_inspect 是否枚举协议版本与套件' },
       scheme: { type: 'string', enum: ['http', 'https', 'auto'], description: 'http_probe 的协议（content_discover/web_crawl 只接受 http/https）' },
       follow_redirects: { type: 'integer', description: 'http_probe 的跳转上限（0-3；跨主机跳转一律拒绝）' },
+      include_chunks: {
+        type: 'string',
+        enum: ['true', 'false'],
+        description:
+          'http_probe 的 **endpoints 专用**开关（默认 true）：是否**跟随同主机的 .js 引用**（`/_next/static/chunks/*` 这类）再抽一遍路径。**对 Next.js/Vite 这类 SPA，路由往往只在 chunk 里**（实测：首页抽到 20 条，chunk 另有 11 条 `/api/*`——含核心发现，而字典枚举全都没命中）。只跟同主机、上限 8 条 / 每条 256KiB；命中标出 `@<chunk 路径>` 供复核',
+      },
       collect: {
         type: 'string',
         enum: ['headers', 'security_headers', 'robots', 'sitemap', 'tech', 'endpoints'],
@@ -1012,6 +1022,7 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
         ...(args.scheme === undefined ? {} : { scheme: args.scheme }),
         ...(args.follow_redirects === undefined ? {} : { followRedirects: args.follow_redirects }),
         ...(args.collect === undefined ? {} : { collect: args.collect }),
+        ...(args.include_chunks === undefined ? {} : { include_chunks: args.include_chunks }),
         ...(args.wordlist === undefined ? {} : { wordlist: args.wordlist }),
         ...(args.extensions === undefined ? {} : { extensions: args.extensions }),
         ...(args.path === undefined ? {} : { path: args.path }),
@@ -1222,8 +1233,8 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       `op：\`list\` 列目录、\`read\` 读文本（超 ${Math.round(WORKDIR_READ_LIMIT_BYTES / 1024)}KiB 会截断并标注）、` +
       '`write` 写文本文件（会建父目录）、`search` 在目录内**递归检索正则**（返回文件/行号/该行，' +
       '适合在大量归档文档里定位——比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
-      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；**多根部署**写入新文件时' +
-      '**必须用容器路径**（如 `/work/...`）消歧，已存文件与单根部署两种都行。' +
+      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；写入新文件时若**可写根不止一个**' +
+      '才必须用容器路径（如 `/work/...`）消歧——只有一个可写根（其余是只读）时相对路径直接落到它。' +
       '**实际可用的挂载根见 `op=list` 返回的 `roots` 字段**（每次调用都会附加）。' +
       '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
       '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。' +
@@ -1301,7 +1312,7 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
                 error.code === 'read_only'
                   ? '该挂载是只读的：把要写的东西交给人类，或让人类把挂载改成读写'
                   : error.code === 'bad_path'
-                    ? '多根部署写新文件时必须用容器路径（如 /work/文件名）消歧；已存文件可用相对路径；可用挂载根见 op=list 返回的 roots'
+                    ? '多个**可写**根时写新文件必须用容器路径（如 /work/文件名）消歧；只有一个可写根时相对路径即可；可用挂载根见 op=list 返回的 roots'
                     : '用容器路径（如 /work/...）或相对挂载根路径；相对路径只对已存文件或单根部署有效；越界路径不接受'
             }));
           }

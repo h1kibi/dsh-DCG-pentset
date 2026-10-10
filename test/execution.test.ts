@@ -31,6 +31,7 @@ import {
   DEFAULT_TEMPLATES,
   buildDisplayCommand,
   createRegistry,
+  defaultRegistry,
   findForbiddenPayload,
   scopePortsFor,
   validateParams,
@@ -760,6 +761,7 @@ test('scopePortsFor 解析端口来源的五种形态', () => {
 test('幂等键在参数微调后变化，在排版差异下不变', () => {
   const base = {
     workerSessionId: SESSION,
+    templateId: 'recon_http_probe',
     actionClass: 'passive_collection' as ActionClass,
     normalizedTarget: HTTP_TARGET,
     normalizedCommand: HTTP_COMMAND,
@@ -784,6 +786,7 @@ test('幂等键在参数微调后变化，在排版差异下不变', () => {
 test('幂等键区分未放行与已放行同一动作、以及不同会话', () => {
   const base = {
     workerSessionId: SESSION,
+    templateId: 'vuln_http_check',
     actionClass: 'exploit_validation' as ActionClass,
     normalizedTarget: HTTP_TARGET,
     normalizedCommand: `http_probe target=${HTTP_TARGET} payload_id=xss-1`,
@@ -795,6 +798,31 @@ test('幂等键区分未放行与已放行同一动作、以及不同会话', ()
   assert.notEqual(unapproved, approved);
   assert.notEqual(unapproved, otherSession);
   assert.notEqual(approved, otherSession);
+});
+
+test('幂等键区分模板：侦察与核验命中同一底层探测时不该互相封禁（2026-10-11 实测 P0）', () => {
+  // 实况：`recon_tls_inspect`（情报）与 `vuln_tls_weakness`（核验）的 `commandTemplate` **逐字相同**，
+  // 参数也一样 ⇒ 旧键（不含模板）相撞，而计划摘要不同（含 templateId）⇒ 第二个动作被拒为
+  // 「幂等键命中已有运行但计划摘要不同：拒绝复用他人结果」，操作者只能给 `sni` 塞个等价取值绕开。
+  const command = 'tls_probe target=47.109.76.66 port=3002 sni=none enumerate_protocols=on';
+  const shared = {
+    workerSessionId: SESSION,
+    actionClass: 'active_probing' as ActionClass,
+    normalizedTarget: '47.109.76.66',
+    normalizedCommand: command,
+    approvalId: '',
+  };
+  const inspect = deriveIdempotencyKey({ ...shared, templateId: 'recon_tls_inspect' });
+  const weakness = deriveIdempotencyKey({ ...shared, templateId: 'vuln_tls_weakness' });
+  assert.notEqual(inspect, weakness, '不同模板 + 同一命令必须派生出不同的键');
+  // 同一模板、同一命令仍然稳定（重放保护不能因此失效）。
+  assert.equal(inspect, deriveIdempotencyKey({ ...shared, templateId: 'recon_tls_inspect' }));
+  // 两个模板的注册事实（命令模板逐字相同）也钉住：将来若统一到一条模板，这条锁会提醒改键的注释。
+  const registry = defaultRegistry();
+  const a = registry.get('recon_tls_inspect');
+  const b = registry.get('vuln_tls_weakness');
+  assert.ok(a !== undefined && b !== undefined);
+  assert.equal(a.commandTemplate, b.commandTemplate, '两族命中同一底层探测（这正是需要模板进键的原因）');
 });
 
 test('计划摘要覆盖范围版本、策略 epoch 与命令内容', () => {
@@ -856,6 +884,7 @@ test('准入成功：计划由模板注册信息与服务端派生字段构成',
     plan.idempotencyKey,
     deriveIdempotencyKey({
       workerSessionId: SESSION,
+      templateId: plan.templateId,
       actionClass: 'passive_collection',
       normalizedTarget: plan.normalizedTarget,
       normalizedCommand: plan.normalizedCommand,
@@ -1365,6 +1394,7 @@ test('放行通过的凭证放行同一计划，幂等键与未放行版本不�
 
   const withApproval = deriveIdempotencyKey({
     workerSessionId: SESSION,
+    templateId: plan.templateId,
     actionClass: 'exploit_validation',
     normalizedTarget: plan.normalizedTarget,
     normalizedCommand: plan.normalizedCommand,
@@ -1372,6 +1402,7 @@ test('放行通过的凭证放行同一计划，幂等键与未放行版本不�
   });
   const withoutApproval = deriveIdempotencyKey({
     workerSessionId: SESSION,
+    templateId: plan.templateId,
     actionClass: 'exploit_validation',
     normalizedTarget: plan.normalizedTarget,
     normalizedCommand: plan.normalizedCommand,
@@ -1896,6 +1927,7 @@ test('高权限自放行下的幂等：同一条命令重发得到同一键与�
     first.plan.idempotencyKey,
     deriveIdempotencyKey({
       workerSessionId: SESSION,
+      templateId: first.plan.templateId,
       actionClass: 'active_probing',
       normalizedTarget: first.plan.normalizedTarget,
       normalizedCommand: first.plan.normalizedCommand,
