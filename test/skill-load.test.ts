@@ -24,6 +24,8 @@ import { PgWorkerTools } from '../src/memory/pg-worker-tools.ts';
 import { skillContentHash } from '../src/skills/pg-skill.ts';
 import type { DbClient } from '../src/db/port.ts';
 import { cleanupEngagements } from './helpers/cleanup.ts';
+import { WorkflowCore } from '../src/workflow/core.ts';
+import type { WorkflowServiceDeps } from '../src/workflow/model.ts';
 
 const DATABASE_URL = process.env.PENTEST_DATABASE_URL;
 
@@ -247,7 +249,56 @@ describe('loadSkill 装载冻结（真实 PostgreSQL）', { skip: DATABASE_URL =
     await pool.query('update pentest.skills set disabled = true where name = $1', [name]);
     const result = await tools.loadSkill({ workerSessionId, skillName: name });
     assert.equal(result.skill, null);
-    assert.equal(result.refusal, undefined, '旧会话没有冻结记录，不应编造拒绝理由');
+    // 旧会话没有冻结三元组，**不得**编造漂移理由；但它仍会给出准确的理由（停用/不存在）。
+    assert.doesNotMatch(result.refusal?.message ?? '', /冻结|漂移|被修改/u);
+    assert.match(result.refusal?.message ?? '', /已被停用/u);
     await pool.query('update pentest.skills set disabled = false where name = $1', [name]);
+  });
+
+  /**
+   * 列错位回归锁（2026-10-10 实测事故）。
+   *
+   * 生产 `insertWorkerSession` 的 VALUES 曾把 `skill_freeze` 与 `model_route` 两个参数写反：
+   *   - `skill_freeze` 落库的是模型路由 ⇒ `loadSkill` 读不到冻结三元组 ⇒
+   *     2026-10-05 的「内容漂移即拒绝」保护**静默失效**（回退到只按启用状态可读）；
+   *   - `model_route` 落库的是冻结数组 ⇒ 交接压缩读 `.model` 读到 undefined ⇒ 模型选择静默退化。
+   *
+   * 既有夹具手写 INSERT（顺序是对的），所以抓不到生产语句的错位——这条**走生产方法**、回读两列。
+   */
+  test('生产 insertWorkerSession：冻结写进 skill_freeze，路由写进 model_route', async () => {
+    const name = `skill-freeze-${randomUUID().slice(0, 8)}`;
+    await ensureSkill({ name, body: '冻结列回归夹具正文。' });
+    const engagementId = await newEngagement();
+
+    const client = db();
+    const core = new WorkflowCore({ db: client, txDb: client } as unknown as WorkflowServiceDeps);
+    const id = randomUUID();
+    const modelRoute = { provider: 'deepseek-official', model: 'deepseek-flash' };
+    await core.insertWorkerSession({
+      id,
+      engagementId,
+      dshSessionId: `dsh-freeze-${id}`,
+      phase: 'intelligence-gathering',
+      caps: { profileId: 'p', profileRevision: 'r1', modelRoute },
+      skillIds: [name],
+      toolAllow: [],
+      taskPrompt: 'tp',
+      scopeVersion: 0,
+      iteration: 0,
+    });
+
+    const row = await pool.query('select skill_freeze, model_route from pentest.worker_sessions where id = $1::uuid', [id]);
+    assert.equal(row.rowCount, 1);
+    const freeze = row.rows[0].skill_freeze;
+    assert.ok(Array.isArray(freeze), `skill_freeze 必须是冻结条目数组，实际：${JSON.stringify(freeze)}`);
+    assert.equal(freeze.length, 1);
+    assert.equal(freeze[0].name, name);
+    assert.equal(typeof freeze[0].revision, 'number', '库里有该 skill ⇒ 冻结三元组非空');
+    assert.equal(typeof freeze[0].contentHash, 'string');
+    assert.deepEqual(row.rows[0].model_route, modelRoute, 'model_route 必须是路由对象而不是冻结数组');
+
+    // 端到端：用生产写入的会话直接读正文——内容冻结保护真正生效的那条路径。
+    const result = await tools.loadSkill({ workerSessionId: id, skillName: name });
+    assert.notEqual(result.skill, null, '冻结正确的会话必须能读到正文');
   });
 });

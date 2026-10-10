@@ -1340,8 +1340,12 @@ export class WorkflowCore {
           transition_id, phase, profile_id, profile_revision, attempt, iteration, scope_version,
           task_prompt, handoff_id, tool_filter, skill_ids, skill_freeze, model_route, status,
           session_kind, budget_max_tokens, budget_max_steps, budget_max_seconds)
+       -- 参数**逐列对齐**（$16→skill_freeze、$17→model_route）：这里曾把两者写反，
+       -- 后果是「技能内容冻结」写进了 model_route、路由写进了 skill_freeze——
+       -- loadSkill 读不到冻结值 ⇒ 2026-10-05 的内容漂移保护静默失效；
+       -- 交接压缩读 model_route.model 读到数组 ⇒ 模型选择静默退化（2026-10-10 实测确认）。
        values ($1::uuid,$2::uuid,$3,$4::uuid,$5::uuid,$6::uuid,$7,$8,$9,1,$10,$11,$12,
-               $13::uuid,$14::jsonb,$15::jsonb,$16::jsonb,$21::jsonb,'starting',$17,$18,$19,$20)`,
+               $13::uuid,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,'starting',$18,$19,$20,$21)`,
       [
         input.id,
         input.engagementId,
@@ -1358,12 +1362,12 @@ export class WorkflowCore {
         input.handoffId ?? null,
         JSON.stringify({ allow: input.toolAllow }),
         JSON.stringify(input.skillIds),
+        JSON.stringify(skillFreeze),
         JSON.stringify(input.caps.modelRoute),
         input.sessionKind ?? 'phase',
         budget.maxTokens,
         budget.maxSteps,
         budget.maxSeconds,
-        JSON.stringify(skillFreeze),
       ],
     );
   }
