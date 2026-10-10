@@ -1540,6 +1540,7 @@ function installWorkflow(input: {
       ? {}
       : {
           workdir: {
+            roots: workdirRoots,
             list: async (input: { readonly path: string }) => listWorkdir(workdirRoots, input.path),
             read: async (input: { readonly path: string }) => readWorkdir(workdirRoots, input.path),
             write: async (input: { readonly path: string; readonly content: string }) =>

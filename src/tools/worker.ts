@@ -171,6 +171,8 @@ export interface WorkerToolDeps {
    * 未声明挂载时省略——工具随即给出 `no_roots` 的明确拒绝，而不是退回某个默认目录。
    */
   readonly workdir?: {
+    /** 本部署声明的所有挂载根（容器路径 + 只读标记）；list 时附在返回值里，供模型检查配置。 */
+    readonly roots: readonly { readonly containerPath: string; readonly readOnly?: boolean }[];
     list(input: { readonly path: string }): Promise<WorkdirListing>;
     read(input: { readonly path: string }): Promise<WorkdirFile>;
     write(input: { readonly path: string; readonly content: string }): Promise<WorkdirWriteResult>;
@@ -422,7 +424,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         required: true,
         description: 'report_ready 表示任务完成或无法继续；blocked 表示有明确阻塞',
       },
-      objective: { type: 'string', required: true, description: '本次任务目标（不可变快照）' },
+      objective: { type: 'string', required: true, description: '本次任务目标（不可变快照）；**必须在顶层传递**，payload 里的同名字段仅作兼容接收' },
       summary: { type: 'string', required: true, description: '面向人的简短总结' },
       status_note: {
         type: 'string',
@@ -967,7 +969,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         ...(args.collect === undefined ? {} : { collect: args.collect }),
         ...(args.wordlist === undefined ? {} : { wordlist: args.wordlist }),
         ...(args.extensions === undefined ? {} : { extensions: args.extensions }),
-        ...(args.rate === undefined ? {} : { rate: args.rate }),
+        ...(args.path === undefined ? {} : { path: args.path }),
         ...(args.depth === undefined ? {} : { depth: args.depth }),
         ...(args.max_pages === undefined ? {} : { maxPages: args.max_pages }),
         ...(args.record_types === undefined ? {} : { recordTypes: args.record_types }),
@@ -1159,12 +1161,13 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       `op：\`list\` 列目录、\`read\` 读文本（超 ${Math.round(WORKDIR_READ_LIMIT_BYTES / 1024)}KiB 会截断并标注）、` +
       '`write` 写文本文件（会建父目录）、`search` 在目录内**递归检索正则**（返回文件/行号/该行，' +
       '适合在大量归档文档里定位——比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
-      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；也接受容器路径写法（`/work/...`）；' +
+      'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；**多根部署**写入新文件时' +
+      '**必须用容器路径**（`/work/...` / `/mnt/engagement/...`）消歧，已存文件与单根部署两种都行。' +
       '空路径或 `.` 就是挂载根本身。' +
       '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
       '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。' +
       '\n⚠️  **警告**：挂载根由人类在启动时配置。如果配置错误，你可能在读写**不属于本作业**的目录。' +
-      '每次 `op=list` 时请检查返回的 `root` 字段（应该是本作业的目录），或用 `op=list .` 浏览根目录确认；' +
+      '每次 `op=list` 时请检查返回的 `roots` 字段（列出所有挂载根及其容器路径），或用 `op=list .` 浏览根目录确认；' +
       '遇到怀疑属于其它作业的文件时停止写操作并通知人类。',
     parameters: {
       op: { type: 'string', required: true, description: 'list | read | write' },
@@ -1195,7 +1198,11 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         }));
       }
       try {
-        if (op === 'list') return toJson(await access.list({ path: args.path }));
+        if (op === 'list') {
+          const result = await access.list({ path: args.path });
+          // 附加挂载根信息（P0 #3：让模型知道有哪些根可用）
+          return toJson({ ...result, roots: access.roots.map(r => ({ containerPath: r.containerPath, readOnly: r.readOnly ?? false })) });
+        }
         if (op === 'read') return toJson(await access.read({ path: args.path }));
         if (op === 'search') {
           if (args.pattern === undefined) {
@@ -1232,7 +1239,9 @@ export function createWorkerTools(deps: WorkerToolDeps) {
               next_action:
                 error.code === 'read_only'
                   ? '该挂载是只读的：把要写的东西交给人类，或让人类把挂载改成读写'
-                  : '只用相对挂载根的路径；越界路径不会被接受',
+                  : error.code === 'bad_path'
+                    ? '多根部署写新文件时必须用容器路径（/work/... 或 /mnt/engagement/...）消歧；已存文件可用相对路径'
+                    : '只用相对挂载根的路径或容器路径（/work/...）；越界路径不会被接受',
             }));
           }
           return toJson({
