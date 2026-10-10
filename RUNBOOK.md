@@ -1047,6 +1047,24 @@ npm run typecheck && npm run lint && npm test && npm run verify
 选择退化为默认）。这两处对**新会话**已修正；旧会话不必重建——播种后 `skill_load` 即可用，
 冻结保护从下一个会话起生效。
 
+### 6.5.13.1 同日第二轮实测（7 条）的修复
+
+第二轮反馈里有 4 条是**部署副本没换**（§6.5.15）导致的假象，另外几条是真缺陷：
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| `verify_tls: false` 却记成 `verify_tls=true`（自签目标连得上、账本写"已校验"） | `buildStructuredIntent` 用 `String(value)` 校验枚举，却把**原始布尔**存进参数；模板枚举只认字符串 `'true'/'false'` ⇒ 布尔在下一道被拒/回退成默认。LLM 看到 `enum:['true','false']` 就传布尔，是常态 | 枚举参数**归一化为字符串**再落参数（`techniques.ts`）；回归锁三条（布尔→字符串、非枚举保型、转换后可过模板校验） |
+| `pentest_workdir` 报错三处说法互相打架（描述说相对路径／message 要容器前缀／next_action 说只用相对路径） | 多根部署写新文件的 `next_action` 与 `WorkdirError.message` 各写一半；示例路径 `/mnt/engagement` 是**硬编码**，与会话里实际挂载根无关 | 统一措辞：**多根 + 新文件必须带容器前缀**，单根/已存文件两种都行；`op=list` 返回值新增 `roots`（容器路径 + 只读标记）让模型自查；描述里删掉硬编码示例、改为"可用根见 `roots`" |
+| 提示词用整节介绍 `pentest_vuln_check`（三个 technique 的完整参数表），但**能力快照里没有这个工具** | 工具真名是 `pentest_scan`；指南/提示词里写的是早期的占位名 | 全量改名 → `pentest_scan`；`exposure_check` 的 `paths` 语义改对（是**项名** `git,env,swagger`，不是路径字面量）；补上第 4 个 technique `nse_handshake`；提示词引导与参数指南的开关都按真实工具名判定 |
+| 参数指南里 `content_discover` 仍只有两档字典、没有 `path` | 指南（`technique-params-guide.ts`）与工具枚举是两份手抄，第一轮只改了工具侧 | 指南补齐 `api_endpoints`/`quickhits` 与 `path`（含"条目自带 `api/` 前缀、在站点根用"的分辨点） |
+| `whois 47.109.76.66` **完全无输出**（rDNS 也空），归属无法确证 | 客户端 5.5.17 的默认路径先问 IANA 取转介，**IANA 把 47/8 转介给 `whois.arin.net`**，而该主机在**本沙箱不可达**（`:43` 连不上；实测宿主可通、沙箱内 43 端口对其他 whois 主机是通的）⇒ 默认路径既不换家也不报错，只留 0 字节 | `whois_query` 改为**显式转介链 + 兜底**：IANA → 它指的那家 → 答不出记录则按 `apnic/ripe/lacnic/afrinic/arin` 顺序再试，取第一条含记录字段（`inetnum:/netrange:/orgname:` …）的答复；每跳独立超时且总时长受本次预算约束。实测该目标 8 秒内给出 `inetnum 47.104.0.0-47.111.255.255 / netname ALISOFT / descr Aliyun Computing Co., LTD / abuse didong.jc@alibaba-inc.com` 一类可引用字段 |
+| `pentest_exec` 超时口径读起来自相矛盾（"5 分钟，不是 15 分钟"＋"15 分钟是上限"） | 两句话分散在三行里，且没说清"上限按动作定" | 合成一段：**15 分钟是沙箱天花板、不是任何动作的默认**；自由命令 5 分钟、结构化动作更小；按 5 分钟切段 |
+| `port_scan` 批次扫描：宿主按 15 分钟规划，容器 5 分钟就砍 | 容器 `DEFAULT_TOOL_TIMEOUT_MS["port_scan"]` 是 300s（其余 13 个动词都与模板一致，**只此一处**），而 `budget_ms` 取 `min(注入值, 本表)` ⇒ 本表就是天花板 | 容器侧抬到 900_000 与模板对齐；新增**超时对拍回归锁**（`test/action-templates.test.ts` 解析分发器表，逐动词与宿主模板比对） |
+
+**顺带澄清（不是缺陷）**：`ffuf 1.1.0` **有**跳过证书校验的开关，且 `content_discover` 在
+`verify_tls=false` + https 时已经传 `-k`（实测 `ffuf -k -h` 正常解析，说明该版本接受 `-k`）。
+「ffuf 不能打自签目标」这条**不成立**，可放心用结构化通道做自签/IP 目标的目录枚举。
+
 ## 6.5.14 本机跑测试需要独立的 `pentest` 测试库（2026-10-10 补）
 
 `npm test` 的加载器**拒绝**把测试跑在 `pentest_personal` 上（按作业清理会吃掉真实战果）。
@@ -1057,6 +1075,65 @@ node -e "const{Client}=require('pg');const c=new Client({connectionString:proces
 node --experimental-strip-types -e "import('./src/db/migrate.ts').then(m=>m.migrate({connectionString:process.env.PENTEST_DATABASE_URL.replace(/\/[^/]+$/,'/pentest'),log:console.log}))"
 PENTEST_DATABASE_URL="$(node -e "console.log(process.env.PENTEST_DATABASE_URL.replace(/\/[^/]+$/,'/pentest'))")" npm test
 ```
+
+## 6.5.15 **构建了不等于部署了**：profile 里装的是插件副本（2026-10-10 排查 4 小时的真凶）
+
+**症状**：代码改对、`npm run build` 通过、进程重启过，可操作者复测仍报同一批错
+（`ports="3002"` 被判成 80|443；`content_discover` 参数面里没有 `path`/`api_endpoints`；
+参数指南里还在介绍一个不存在的 `pentest_vuln_check`）。
+
+**根因**：`start-personal.mjs` 启动的是 `dsh --profile pentest`，而 profile 的
+`node_modules/dsh-pentest` 是**安装时复制进去的产物**（只含 `lib/` + `cordis.patch.yml`），
+**不是本仓的软链**。于是「改 src → 构建 lib → 重启进程」这条链**根本没碰到部署**：
+运行的还是 08:20 那份副本，而全部修复都是 10:57 之后提交的。
+
+**判定方法（三条全中即为此坑）**：
+
+```bash
+P="C:/Users/Administrator/.dsh/profiles/pentest/node_modules/dsh-pentest"
+ls "$P"                                   # 没有 src/ ⇒ 是打包副本，不是软链
+stat -c '%y' "$P/lib/execution/templates.js"   # 时间早于你的构建 ⇒ 副本是旧的
+grep -c "ports-param" "$P/lib/execution/templates.js"   # 0 ⇒ 部署里没有 P0 修复
+```
+
+**修法**（重装即刷新；装完 profile 里会变成**指向本仓的软链**，此后构建即生效）：
+
+```bash
+cd C:/Projects/Agent-projects/dsh-DCG-pentest
+npm run build
+node node_modules/@deepseek-ai/dsh/lib/bin.js plugin --profile pentest add "C:/Projects/Agent-projects/dsh-DCG-pentest"
+# 复核：grep 到了修复标记，再重启
+grep -c "ports-param" "C:/Users/Administrator/.dsh/profiles/pentest/node_modules/dsh-pentest/lib/execution/templates.js"
+```
+
+**下一次改动的纪律**：凡改 `src/**` 或 `docker/tools/**`，**先问一句"部署里跑的是哪一份"**。
+副本形态下必须重装；软链形态下 `npm run build` + 重启即可。`docker/tools/pentest-tool`
+还要单独处理——它**烤在镜像里**（见 §2.1 的镜像重建流程），改它必须重建并重新钉摘要。
+
+**为什么 `(3) skill_load` 与 `(4) memory_search` 当时"看起来好了"**：那两处的修复分别是
+**数据**（技能播种）与**未走到坏分支**（有命中时不进零命中诊断），与代码版本无关——
+所以它们给了"新代码已生效"的错觉。**别用"某功能好了"推断部署版本**，用上一条的 grep。
+
+### 6.5.15.1 本轮镜像轮换（2026-10-10）：证据与流程
+
+容器侧改了两处（`whois_query` 的显式转介链、`port_scan` 默认超时 300s→900s），
+因此必须重建镜像并重新钉摘要——**改了 `docker/tools/**` 却不重建，等于没改**：
+
+| 步骤 | 命令 | 本轮结果 |
+|---|---|---|
+| 构建 | `docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools` | 全缓存命中，18 秒 |
+| 推送取摘要 | `docker push …` 后 `docker inspect … --format '{{index .RepoDigests 0}}'` | `sha256:7548dbc3a2ae…`（前值 `5ee07609c870`） |
+| 更新钉死值 | `profiles/pentest/cordis.patch.yml` 与 `harness.dev.patch.yml` 的 `allowedImages[0].digest` | 两处 |
+| 摘要轮换背书 | `node scripts/resync-smoke-stamps.mjs 7548dbc3a2ae` | 25 份、27 处（含两份早先钉在 `81483611f0a0` 上的） |
+| 实跑验证 | 三条 `whois_query`（公网 IP / 域名 / 内网 IP）+ `port_scan` 超时表 | 见 6.5.13.1 末两行 |
+
+**轮换背书的依据（不是"顺手改绿"）**：新旧镜像做了**文件级对拍**——`/usr/local/bin/pentest-tool`
+之外的全部代表性文件（nmap/ffuf/whois/gobuster/dig 的 md5、nuclei 模板数、字典数）逐一相同，
+即本次重建**只换了分发器脚本**；唯一语义变化的动词（`whois_query`）已在新摘要下实跑三条路径。
+
+**流程纪律**：`scripts/dev-sandbox-up.sh up` 带出口白名单闸门（`EGRESS_ALLOW` 为空即拒绝启动），
+只做构建/推送时用 `docker build` + `docker push` + `docker inspect` 三步即可，不要为了绕过闸门
+去编一个 `EGRESS_ALLOW` 值——那是授权声明，不是开关。
 
 ## 6.6 建作业只需两件事；公共记忆进每一次会话
 

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP WSTG-INFO, MITRE ATT&CK T1016]
-  smoked: "沙箱实测@5ee07609c870：5 块原文照跑（台账按正文结构先铺：缺 ref、悬空 to、ASSUMPTION 各造一例）：步骤 1 输出六节点 id/kind/ref，缺 ref 点名为 MISSING；步骤 2 入口 talks_to 把悬空 `svc:does-not-exist` 原样列出；步骤 3 跨边界边 from→to→auth（unauthenticated/unknown）；步骤 4 孤立节点只剩 asset:10.0.0.5、asset:www（悬空 to 不当节点），历史坏式 `$ids | index(.id)` 复现 Cannot index array with string \"id\"（exit 5）、现行 `.id as $i | ($ids | index($i))` exit 0；步骤 5 抓到并修掉配方缺陷——原文 `select(.ref==\"MISSING\")` 对缺失/null 的 ref 恒计 gaps=0（与步骤 1 的 MISSING 口径矛盾、会漏报），改 `select((.ref//\"MISSING\")==\"MISSING\")` 后同一台账 gaps=2，nodes=6/edges=3/assumptions=2 计数不变"
+  smoked: "沙箱实测@7548dbc3a2ae：5 块原文照跑（台账按正文结构先铺：缺 ref、悬空 to、ASSUMPTION 各造一例）：步骤 1 输出六节点 id/kind/ref，缺 ref 点名为 MISSING；步骤 2 入口 talks_to 把悬空 `svc:does-not-exist` 原样列出；步骤 3 跨边界边 from→to→auth（unauthenticated/unknown）；步骤 4 孤立节点只剩 asset:10.0.0.5、asset:www（悬空 to 不当节点），历史坏式 `$ids | index(.id)` 复现 Cannot index array with string \"id\"（exit 5）、现行 `.id as $i | ($ids | index($i))` exit 0；步骤 5 抓到并修掉配方缺陷——原文 `select(.ref==\"MISSING\")` 对缺失/null 的 ref 恒计 gaps=0（与步骤 1 的 MISSING 口径矛盾、会漏报），改 `select((.ref//\"MISSING\")==\"MISSING\")` 后同一台账 gaps=2，nodes=6/edges=3/assumptions=2 计数不变"
 ---
 
 # 资产图与信任边界（asset-graph）

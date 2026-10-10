@@ -532,4 +532,82 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     const verbBody = DISPATCHER.slice(verbStart, DISPATCHER.indexOf('\ndef ', verbStart + 1));
     assert.match(verbBody, /params\.get\("path"\)/, '容器侧未读取 path 参数');
   });
+
+  it('每个结构化动词的超时：容器默认表与宿主模板一致（port_scan 曾是 300s vs 900s）', () => {
+    // 容器侧是**天花板**（budget_ms 取 min(注入值, 本表)）：比宿主模板小 ⇒
+    // 宿主按模板规划、容器提前砍，批次扫描在离完成很远的地方被截断而不自知。
+    const start = DISPATCHER.indexOf('DEFAULT_TOOL_TIMEOUT_MS = {');
+    assert.ok(start > 0, '分发器里找不到 DEFAULT_TOOL_TIMEOUT_MS');
+    const end = DISPATCHER.indexOf('\n}', start);
+    const block = DISPATCHER.slice(start, end);
+    const container = new Map<string, number>();
+    for (const m of block.matchAll(/"([a-z_]+)":\s*([0-9_]+)/g)) {
+      container.set(m[1] ?? '', Number((m[2] ?? '').replace(/_/g, '')));
+    }
+    const mismatches: string[] = [];
+    for (const spec of registry.list()) {
+      const tool = spec.template.tool;
+      const fromContainer = container.get(tool);
+      if (fromContainer === undefined) continue;
+      if (fromContainer !== spec.template.timeoutMs) {
+        mismatches.push(`${tool}: 容器 ${fromContainer}ms vs 模板 ${spec.template.timeoutMs}ms`);
+      }
+    }
+    assert.deepEqual(mismatches, []);
+  });
+});
+
+describe('buildStructuredIntent 布尔值强制转换（2026-10-10 实测：LLM 看到 enum: ["true","false"] 常传布尔）', () => {
+  it('枚举参数：布尔值自动转换成字符串', () => {
+    // 用户传布尔 false
+    const result = buildStructuredIntent('recon', {
+      technique: 'http_probe',
+      targetSelector: '10.0.0.9',
+      purpose: 'test',
+      port: 443,
+      scheme: 'https',
+      verify_tls: false, // 布尔
+    });
+    assert.ok(result.ok);
+    assert.strictEqual(result.params.verify_tls, 'false', 'verify_tls 应转换成字符串 "false"');
+    assert.strictEqual(typeof result.params.verify_tls, 'string');
+
+    // 用户传布尔 true
+    const result2 = buildStructuredIntent('recon', {
+      technique: 'http_probe',
+      targetSelector: '10.0.0.9',
+      purpose: 'test',
+      verify_tls: true, // 布尔
+    });
+    assert.ok(result2.ok);
+    assert.strictEqual(result2.params.verify_tls, 'true', 'verify_tls 应转换成字符串 "true"');
+  });
+
+  it('非枚举参数：保留原始类型', () => {
+    const result = buildStructuredIntent('recon', {
+      technique: 'port_scan',
+      targetSelector: '10.0.0.9',
+      purpose: 'test',
+      scope: 'top100', // 非枚举参数
+    });
+    assert.ok(result.ok);
+    assert.strictEqual(result.params.scope, 'top100');
+    assert.strictEqual(typeof result.params.scope, 'string');
+  });
+
+  it('转换后的字符串值能通过模板验证', () => {
+    const result = buildStructuredIntent('recon', {
+      technique: 'http_probe',
+      targetSelector: '10.0.0.9',
+      purpose: 'test',
+      verify_tls: false, // 布尔
+    });
+    assert.ok(result.ok);
+
+    const spec = registry.get('recon_http_probe');
+    assert.ok(spec !== undefined);
+
+    const validation = validateParams(spec.template, result.params);
+    assert.ok(validation.ok, `模板验证应通过，实际：${validation.ok ? 'ok' : validation.error.message}`);
+  });
 });

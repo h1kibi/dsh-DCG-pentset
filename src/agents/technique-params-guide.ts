@@ -199,6 +199,8 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         options: [
           { value: 'common_dirs', note: '通用目录/文件名（约4700条，默认）' },
           { value: 'raft_small', note: 'raft 小字典（纯目录，约20000条，需配 extensions）' },
+          { value: 'api_endpoints', note: 'API 路由命名（268条，条目自带 api/ 前缀，在站点根用）' },
+          { value: 'quickhits', note: '高价值小文件（备份/配置/密钥等常见命名）' },
         ],
       },
       {
@@ -237,8 +239,17 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
           { value: 'false', note: '跳过验证' },
         ],
       },
+      {
+        name: 'path',
+        type: 'string',
+        required: false,
+        default: '',
+        description:
+          '基准路径前缀（空串 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会归一）。在 /api/ 这类子路径下枚举时**必须**给，否则只打根路径；不得含 `..` 段或查询串',
+        example: 'path="api"',
+      },
     ],
-    example: 'pentest_recon(technique="content_discover", targetSelector="192.168.1.10", scheme="https", wordlist="common_dirs", rate=5, purpose="...")',
+    example: 'pentest_recon(technique="content_discover", targetSelector="192.168.1.10", scheme="https", wordlist="common_dirs", rate=5, path="api", purpose="...")',
   },
   {
     technique: 'dns_enum',
@@ -354,7 +365,7 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         ],
       },
     ],
-    example: 'pentest_vuln_check(technique="http_check", targetSelector="192.168.1.10", check="security_headers", purpose="...")',
+    example: 'pentest_scan(technique="http_check", targetSelector="192.168.1.10", check="security_headers", purpose="...")',
   },
   {
     technique: 'exposure_check',
@@ -382,8 +393,9 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         name: 'paths',
         type: 'string',
         required: true,
-        description: '路径列表（逗号分隔，如 "/.git/HEAD,/.env,/admin"）',
-        example: 'paths="/.git/HEAD,/.env,/admin"',
+        description:
+          '暴露项名单（逗号分隔，≤10）：git,env,backup,swagger,openapi,actuator,server_status,phpinfo,web_config,dockerfile',
+        example: 'paths="git,env,swagger"',
       },
       {
         name: 'verify_tls',
@@ -397,7 +409,7 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         ],
       },
     ],
-    example: 'pentest_vuln_check(technique="exposure_check", targetSelector="192.168.1.10", paths="/.git/HEAD,/.env", purpose="...")',
+    example: 'pentest_scan(technique="exposure_check", targetSelector="192.168.1.10", paths="git,env", purpose="...")',
   },
   {
     technique: 'tls_weakness',
@@ -428,7 +440,29 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
         ],
       },
     ],
-    example: 'pentest_vuln_check(technique="tls_weakness", targetSelector="192.168.1.10", port=443, purpose="...")',
+    example: 'pentest_scan(technique="tls_weakness", targetSelector="192.168.1.10", port=443, purpose="...")',
+  },
+  {
+    technique: 'nse_handshake',
+    purpose: '握手面核验（只读 NSE 脚本：服务 banner、认证方式、证书）',
+    params: [
+      {
+        name: 'port',
+        type: 'integer',
+        required: true,
+        description: '脚本针对的端口',
+      },
+      {
+        name: 'scripts',
+        type: 'string',
+        required: false,
+        default: 'http-methods',
+        description:
+          '只读脚本（逗号分隔，最多 8 个）：smtp-commands,ftp-anon,ssh-auth-methods,rdp-ntlm-info,ssl-enum-ciphers,http-methods,smb-os-discovery,smb-security-mode',
+        example: 'scripts="ftp-anon,ssh-auth-methods"',
+      },
+    ],
+    example: 'pentest_scan(technique="nse_handshake", targetSelector="192.168.1.10", port=21, purpose="...")',
   },
 ];
 
@@ -447,7 +481,7 @@ function renderTechniqueGuide(guide: TechniqueGuide): string {
     lines.push('|---|---|---|---|---|');
     for (const param of guide.params) {
       const req = param.required ? '✓' : '';
-      const def = param.default !== undefined ? String(param.default) : '—';
+      const def = param.default === '' ? '（空串）' : param.default !== undefined ? String(param.default) : '—';
       let desc = param.description;
       if (param.options !== undefined) {
         const opts = param.options.map((o) => `\`${o.value}\`=${o.note}`).join('、');
@@ -478,7 +512,7 @@ export function renderTechniqueParamsGuide(): string {
     '',
     '═══ 结构化漏洞核验动作参数指南 ═══',
     '',
-    '以下是 `pentest_vuln_check` 工具各个 technique 的参数说明。',
+    '以下是 `pentest_scan` 工具各个 technique 的参数说明。',
     '',
     ...VULN_GUIDES.map(renderTechniqueGuide),
   ];

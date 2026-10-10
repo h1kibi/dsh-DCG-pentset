@@ -207,7 +207,8 @@ export function buildStructuredIntent(family: StructuredFamily, input: ReconInte
         expectedValues: domain,
       };
     }
-    params[paramName] = value;
+    // 枚举参数强制转换成字符串（LLM 看到 enum: ['true','false'] 常传布尔值）
+    params[paramName] = domain !== undefined ? String(value) : value;
   }
   const missing = spec.required.filter((name) => params[name] === undefined);
   if (missing.length > 0) {

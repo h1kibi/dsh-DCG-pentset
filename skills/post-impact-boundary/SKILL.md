@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, MITRE ATT&CK Discovery/Collection, NIST SP 800-115]
-  smoked: "沙箱实测@5ee07609c870：对 fx-tls（172.29.0.3:8443，openssl s_server -www 自签）与 fx-web（172.29.0.2:8080）逐块跑原文配方。①handoff/scope 的 jq 读取——scope 块通过（fx-web 8080 / fx-tls 8443 逐条对齐）；步骤 1 对**对象元素**的台账报 `object is not valid in a csv row` exit=5（只有字符串台账才过），已最小修成 `map(if type == \"object\" then (.id // .asset // .name // tostring) else . end)`，两种台账均 exit=0。②`nc -z` 判定 open（8443 exit=0、8080 exit=0）；但原文硬编码 `http://` 打在 TLS 端口是 curl exit=52/状态码 000（会被「状态码漂移」误判成访问失效），改成 `<协议>://` 占位后 `https -k` 得 200、不加 `-k` 是 exit=60 自签报错，fx-web 明文 200。③范围限读 `-r 0-255`：fx-web 200/171B、fx-tls 200/5133B，两靶都忽略 Range 返回全文（用 469B 的 404 体复验仍 469B），已写进步骤 4。另：镜像里 `ss`/`ps` 现已存在（`netstat` 仍缺），与本技能「前提」里「ps/ss/netstat 不存在」的旧说法不符"
+  smoked: "沙箱实测@7548dbc3a2ae：对 fx-tls（172.29.0.3:8443，openssl s_server -www 自签）与 fx-web（172.29.0.2:8080）逐块跑原文配方。①handoff/scope 的 jq 读取——scope 块通过（fx-web 8080 / fx-tls 8443 逐条对齐）；步骤 1 对**对象元素**的台账报 `object is not valid in a csv row` exit=5（只有字符串台账才过），已最小修成 `map(if type == \"object\" then (.id // .asset // .name // tostring) else . end)`，两种台账均 exit=0。②`nc -z` 判定 open（8443 exit=0、8080 exit=0）；但原文硬编码 `http://` 打在 TLS 端口是 curl exit=52/状态码 000（会被「状态码漂移」误判成访问失效），改成 `<协议>://` 占位后 `https -k` 得 200、不加 `-k` 是 exit=60 自签报错，fx-web 明文 200。③范围限读 `-r 0-255`：fx-web 200/171B、fx-tls 200/5133B，两靶都忽略 Range 返回全文（用 469B 的 404 体复验仍 469B），已写进步骤 4。另：镜像里 `ss`/`ps` 现已存在（`netstat` 仍缺），与本技能「前提」里「ps/ss/netstat 不存在」的旧说法不符"
 ---
 
 # 影响边界核查（post-impact-boundary）

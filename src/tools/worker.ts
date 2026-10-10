@@ -424,7 +424,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         required: true,
         description: 'report_ready 表示任务完成或无法继续；blocked 表示有明确阻塞',
       },
-      objective: { type: 'string', required: true, description: '本次任务目标（不可变快照）；**必须在顶层传递**，payload 里的同名字段仅作兼容接收' },
+      objective: { type: 'string', required: true, description: '本次任务目标（不可变快照）。**此字段必须作为顶层参数传递，不要只放在 payload 里**；payload.objective 仅用于兼容整份照抄设计示例的情况' },
       summary: { type: 'string', required: true, description: '面向人的简短总结' },
       status_note: {
         type: 'string',
@@ -1162,8 +1162,8 @@ export function createWorkerTools(deps: WorkerToolDeps) {
       '`write` 写文本文件（会建父目录）、`search` 在目录内**递归检索正则**（返回文件/行号/该行，' +
       '适合在大量归档文档里定位——比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
       'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；**多根部署**写入新文件时' +
-      '**必须用容器路径**（`/work/...` / `/mnt/engagement/...`）消歧，已存文件与单根部署两种都行。' +
-      '空路径或 `.` 就是挂载根本身。' +
+      '**必须用容器路径**（如 `/work/...`）消歧，已存文件与单根部署两种都行。' +
+      '**实际可用的挂载根见 `op=list` 返回的 `roots` 字段**（每次调用都会附加）。' +
       '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
       '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。' +
       '\n⚠️  **警告**：挂载根由人类在启动时配置。如果配置错误，你可能在读写**不属于本作业**的目录。' +
@@ -1240,8 +1240,8 @@ export function createWorkerTools(deps: WorkerToolDeps) {
                 error.code === 'read_only'
                   ? '该挂载是只读的：把要写的东西交给人类，或让人类把挂载改成读写'
                   : error.code === 'bad_path'
-                    ? '多根部署写新文件时必须用容器路径（/work/... 或 /mnt/engagement/...）消歧；已存文件可用相对路径'
-                    : '只用相对挂载根的路径或容器路径（/work/...）；越界路径不会被接受',
+                    ? '多根部署写新文件时必须用容器路径（如 /work/文件名）消歧；已存文件可用相对路径；可用挂载根见 op=list 返回的 roots'
+                    : '用容器路径（如 /work/...）或相对挂载根路径；相对路径只对已存文件或单根部署有效；越界路径不接受'
             }));
           }
           return toJson({

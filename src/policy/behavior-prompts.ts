@@ -106,7 +106,7 @@ const PACKS: Readonly<Record<'stealth' | 'standard' | 'fast' | 'custom', string>
     '- 不要为了"更全"自行升级到入侵性动作（如从 top-1000 跳到全端口、从 5k 字典跳到 20k）——需要更大覆盖时先申请放行\n' +
     '\n' +
     '**工具选择**：\n' +
-    '- 优先用结构化动作（pentest_recon/pentest_vuln_check）：参数固定、服务端可审计、①②③类免批快\n' +
+    '- 优先用结构化动作（pentest_recon/pentest_scan）：参数固定、服务端可审计、①②③类免批快\n' +
     '- 自由命令虽灵活但每条都经范围裁决与日志记录，吞吐受限；能用结构化通道就别手写命令\n' +
     '\n' +
     '**需要人工放行**：\n' +

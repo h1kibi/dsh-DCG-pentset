@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, MITRE ATT&CK Impact/Cleanup, NIST SP 800-115]
-  smoked: "沙箱实测@5ee07609c870：逐块跑原文配方。①jq 清理清单（对象台账 .id/.kind/.target/.approved_at）读出 actions 表 exit=0。②上传/临时路径探活：`/uploads/x.txt` 与 `/tmp/x.txt` 都 404。③`nc -z`：对无监听口 exit=1、对同容器起的 `nc -l -k -p 5599` exit=0。④回连自检按原文在同容器 `timeout 5 nc -l -p 4444` + curl 回连：`/tmp/cb.txt` 得 78 字节（判「回连仍活」成立），curl 自身 timeout(28)/状态码 000 属预期（裸 nc 不回 HTTP）。⑤本地侧：`ls -la /tmp` 与 `find -xdev -newer` 正常；/proc/net/tcp 十六进制解析（只过滤 0A 监听态）在**全新容器**里就已读出 127.0.0.11 的 Docker 内嵌 DNS 监听（表不是空的，无需先建连接），同容器再起监听会另列出 0.0.0.0:5599——原文照跑即成立。另：本轮实测镜像有 `ss`/`ps`、缺 `netstat`（旧「前提」写三者都不存在，已改正）→ 步骤 5 新增 `ss -tlnp` 直读路径并实跑：同容器起 `nc -l -k -p 5599` 后 `ss -tlnp` 列出 `LISTEN 0 1 0.0.0.0:5599 users:((\"nc\",pid=7,fd=3))`，`kill` 后归 0 行；与 `/proc/net/tcp` 的 `:15DF` 十六进制解析互为对照（两条路径同容器内结果一致）"
+  smoked: "沙箱实测@7548dbc3a2ae：逐块跑原文配方。①jq 清理清单（对象台账 .id/.kind/.target/.approved_at）读出 actions 表 exit=0。②上传/临时路径探活：`/uploads/x.txt` 与 `/tmp/x.txt` 都 404。③`nc -z`：对无监听口 exit=1、对同容器起的 `nc -l -k -p 5599` exit=0。④回连自检按原文在同容器 `timeout 5 nc -l -p 4444` + curl 回连：`/tmp/cb.txt` 得 78 字节（判「回连仍活」成立），curl 自身 timeout(28)/状态码 000 属预期（裸 nc 不回 HTTP）。⑤本地侧：`ls -la /tmp` 与 `find -xdev -newer` 正常；/proc/net/tcp 十六进制解析（只过滤 0A 监听态）在**全新容器**里就已读出 127.0.0.11 的 Docker 内嵌 DNS 监听（表不是空的，无需先建连接），同容器再起监听会另列出 0.0.0.0:5599——原文照跑即成立。另：本轮实测镜像有 `ss`/`ps`、缺 `netstat`（旧「前提」写三者都不存在，已改正）→ 步骤 5 新增 `ss -tlnp` 直读路径并实跑：同容器起 `nc -l -k -p 5599` 后 `ss -tlnp` 列出 `LISTEN 0 1 0.0.0.0:5599 users:((\"nc\",pid=7,fd=3))`，`kill` 后归 0 行；与 `/proc/net/tcp` 的 `:15DF` 十六进制解析互为对照（两条路径同容器内结果一致）"
 ---
 
 # 清理核查（post-cleanup-verify）

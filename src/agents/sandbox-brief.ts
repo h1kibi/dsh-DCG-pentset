@@ -128,10 +128,10 @@ export function renderSandboxBrief(
       : '因此需要留存的东西**当场落进记忆**（status_note / 报告 / 证据）；先落到上面那个挂载目录再整理也可以，但记忆里的状态才是交接的依据。',
     '',
     '**限额**（按这个规划命令，超限即失败或截断）：',
-    `- 墙钟：**单条命令的上限由模板决定** —— 自由命令 \`pentest_exec\` 是 **5 分钟**，不是 ${String(wallClockMinutes)} 分钟；`,
-    '  结构化动作更小（端口扫描 5 分钟、nuclei/爬取 3 分钟、探针类 1 分钟）。',
+    `- 墙钟：${String(wallClockMinutes)} 分钟是沙箱**天花板**（没有任何动作默认吃满），每条的实际上限按动作定 ——`,
+    '  自由命令 `pentest_exec` **5 分钟**；结构化动作更小（端口扫描 5 分钟、爬取 3 分钟、探针类 1 分钟）。',
     hostgroupFact,
-    `  ${String(wallClockMinutes)} 分钟是本沙箱的**上限**而非默认 ⇒ 规划长任务时按 5 分钟切段。`,
+    '  ⇒ 规划长任务按 **5 分钟**一段切，别按天花板算。',
     ...(mounts.length === 0
       ? []
       : [
@@ -191,7 +191,7 @@ export function renderSandboxBrief(
   ];
 
   // 结构化动作参数指南：各个 technique 的参数表（在两条通道对比表与工具分组之后）
-  if (toolAllow.includes('pentest_recon') || toolAllow.includes('pentest_scan') || toolAllow.includes('pentest_vuln_check')) {
+  if (toolAllow.includes('pentest_recon') || toolAllow.includes('pentest_scan')) {
     sections.push('', renderTechniqueParamsGuide());
   }
 
