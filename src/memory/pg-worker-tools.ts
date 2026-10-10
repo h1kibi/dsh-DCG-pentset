@@ -698,6 +698,15 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     suggestions: readonly string[];
   }> {
     // 1. 统计总分块数和过滤维度的分布
+    //
+    // 2026-10-10 修复（操作者实测 P0）：此前写的是
+    //   FROM memory_chunks mc JOIN context_events e ON e.event_id = mc.source_event_id
+    //   … count(*) FILTER (WHERE … kind::text = ANY(…)) …
+    // 两处都错：`kind` 在 `memory_items` 上（chunks 没有这一列）⇒ **每次零命中搜索都炸**
+    // `column "kind" does not exist`（于是"检索不到"变成"工具报错"，而零命中正是新作业的常态）；
+    // INNER JOIN 事件还会把「以记忆条目为来源」的分块整个丢掉（source_event_id 为 NULL）⇒
+    // totalChunks 少算，诊断结论跟着失真。
+    // 正确的形状：chunks 自带 engagement_id（不需要借事件判作业），kind 走 memory_items 的 LEFT JOIN。
     const stats = await this.#db.query<{
       total: number;
       in_phase: number | null;
@@ -709,15 +718,15 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     }>(
       `SELECT 
          count(*)::int as total,
-         count(*) FILTER (WHERE phase = $2) as in_phase,
-         count(*) FILTER (WHERE $3::text[] IS NULL OR kind::text = ANY($3::text[])) as matching_kinds,
-         count(*) FILTER (WHERE $4::text[] IS NULL OR trust_level::text = ANY($4::text[])) as matching_trust,
-         array_agg(DISTINCT phase ORDER BY phase) FILTER (WHERE phase IS NOT NULL) as available_phases,
-         array_agg(DISTINCT kind::text ORDER BY kind) as available_kinds,
-         array_agg(DISTINCT trust_level::text ORDER BY trust_level) as available_trust_levels
+         count(*) FILTER (WHERE mc.phase = $2) as in_phase,
+         count(*) FILTER (WHERE $3::text[] IS NULL OR mi.kind::text = ANY($3::text[])) as matching_kinds,
+         count(*) FILTER (WHERE $4::text[] IS NULL OR mc.trust_level::text = ANY($4::text[])) as matching_trust,
+         array_agg(DISTINCT mc.phase ORDER BY mc.phase) FILTER (WHERE mc.phase IS NOT NULL) as available_phases,
+         array_agg(DISTINCT mi.kind::text ORDER BY mi.kind) FILTER (WHERE mi.kind IS NOT NULL) as available_kinds,
+         array_agg(DISTINCT mc.trust_level::text ORDER BY mc.trust_level) as available_trust_levels
        FROM pentest.memory_chunks mc
-       JOIN pentest.context_events e ON e.event_id = mc.source_event_id
-       WHERE e.engagement_id = $1::uuid`,
+       LEFT JOIN pentest.memory_items mi ON mi.id = mc.memory_item_id
+       WHERE mc.engagement_id = $1::uuid`,
       [
         engagementId,
         query.phase ?? null,
