@@ -28,6 +28,7 @@ import {
 } from '../src/execution/docker-sandbox.ts';
 import type { AllowedImage, DockerSandboxConfig, ProcessRunner } from '../src/execution/docker-sandbox.ts';
 import type { ExecutionPlan } from '../src/contracts.ts';
+import type { SandboxMount } from '../src/contracts.ts';
 
 const IMAGE: AllowedImage = {
   name: 'registry.example/pentest-toolbox',
@@ -608,9 +609,9 @@ test('启动自检把"出不出网"说清楚：internal / 非 internal / 读不�
   );
 });
 
-test('按会话区分工作目录：会话 cwd 优先；目录不存在即拒绝且不启动容器、不回退', async () => {
+test('按会话给出挂载列表：整份列表原样生效（含 :ro）；目录不存在即拒绝且不启动容器、不回退', async () => {
   const calls: string[][] = [];
-  const mk = (rootFor?: () => string | undefined) =>
+  const mk = (mountsFor?: () => readonly SandboxMount[] | undefined) =>
     new DockerSandbox(CONFIG, {
       runner: {
         async run(argv) {
@@ -618,29 +619,38 @@ test('按会话区分工作目录：会话 cwd 优先；目录不存在即拒绝
           return { aborted: false, timedOut: false, code: 0, stdout: '', stderr: '' };
         },
       },
-      ...(rootFor === undefined ? {} : { mountRootFor: () => rootFor() }),
+      ...(mountsFor === undefined ? {} : { mountsFor: () => mountsFor() }),
     });
+  const vFlags = (argv: readonly string[]): readonly string[] =>
+    argv.flatMap((entry, index) => (entry === '-v' ? [argv[index + 1] ?? ''] : []));
 
-  // ① 注入会话 cwd ⇒ argv 挂的是它
+  // ① 会话 cwd 落 /work **且配置里其余挂载保留**（2026-10-11 修：旧实现只给单个根，
+  // 于是 /mnt 下的只读锚点静默消失——操作者的交付物自校验通道就这么没了）
   const dir = mkdtempSync(join(tmpdir(), 'sandbox-cwd-'));
-  await mk(() => dir).run({ plan: plan() }, new AbortController().signal);
+  const anchor = mkdtempSync(join(tmpdir(), 'sandbox-anchor-'));
+  await mk(() => [
+    { hostPath: dir, containerPath: '/work' },
+    { hostPath: anchor, containerPath: '/mnt/engagement', readOnly: true },
+  ]).run({ plan: plan() }, new AbortController().signal);
   const argv = calls.at(-1) ?? [];
-  // `-v` 的值是 `host:container` **一个字符串**（不是两个 argv 元素）
-  assert.equal(
-    argv.some((entry) => entry.startsWith(`${dir.replace(/\\/g, '/')}:`)),
-    true,
-    `argv 应挂会话目录（作为 -v 的 host:container）${dir.replace(/\\/g, '/')}：${argv.join(' ').slice(0, 200)}`,
+  // `-v` 的值是 `host:container[:ro]` **一个字符串**（不是两个 argv 元素）
+  assert.deepEqual(
+    vFlags(argv).map((value) => value.replace(/\\/g, '/')),
+    [`${dir.replace(/\\/g, '/')}:/work`, `${anchor.replace(/\\/g, '/')}:/mnt/engagement:ro`],
+    `argv 应原样挂上调用方给的列表：${argv.join(' ').slice(0, 240)}`,
   );
-  assert.equal(argv.join(' ').includes('/work'), true, '仍落在 /work');
+  assert.equal(argv.join(' ').includes('-w /work'), true, '首个挂载决定 -w（会话 cwd 在首位）');
 
-  // ② 目录不存在 ⇒ 拒绝这次运行，且**不启动容器**（不回退到配置里的挂载）
+  // ② 列表里任一目录不存在 ⇒ 拒绝这次运行，且**不启动容器**（不回退到配置里的挂载）
   const before = calls.length;
-  const blocked = await mk(() => '/no/such/session-dir-xyz').run({ plan: plan() }, new AbortController().signal);
+  const blocked = await mk(() => [
+    { hostPath: '/no/such/session-dir-xyz', containerPath: '/work' },
+  ]).run({ plan: plan() }, new AbortController().signal);
   assert.equal(blocked.status, 'blocked');
   assert.equal(blocked.error?.code, 'sandbox_unavailable');
   assert.equal(calls.length, before, '被拒的运行不得启动容器（也不得回退到别的目录）');
 
-  // ③ 没有 resolver ⇒ 用配置里的 mounts（这里是零挂载）= 与今天一致的回退路径
+  // ③ 没有 resolver ⇒ 用配置里的 mounts（这里是零挂载）= 与不配此钩子时完全一致的回退路径
   await mk(undefined).run({ plan: plan() }, new AbortController().signal);
   assert.equal((calls.at(-1) ?? []).includes('-v'), false, '无 resolver 时不得凭空多出挂载');
 });

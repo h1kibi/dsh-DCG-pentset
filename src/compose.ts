@@ -61,10 +61,10 @@ import { buildNormalizedCommand, createRegistry, scopePortsFor, validateParams }
 import { normalizeCidr, rangeAddressesOf } from './policy/scope.ts';
 import { canonicalTargetString, derivePlanHash } from './execution/idempotency.ts';
 import { DockerSandbox } from './execution/docker-sandbox.ts';
-import type { DockerSandboxConfig, ProcessRunner } from './execution/docker-sandbox.ts';
-import { DEFAULT_MOUNT_CONTAINER_PATH } from './execution/docker-sandbox.ts';
+import type { DockerSandboxConfig, ProcessRunner, SandboxMount } from './execution/docker-sandbox.ts';
+import { sessionMountViews } from './execution/session-mounts.ts';
+import type { SessionMountViews } from './execution/session-mounts.ts';
 import { appendWorkdir, listWorkdir, readWorkdir, searchWorkdir, writeWorkdir } from './execution/workdir.ts';
-import type { WorkdirRoot } from './execution/workdir.ts';
 import { PgLeaseStore } from './workflow/pg-lease.ts';
 import { PgPolicyService, PgSessionDirectory, PgActionPolicySource } from './policy/pg-policy.ts';
 import { PgWorkflowService } from './workflow/pg-workflow.ts';
@@ -193,6 +193,19 @@ export interface ComposeConfig {
    * （组合层刻意不持有 `ctx`，见本文件另一处注释 ✓）。返回 `undefined` ⇒ 该会话用配置里的 `mounts`。
    */
   readonly sessionCwdOf?: (dshSessionId: string) => string | undefined;
+  /**
+   * **会话 cwd → 本次运行的挂载列表**（纯映射，装配层给；2026-10-11）。
+   *
+   * 这一个函数是"容器挂什么 / 简报说什么 / 工具读写哪 / 证据落哪"的**唯一来源**：
+   * 四处各取一份必然漂移——实测的漂移形态是最坏的一种：结构化动作把证据写进容器看到的 `/work`
+   * （会话 cwd），而 `pentest_workdir` 与宿主侧证据落盘读的是配置里的另一个目录 ⇒
+   * 操作者看到"证据不存在"，而文件其实躺在别处（差一步就写成"证据缺失"的结论）。
+   *
+   * 约定：`cwd === undefined` ⇒ 返回配置里的 `sandbox.mounts`（回退语义）；
+   * 给了 cwd ⇒ `[{hostPath: cwd, containerPath: '/work'}, ...配置里 containerPath 不是 /work 的那些]`
+   * ——会话 cwd 覆盖 `/work`，但配置里其余挂载（如 `/mnt` 下的只读锚点）**保留**。
+   */
+  readonly mountsForCwd?: (cwd: string | undefined) => readonly SandboxMount[];
   /** 受信动作模板集。省略即用服务端默认集（仅被动读取与主动发现）。 */
   readonly templates?: readonly ActionTemplateSpec[];
   /**
@@ -1279,13 +1292,18 @@ function installExecution(input: {
   const actions = new PgActionPolicySource(readDb);
   const approvalPlanValidator = approvalPlanValidatorFor(policy, sessions, actions);
 
+
+
   // ── 执行服务 ──
   const sandbox = new DockerSandbox(
     config.sandbox,
     {
       ...(config.sandboxRunner === undefined ? {} : { runner: config.sandboxRunner }),
       // 按会话区分工作目录（2026-10-08）：有该会话的 cwd 就用它挂 `/work`；没有则回退配置里的 mounts。
-      mountRootFor: (plan) => sessionCwdByWorker.get(plan.workerSessionId),
+      // 本次运行的挂载列表：会话 cwd 落 `/work` + 配置里**其余**容器路径（如 /mnt 下的只读锚点）。
+      // 旧实现只给单个根，等于把配置里其余挂载静默换掉（2026-10-11 操作者实测：/mnt/engagement
+      // 在容器里不存在，而简报也不再提它）。列表由装配层给的纯函数生成，compose 只管取 cwd。
+      mountsFor: mountViews(config).mountsFor,
     },
   );
   const store = new PgExecutionStore(readDb);
@@ -1411,6 +1429,8 @@ function installWorkflow(input: {
   /** 晚绑定的工作流出口（工具面的 `bootstrapIntake` 用它）。 */
   readonly workflow: () => PgWorkflowService | null;
 }): WorkflowInstallation {
+  // 挂载视图（与沙箱 argv 同一份，见 mountViews）：workdir 读写根与证据落盘根都取自它。
+  const views = mountViews(input.config);
   const { config, pool, readDb, txDb, rlsContext, rlsScopePort, ledger, execution, policy, approvalPlanValidator } = input;
   // 工作流的晚绑定出口：先起个别名，免得被 `bootstrapIntake(input)` 的参数遮蔽。
   const workflowPort = input.workflow;
@@ -1485,13 +1505,8 @@ function installWorkflow(input: {
       },
     }),
   });
-  // 作业目录的挂载根（与沙箱 argv 同源：`config.sandbox.mounts`）。容器路径省略时与
-  // 沙箱一致地取 `/work`，两处必须同值——否则提示词说的路径与工具给的路径会不一致。
-  const workdirRoots: readonly WorkdirRoot[] = (config.sandbox.mounts ?? []).map((mount) => ({
-    hostPath: mount.hostPath,
-    containerPath: mount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH,
-    ...(mount.readOnly === undefined ? {} : { readOnly: mount.readOnly }),
-  }));
+  // 作业目录的挂载根：**取自 `views`**（与沙箱 argv 同一份，见 `mountViews`）。
+  // 配置只声明"有哪些根"；某个会话实际挂哪个目录由会话 cwd 决定（覆盖 `/work`）。
   const workerToolsRaw: WorkerToolDeps = {
     // 「会话即 intake」：把当前会话登记为作业的 intake。
     // 晚绑定 `workflowRef`：工作流服务在本对象之后构造（见下面 `workflowRef` 的说明），
@@ -1516,14 +1531,6 @@ function installWorkflow(input: {
       return workerSessionId;
     },
     loadSkill: pgTools.loadSkill.bind(pgTools),
-    // 证据落盘根：优先挑挂在 `/work` 的那个挂载（会话的工作目录），否则用第一个。
-    // 没有挂载就整块省略：`save_stdout_as_evidence` 会如实回一句"未挂载"，而不是静默失败。
-    ...(config.sandbox.mounts === undefined || config.sandbox.mounts.length === 0
-      ? {}
-      : {
-          evidenceRoot: (config.sandbox.mounts.find((entry) => entry.containerPath === '/work') ??
-            config.sandbox.mounts[0])?.hostPath,
-        }),
     resolveWorkerSessionContext: pgTools.resolveWorkerSessionContext.bind(pgTools),
     search: pgTools.search.bind(pgTools),
     read: pgTools.read.bind(pgTools),
@@ -1534,22 +1541,32 @@ function installWorkflow(input: {
     requestApproval: pgTools.requestApproval.bind(pgTools),
     execute: makeWorkerExecute(execution),
     // 作业目录的读写（§10.4）：**不经过范围裁决**——它不接触任何目标，只碰人类在
-    // profile 里显式挂进来的宿主目录。空范围作业里这是唯一能拿到作业资料的通道。
-    // 没有挂载就整块省略：工具随即给出 `no_roots` 的明确拒绝，不退回某个默认目录。
-    ...(config.sandbox.mounts === undefined || config.sandbox.mounts.length === 0
+    // profile 里显式挂进来的宿主目录（以及本会话的工作目录，见下）。
+    //
+    // 门控（2026-10-11 修）：不只是"配置里声明了挂载"，**有会话 cwd 来源时也要装**——
+    // 容器按会话 cwd 覆盖 `/work`，于是零挂载部署里容器照样有 `/work`、宿主侧证据也写到那儿；
+    // 若这里不装工具，模型写得出证据却读不回来（`pentest_workdir` 不存在）。
+    // 一个根都没有的会话仍由工具返回 `no_roots` 的明确拒绝，不退回某个默认目录。
+    ...(views.roots.length === 0 && config.sessionCwdOf === undefined
       ? {}
       : {
           workdir: {
-            roots: workdirRoots,
-            list: async (input: { readonly path: string }) => listWorkdir(workdirRoots, input.path),
-            read: async (input: { readonly path: string }) => readWorkdir(workdirRoots, input.path),
-            write: async (input: { readonly path: string; readonly content: string }) =>
-              writeWorkdir(workdirRoots, input.path, input.content),
-            search: async (input: { readonly path: string; readonly pattern: string }) =>
-              searchWorkdir(workdirRoots, input.path, input.pattern),
-            append: async (input: { readonly path: string; readonly content: string }) =>
-              appendWorkdir(workdirRoots, input.path, input.content),
+            roots: views.roots,
+            // **按会话解析**：与容器 argv / 简报 / 证据落盘同源（会话 cwd 覆盖 `/work`）。
+            rootsFor: views.workdirRootsFor,
+            list: async (input: { readonly path: string; readonly workerSessionId: string }) =>
+              listWorkdir(views.workdirRootsFor(input.workerSessionId), input.path),
+            read: async (input: { readonly path: string; readonly workerSessionId: string }) =>
+              readWorkdir(views.workdirRootsFor(input.workerSessionId), input.path),
+            write: async (input: { readonly path: string; readonly content: string; readonly workerSessionId: string }) =>
+              writeWorkdir(views.workdirRootsFor(input.workerSessionId), input.path, input.content),
+            search: async (input: { readonly path: string; readonly pattern: string; readonly workerSessionId: string }) =>
+              searchWorkdir(views.workdirRootsFor(input.workerSessionId), input.path, input.pattern),
+            append: async (input: { readonly path: string; readonly content: string; readonly workerSessionId: string }) =>
+              appendWorkdir(views.workdirRootsFor(input.workerSessionId), input.path, input.content),
           },
+          // 证据落盘根：与上面同源（同一份视图）。
+          evidenceRootFor: views.evidenceRootFor,
         }),
   };
 
@@ -2008,6 +2025,28 @@ function installBudget(input: {
  * 用 `Map` 而非 `Record`：运行期持续插入的动态表，不是静态字面表。进程重启即清，无需淘汰。
  */
 const sessionCwdByWorker = new Map<string, string>();
+
+/**
+ * 每个 `ComposeConfig` 一份挂载视图。
+ *
+ * 沙箱（`installExecution`）与工具访问器/证据落盘（`installWorkflow`）分处两个安装函数，
+ * 作用域内常量传不过去——所以在这里按配置缓存，两处拿到的是**同一个对象**（同一份事实）。
+ * `WeakMap` 而不是模块单例：一个进程可以组合多个配置（测试正是这么做的），缓存不得串台。
+ */
+const sessionViewsByConfig = new WeakMap<ComposeConfig, SessionMountViews>();
+function mountViews(config: ComposeConfig): SessionMountViews {
+  const cached = sessionViewsByConfig.get(config);
+  if (cached !== undefined) return cached;
+  const built = sessionMountViews({
+    configured: config.sandbox.mounts ?? [],
+    cwdOf: (workerSessionId: string) => sessionCwdByWorker.get(workerSessionId),
+    ...(config.mountsForCwd === undefined ? {} : { mountsForCwd: config.mountsForCwd }),
+  });
+  sessionViewsByConfig.set(config, built);
+  return built;
+}
+
+
 
 export function compose(config: ComposeConfig): ComposedPlugin {
   // 账本签名密钥必须由部署注入：仓库内不再提供默认值（事故 2026-10-05——

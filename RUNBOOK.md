@@ -373,7 +373,7 @@ node start-personal.mjs          # 会检查基础设施、启动、打印带 to
 | profile | `profiles/pentest` | **专用 profile**，改坏不影响你日常用的 `web` |
 | profile 配置 | `profiles/pentest/cordis.patch.yml` | 带完整注释，改之前先读 |
 | 数据库 | `pentest_personal` | **与测试库 `pentest` 分开**——测试套件会清 engagements，共用等于让跑测试删掉战果 |
-| 会话工作目录 | `C:/tmp/dsh-pentest-sessions` | 只影响会话自己的临时文件，与沙箱无关 |
+| 会话工作目录 | `C:/tmp/dsh-pentest-sessions`（**回退值**） | **与沙箱直接相关**：容器里的 `/work` 就是**本会话的工作目录**（実主会话头的 `cwd` 优先，取不到才用这个回退值）——见 §6.5.13.5。2026-10-11 更正：本行此前写“与沙箱无关”，那是错的 |
 | 模型 | `deepseek-official/deepseek-v4-pro` | 见下面的坑 |
 | API 密钥 | User 级环境变量 `DEEPSEEK_API_KEY` | **不是** `.credentials.yaml`，见下 |
 
@@ -1076,6 +1076,39 @@ npm run typecheck && npm run lint && npm test && npm run verify
 | `exposure_check` 的 `bytes=4096 declared_length=8596` 并排像"大小对不上=可疑" | 名字没说清"读进来算哈希的截断量" vs "目标自报长度" | 改名 `hashed_bytes` / `content_length`（含 control 行），旧名加锁消失 |
 | `collect=robots` 报 `status: 200` 同时 `robots: missing`（200 是主页面的） | robots 自己的状态没自陈 | 补 `robots_status` / `sitemap_status`（404 就写 404） |
 | `tls_inspect` 的 `cert_subject` 是空的，看着像解析器没带出来 | ACME 给 IP 签的证书常见**空 DN**（身份只在 SAN）；openssl 输出就是 `subject=` | 空值时写 `cert_subject: （空 DN）` + 说明"身份在 SAN 里"（issuer 同理）；实测空 DN 证书确认 SAN 行照常给出 |
+
+### 6.5.13.5 第六轮实测（2026-10-11）：同一份事实被解析了四遍——"证据不存在"
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| 工具里"证据文件不存在"：容器写进 `/work` 的 `.xml`/`.json` 找不到，只看得到自己手写的 `.txt` | **同一份事实被解析了四遍**。2026-10-08 引入「按会话 cwd 覆盖 `/work`」（操作者要求："我 dsh 会话在哪个目录，AI 就默认在哪个目录操作"），只改到了容器 argv 与提示词简报；`pentest_workdir` 的读写根与宿主侧证据落盘**仍读配置目录** ⇒ 容器写会话目录、工具读配置目录，两个目录各有一半产物 | 抽出**唯一来源** `src/execution/session-mounts.ts`：规则 `sessionMountsForCwd`（会话 cwd 覆盖 `/work`、其余保留）+ 视图工厂 `sessionMountViews`（容器 argv / 工具读写根 / 证据落盘根 / 简报 **同一个对象**）。`compose` 的四个消费点全改读它；跨切缝锁 `test/session-mounts.test.ts` 在一个断言里对齐 argv 的 `-v` ↔ workdir 根 ↔ 证据根 |
+| 配置里的 `/mnt/engagement`（只读锚点，交付物自校验通道）在容器里**不存在**，简报也不再提它 | 同一处覆盖把**整份配置挂载**都换成了"单个会话根"（旧 `mountRootFor` 只接受一个路径）⇒ `/mnt` 下的锚点静默消失 | 钩子由"单个根"改为"整份列表"（`DockerSandboxDeps.mountsFor`）：`/work` 被会话 cwd 覆盖，**其余容器路径原样保留**（含 `:ro`）。实跑确认 `-v <会话目录>:/work -v C:/Projects/pentest/cdut:/mnt/engagement:ro` |
+
+**可复现的判定（跑之前先问"部署里是哪一份"）**：
+
+```bash
+P="C:/Users/Administrator/.dsh/profiles/pentest/node_modules/dsh-pentest"
+# 部署是软链（构建即生效）还是副本（必须重装）——见 §6.5.15
+ls -ld "$P"                      # lrwxrwxrwx … -> …/dsh-DCG-pentest  ⇒ 软链
+grep -c "sessionMountsForCwd" "$P/lib/execution/session-mounts.js"   # ≥1 ⇒ 本次修复已在部署里
+```
+
+**部署纪律（照 §6.5.15）**：软链形态下 `npm run build` + **重启 dsh 进程**即可；副本形态必须重装。
+
+**验证（本轮实跑，非推断）**：拿 `lib/` 产物（= 部署里那一份）构造生产 argv，再用同一个 argv
+起真容器（只把入口换成 `bash -lc`，挂载/限额/cap 全部原样）：
+
+| 方向 | 做法 | 结果 |
+|---|---|---|
+| 容器写 → 宿主读 | 容器内 `echo … > /work/evidence/from-container.txt` | 落在**会话目录**（`%TEMP%\smoke-session-*`），非 `cdut` |
+| 宿主写 → 容器读 | 宿主侧 `writeWorkdir(rootsFor(会话), '/work/evidence/from-tool.txt')` | 容器 `cat /work/evidence/from-tool.txt` 读到 `tool-wrote-this` |
+| 只读锚点 | 容器内 `touch /mnt/engagement/should-not-exist` | `Read-only file system`（`cdut` 未被污染） |
+| 四个视图 | argv 的 `-v` ↔ `rootsFor` ↔ `evidenceRootFor` | 三处同值（`/work` = 会话目录） |
+
+**附带修掉的一处不一致**：零挂载部署（profile 没写 `sandbox.mounts`）下，容器照样按会话 cwd 得到
+`/work`、证据也写到那儿，但 `pentest_workdir` 因"配置无挂载"而**不安装** ⇒ 证据写得回、读不回来。
+门控改为「配置声明了挂载 **或** 存在会话 cwd 来源」，且删掉被 `evidenceRootFor` 取代的静态
+`evidenceRoot`（死配置）。
 
 ### 6.5.13.3 同日第四轮实测（3 条）的修复：静默失败的三张脸
 

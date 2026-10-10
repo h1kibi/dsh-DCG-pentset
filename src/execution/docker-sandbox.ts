@@ -484,13 +484,18 @@ interface DockerSandboxDeps {
   /** 生成容器名的函数（便于测试注入固定值）。 */
   readonly containerName?: (plan: ExecutionPlan) => string;
   /**
-   * **本次运行的挂载根**（宿主路径）——按会话区分目录的接入口（2026-10-08）。
+   * **本次运行的挂载列表**——按会话区分目录的接入口（2026-10-08 引入，2026-10-11 改为列表）。
    *
-   * 返回 `undefined` ⇒ 用配置里的 `mounts`（行为与今天完全一致，回退路径）；返回一个路径 ⇒
-   * 本次运行只挂它（落在 `/work`），且**必须在运行前校验通过**：目录不存在就**拒绝这次运行**，
-   * 绝不静默回退到配置里的目录（静默回退会把证据写进人类没预期的项目资料里——那正是要修的毛病）。
+   * 返回 `undefined` ⇒ 用配置里的 `mounts`（与不配此钩子时完全一致，回退路径）；返回一个列表 ⇒
+   * 本次运行**只挂它**，且**必须在运行前校验通过**（存在性/容器路径/去重，`assertMounts` 全套）：
+   * 目录不存在就**拒绝这次运行**，绝不静默回退——静默回退会把证据写进人类没预期的项目资料里。
+   *
+   * **为什么从"单个根"改成"列表"**（2026-10-11 操作者实测）：会话 cwd 覆盖 `/work` 是对的
+   * （操作者要求"我在哪个目录开会话，AI 就在哪个目录操作"），但旧实现把**整份配置挂载都换掉了**
+   * ——配置里那条 `/mnt/engagement`（只读锚点，交付物自校验用）于是**静默消失**，而简报里也不再提。
+   * 现在由调用方给出**完整列表**（会话 cwd 落 `/work` + 配置里其余容器路径）。
    */
-  readonly mountRootFor?: (plan: ExecutionPlan) => string | undefined;
+  readonly mountsFor?: (plan: ExecutionPlan) => readonly SandboxMount[] | undefined;
 }
 
 /**
@@ -584,7 +589,7 @@ export class DockerSandbox implements SandboxExecutor {
   private readonly config: DockerSandboxConfig;
   private readonly runner: ProcessRunner;
   private readonly containerName: (plan: ExecutionPlan) => string;
-  private readonly mountRootFor: ((plan: ExecutionPlan) => string | undefined) | undefined;
+  private readonly mountsFor: ((plan: ExecutionPlan) => readonly SandboxMount[] | undefined) | undefined;
 
   constructor(config: DockerSandboxConfig, deps: DockerSandboxDeps = {}) {
     // 显式赋值而非构造函数参数属性：erasableSyntaxOnly 禁止后者
@@ -592,7 +597,7 @@ export class DockerSandbox implements SandboxExecutor {
     this.config = config;
     this.runner = deps.runner ?? spawnRunner;
     this.containerName = deps.containerName ?? ((plan) => `pentest-${plan.idempotencyKey.slice(0, 24)}`);
-    this.mountRootFor = deps.mountRootFor;
+    this.mountsFor = deps.mountsFor;
     assertSandboxConfig(this.config);
   }
 
@@ -637,9 +642,9 @@ export class DockerSandbox implements SandboxExecutor {
     // 它必须**在运行前校验通过**：目录不存在就拒绝这次运行——**绝不静默回退**到配置里的目录
     // （静默回退会把证据写进人类没预期的项目资料里，那正是要被修掉的毛病）。
     let runMounts: readonly SandboxMount[] | undefined;
-    const overrideRoot = this.mountRootFor?.(plan);
-    if (overrideRoot !== undefined) {
-      runMounts = [{ hostPath: overrideRoot, containerPath: DEFAULT_MOUNT_CONTAINER_PATH }];
+    const resolvedMounts = this.mountsFor?.(plan);
+    if (resolvedMounts !== undefined) {
+      runMounts = resolvedMounts;
       try {
         assertMounts(runMounts);
       } catch (error) {
@@ -648,7 +653,7 @@ export class DockerSandbox implements SandboxExecutor {
           error: {
             status: 'blocked',
             code: 'sandbox_unavailable',
-            message: `会话工作目录不可用：${error instanceof Error ? error.message : String(error)}`,
+            message: `会话挂载不可用：${error instanceof Error ? error.message : String(error)}`,
             next_action: '在宿主上确认该会话目录存在（会话的 cwd 取自宿主会话头），再重发本条动作',
           },
         };

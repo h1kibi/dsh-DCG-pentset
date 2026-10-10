@@ -30,6 +30,7 @@ import type { Context } from '@deepseek-ai/cordis';
 // 该子路径（实测：只有 "." / "./invariant" / "./types" / "./surface" / "./src/*"）。
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session';
 import { DOMAIN_EVENT_TYPES } from './contracts.ts';
+import type { SandboxMount } from './contracts.ts';
 import { ToolRegistry, installGuard } from './tools/guard.ts';
 import type { GuardPolicy } from './tools/guard.ts';
 import { createWorkerTools, TARGET_TOOL_NAMES, WORKER_TOOL_NAMES } from './tools/worker.ts';
@@ -40,6 +41,7 @@ import { lookup } from 'node:dns/promises';
 import { compose } from './compose.ts';
 import { inspectRls } from './compose.ts';
 import { probeReachability, renderReachabilityNote, spawnRunner } from './execution/docker-sandbox.ts';
+import { sessionMountsForCwd } from './execution/session-mounts.ts';
 import { migrate } from './db/migrate.ts';
 import { DshSessionFactory } from './agents/dsh-session-factory.ts';
 import { assertGraph } from './workflow/phases.ts';
@@ -564,16 +566,29 @@ async function composeIfConfigured(ctx: Context, config: PluginConfig): Promise<
     const session = ctx.sessions.get(dshSessionId as Parameters<typeof ctx.sessions.get>[0]);
     return session?.header.cwd ?? runtime.sessionCwd;
   };
+  /**
+   * **挂载规则的唯一定义**（2026-10-11）。会话 cwd 覆盖 `/work`，配置里其余容器路径（如
+   * `/mnt` 下的只读锚点）**保留**——旧实现把整份配置挂载都换掉了，于是 `/mnt/engagement`
+   * 在容器里静默消失（操作者实测）。
+   *
+   * 规则本体在 `sessionMountsForCwd`（`src/execution/session-mounts.ts`）：这里是**唯一的调用方**
+   * ——同一个函数喂两处（compose 的 `mountsForCwd` = 沙箱 argv + 工具读写根 + 证据落盘根；
+   * 会话简报的 `mountsOf`）。四处各取一份必然漂移，实测的漂移形态是"容器把证据写进会话 cwd，
+   * 而工具与宿主侧读写配置目录"，模型看到"证据不存在"。
+   */
+  const mountsForCwd = (cwd: string | undefined): readonly SandboxMount[] =>
+    sessionMountsForCwd(cwd, runtime.sandbox.mounts ?? []);
   const composed = compose({
     ...runtime,
     sessionCwdOf,
+    mountsForCwd,
     ...(runtimeBudget === undefined ? {} : { dshBudget: runtimeBudget }),
     ...(runtime.modelRoute === undefined ? { modelRoute: hostModel } : { modelRoute: runtime.modelRoute }),
     sessions: runtime.sessions ?? new DshSessionFactory(ctx, {
       ...(runtime.sessionCwd === undefined ? {} : { cwd: runtime.sessionCwd }),
-      // 会话提示词里的挂载说明必须与沙箱 argv 同源（见 DshSessionFactoryDeps.mountRootOf）：
-      // 传**同一个** `sessionCwdOf`，配置值只作回退。
-      mountRootOf: sessionCwdOf,
+      // 会话提示词里的挂载说明必须与沙箱 argv 同源（见 DshSessionFactoryDeps.mountsOf）：
+      // 传**同一个** `mountsForCwd`（复合 `sessionCwdOf`），配置值只作回退。
+      mountsOf: (dshSessionId: string) => mountsForCwd(sessionCwdOf(dshSessionId)),
       ...(runtime.sandbox.mounts === undefined ? {} : { sandboxMounts: runtime.sandbox.mounts }),
       ...(mountPreset === undefined ? {} : { mountPreset }),
       ...(presetId === undefined ? {} : { presetId }),

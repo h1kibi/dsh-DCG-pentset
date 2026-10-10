@@ -57,6 +57,12 @@ export interface WorkerToolDeps {
    * （没挂载时连 `pentest_workdir` 都是 `no_roots`，那是同一个事实）。
    */
   readonly evidenceRoot?: string;
+  /**
+   * **按会话**的证据落盘根（2026-10-11）。与容器 argv / 简报 / `pentest_workdir` **同源**：
+   * 会话 cwd 覆盖 `/work` 时，证据也必须落到同一处——否则 `.txt`（宿主侧写）与 `.xml/.json`
+   * （容器内写）会分居两个目录（实测症状：工具里只看到 .txt，看似"证据不存在"）。
+   */
+  readonly evidenceRootFor?: (workerSessionId: string) => string | undefined;
   /** dsh 会话标识 → worker 会话标识。 */
   resolveWorkerSessionId(dshSessionId: string): Promise<string | null>;
   /** 原子解析当前 worker 会话及调用开始时的生效租约世代。 */
@@ -171,15 +177,24 @@ export interface WorkerToolDeps {
    * 未声明挂载时省略——工具随即给出 `no_roots` 的明确拒绝，而不是退回某个默认目录。
    */
   readonly workdir?: {
-    /** 本部署声明的所有挂载根（容器路径 + 只读标记）；list 时附在返回值里，供模型检查配置。 */
+    /**
+     * **配置声明的**挂载根（容器路径 + 只读标记）。只作描述与回退：
+     * 实际生效的挂载可能被"按会话的工作目录"覆盖 `/work` —— 见 {@link rootsFor}。
+     */
     readonly roots: readonly { readonly containerPath: string; readonly readOnly?: boolean }[];
-    list(input: { readonly path: string }): Promise<WorkdirListing>;
-    read(input: { readonly path: string }): Promise<WorkdirFile>;
-    write(input: { readonly path: string; readonly content: string }): Promise<WorkdirWriteResult>;
+    /**
+     * **本会话实际生效的挂载根**（2026-10-11 修）。容器把会话 cwd 挂成 `/work`，因此工具
+     * 必须读同一份——否则会出现最坏的一种漂移：结构化动作把证据写进容器看到的 `/work`，
+     * 而这里读的是配置里的另一个目录 ⇒ 模型看到"证据不存在"（实测，差一步写成结论）。
+     */
+    rootsFor?(workerSessionId: string): readonly { readonly containerPath: string; readonly readOnly?: boolean }[];
+    list(input: { readonly path: string; readonly workerSessionId: string }): Promise<WorkdirListing>;
+    read(input: { readonly path: string; readonly workerSessionId: string }): Promise<WorkdirFile>;
+    write(input: { readonly path: string; readonly content: string; readonly workerSessionId: string }): Promise<WorkdirWriteResult>;
     /** 在挂载根内递归检索（正则）。200+ 份归档文档里考古靠它，避免整文件读烧上下文。 */
-    search(input: { readonly path: string; readonly pattern: string }): Promise<WorkdirSearchResult>;
+    search(input: { readonly path: string; readonly pattern: string; readonly workerSessionId: string }): Promise<WorkdirSearchResult>;
     /** 追加写：给已写的报告补一行不必整文件重发。 */
-    append(input: { readonly path: string; readonly content: string }): Promise<WorkdirWriteResult>;
+    append(input: { readonly path: string; readonly content: string; readonly workerSessionId: string }): Promise<WorkdirWriteResult>;
   };
 }
 
@@ -855,7 +870,8 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
         | null;
       const partial = resultView?.status === 'timed_out' || resultView?.status === 'cancelled';
       if (args.save_stdout_as_evidence === true && outcome.kind !== 'blocked') {
-        const root = deps.evidenceRoot;
+        // 优先**按会话**解析（与容器 argv/简报/工具同源）；无该钩子时回退静态配置。
+        const root = deps.evidenceRootFor?.(workerSessionId) ?? deps.evidenceRoot;
         if (root === undefined) {
           evidenceNote = 'evidence: 未挂载工作目录，无法落盘（见 pentest_workdir 的 no_roots）';
         } else {
@@ -1214,15 +1230,17 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
    * （范围版本 0）里连 `ls /work` 都跑不了——「读你自己的作业资料」与目标无关，
    * 却被目标闸门挡住。本工具不接触任何目标，只用一条路径约束（必须落在挂载根内）。
    */
-  // **把实际挂载根内联进描述**（2026-10-10 操作者实测 P1）：多根部署写新文件要求带容器路径前缀，
-  // 而"是哪几个根"此前只能先 `op=list` 才知道——工具描述里写清楚，省掉一次往返与一次踩坑。
+  // **把配置声明的挂载内联进描述**（2026-10-10 操作者实测 P1）：写新文件时"是哪几个根"不该靠先
+  // `op=list` 才知道。**但描述只能说配置值**：`/work` 实际跟随**本会话的工作目录**（按会话解析，
+  // 见 `rootsFor`），构造期拿不到会话 ⇒ 描述里点明这一点、并把权威指向 `op=list` 的 `roots`
+  // （2026-10-11：只写配置值会把模型引到错误的目录，那正是实测到的漂移）。
   const mountRoots = deps.workdir?.roots ?? [];
   const rootsFact =
     mountRoots.length === 0
-      ? '**本部署没有挂载根**（`sandbox.mounts` 为空）：本工具可调用但没有可读写的目录。'
-      : `**本部署的挂载根**：${mountRoots
+      ? '**配置里没有挂载根**（`sandbox.mounts` 为空）：本工具可调用，但有没有可读写目录以 `op=list` 的 `roots` 为准。'
+      : `**配置声明的挂载**：${mountRoots
           .map((root) => `\`${root.containerPath}\`${root.readOnly === true ? '（只读）' : '（读写）'}`)
-          .join('、')}。`;
+          .join('、')}；**其中 \`/work\` 实际跟随本会话在宿主上的工作目录**（会话 cwd 覆盖它）。`;
   const workdirTool = defineTool({
     name: 'pentest_workdir',
     description:
@@ -1235,7 +1253,7 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       '适合在大量归档文档里定位——比整文件读省上下文）、`append` 追加到文件末尾（补一行不必重发整份）。' +
       'path 是**相对挂载根**的路径，例如 `1-未打点资产与暴露面/清单.md`；写入新文件时若**可写根不止一个**' +
       '才必须用容器路径（如 `/work/...`）消歧——只有一个可写根（其余是只读）时相对路径直接落到它。' +
-      '**实际可用的挂载根见 `op=list` 返回的 `roots` 字段**（每次调用都会附加）。' +
+      '**`/work` 跟随本会话在宿主上的工作目录**（不是配置里的固定目录）；实际生效的挂载根以 `op=list` 返回的 `roots` 为准**（每次调用都会附加）。' +
       '不接受绝对宿主路径、不允许 `..` 跳出根、符号链接指向根外会被拒绝。' +
       '它**不产生证据账本条目**：读到的东西要形成结论，照常写进报告/证据（`pentest_submit_report`）。' +
       '\n⚠️  **警告**：挂载根由人类在启动时配置。如果配置错误，你可能在读写**不属于本作业**的目录。' +
@@ -1250,7 +1268,8 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
     async execute(args, exec) {
       // 与其余 Worker 工具同口径：先确认调用方是本项目登记的会话（拿不到就报错）。
-      await workerSessionIdOf(deps, exec);
+      // **标识要带上**：挂载根按会话解析（会话 cwd 覆盖 `/work`），读写必须落在同一处。
+      const workerSessionId = await workerSessionIdOf(deps, exec);
       const op = args.op.trim().toLowerCase();
       if (op !== 'list' && op !== 'read' && op !== 'write' && op !== 'search' && op !== 'append') {
         return toJson(asError({
@@ -1271,11 +1290,12 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
       }
       try {
         if (op === 'list') {
-          const result = await access.list({ path: args.path });
+          const result = await access.list({ path: args.path, workerSessionId });
           // 附加挂载根信息（P0 #3：让模型知道有哪些根可用）
-          return toJson({ ...result, roots: access.roots.map(r => ({ containerPath: r.containerPath, readOnly: r.readOnly ?? false })) });
+          const roots = access.rootsFor?.(workerSessionId) ?? access.roots;
+          return toJson({ ...result, roots: roots.map(r => ({ containerPath: r.containerPath, readOnly: r.readOnly ?? false })) });
         }
-        if (op === 'read') return toJson(await access.read({ path: args.path }));
+        if (op === 'read') return toJson(await access.read({ path: args.path, workerSessionId }));
         if (op === 'search') {
           if (args.pattern === undefined) {
             return toJson(asError({
@@ -1285,7 +1305,7 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
               next_action: '补上 pattern 再调用；pattern 是 JS 正则，可在大量文档里定位文件与行号',
             }));
           }
-          return toJson(await access.search({ path: args.path, pattern: args.pattern }));
+          return toJson(await access.search({ path: args.path, pattern: args.pattern, workerSessionId }));
         }
         if (args.content === undefined) {
           return toJson(asError({
@@ -1295,8 +1315,8 @@ function stderrMarker(result: { readonly stderr?: unknown } | null): Record<stri
             next_action: '补上 content 再调用',
           }));
         }
-        if (op === 'append') return toJson(await access.append({ path: args.path, content: args.content }));
-        return toJson(await access.write({ path: args.path, content: args.content }));
+        if (op === 'append') return toJson(await access.append({ path: args.path, content: args.content, workerSessionId }));
+        return toJson(await access.write({ path: args.path, content: args.content, workerSessionId }));
       } catch (error) {
         if (error instanceof WorkdirError) {
           // 策略性拒绝（越界/只读/没挂载）→ 稳定错误码；操作性未命中（不存在/是目录/超限）
