@@ -987,6 +987,15 @@ Agent 曾在被要求「进入下一阶段」时反问「哪个阶段」。每�
 - **默认装载**写在 `src/skills/skill-pack.ts` 的 `SKILL_PACKS`；人类在控制台仍可改勾选。
 - 正文是**会被模型当指令执行的内容**：新增/修改走服务层（哈希 + 审计），别直接改库。
   未配 `skillAuditEngagementId` 时启动日志会明确警告「skill 增删改不写审计」——这是已知缺口。
+- **空库必播种**（2026-10-10 操作者踩到）：新库/换库后 `pentest.skills` 是 0 行，
+  而会话的 `skill_ids` 照样冻结着 5 个名字——`skill_load` 于是**全部拒绝**，
+  消息里还会把请求的名字列进"已装载"清单（旧版本把"库里没有"误报成"不在装载集合"，
+  那一处措辞已在 2026-10-10 的 P0 修复里改准确）。核对一行即可确认：
+
+  ```bash
+  node -e "const{Client}=require('pg');const c=new Client({connectionString:process.env.PENTEST_DATABASE_URL});c.connect().then(()=>c.query('select count(*) from pentest.skills')).then(r=>{console.log('skills =',r.rows[0].count);return c.end();})"
+  # 期望 25；为 0 就按本节开头的播种命令跑一次
+  ```
 
 ## 6.5.12 dsh 升级（0.1.5-rc.2 → 0.2.0-rc.2）：现状与解锁条件（2026-10-06 实测）
 
@@ -1021,6 +1030,33 @@ npm run typecheck && npm run lint && npm test && npm run verify
 
 > **为什么第 4 步不能省**：测试覆盖的是我们自己的代码；宿主装载失败（比如上面那个 typert codec）
 > 只在真启动时才现形。本次就是靠真启动才发现"插件全绿、profile 起不来"。
+
+## 6.5.13 2026-10-10 操作者实测的四处阻碍与修复
+
+一次 11 分钟的实弹测绘（主通道跑完 55 条路径、零审批摩擦）之外暴露的四个硬阻塞，全部已修：
+
+| 阻碍 | 根因 | 修复 |
+|---|---|---|
+| `port_scan` / `service_probe` 传 `ports="3002"` 被以「端口 80\|443 未授权」拒绝 | 多端口动作在 `portSource` 里声明 `none`，范围闸门把"无端口维度"回落成默认 web 端口，**显式端口只进了命令、没进闸门** | 新增 `ScopePorts`（none / web-default / ranges / unbounded）与 `portSource.kind='ports-param'`：闸门解析端口表达式与档位，**每个端口**都必须被条目覆盖；`top100/top1000` 不可枚举 ⇒ 需全 TCP 授权（`scope.ts` / `port-expr.ts` / `templates.ts` / `admission.ts` / `compose.ts`） |
+| `content_discover` 无法枚举 `/api/` 下的路由（`wordlist=api_endpoints` 被参数校验拒） | 镜像里早就装了 `api-endpoints.txt`/`quickhits.txt`，参数面只有三档；且 URL 固定为 `/FUZZ`，**没有基准路径** | 字典档位扩到 `common_dirs/raft_small/api_endpoints/quickhits`（每动词一张允许表 `WORDLIST_ALLOWED`），新增 `path` 基准前缀（空串=站点根，`..`/查询串拒绝）；宿主枚举与容器允许表由 `test/action-templates.test.ts` 逐字对拍 |
+| `skill_load` 拒绝 `recon-network-surface`，而拒绝消息同时把它列为已装载 | ①`pentest.skills` 为 **0 行**（技能库从未播种）——任何名字都取不到；②旧消息把"库里没有"误报成"不在装载集合"；③`insertWorkerSession` 的 VALUES 把 `skill_freeze` 与 `model_route` **写反**，内容冻结保护静默失效 | ①已播种 25 条（本节上方命令）；②拒绝消息区分"库里不存在/被删/被禁用/不在装载集合"（P0-1）；③修 INSERT 参数对齐并加回读回归锁（`test/skill-load.test.ts` 走**生产** `insertWorkerSession`） |
+| `memory_search` 五次全报 `column "kind" does not exist` | 零命中诊断查询里 `kind` 未限定别名（该列在 `memory_items`，`memory_chunks` 没有），且 `JOIN context_events` 是 INNER JOIN、会丢掉"条目来源"的分块 ⇒ **每次零命中都抛错**（新作业的常态） | 诊断查询改用 `mc.engagement_id` 直连 + `LEFT JOIN memory_items mi`；回归锁 `test/memory-search-diagnostics.test.ts`（零命中必须返回带诊断的 note，且条目来源分块计入计数） |
+
+**已存会话的影响**：修复前创建的会话里，`skill_freeze` 存的是模型路由（冻结三元组的保护对它们**
+不生效**，退回"只按启用状态可读"）；`model_route` 存的是冻结数组（交接压缩读 `.model` 读不到 ⇒ 模型
+选择退化为默认）。这两处对**新会话**已修正；旧会话不必重建——播种后 `skill_load` 即可用，
+冻结保护从下一个会话起生效。
+
+## 6.5.14 本机跑测试需要独立的 `pentest` 测试库（2026-10-10 补）
+
+`npm test` 的加载器**拒绝**把测试跑在 `pentest_personal` 上（按作业清理会吃掉真实战果）。
+本机若只有个人库，先建测试库并迁移再跑（迁移器是 `src/db/migrate.ts`，幂等）：
+
+```bash
+node -e "const{Client}=require('pg');const c=new Client({connectionString:process.env.PENTEST_DATABASE_URL.replace(/\/[^/]+$/,'/postgres')});c.connect().then(()=>c.query(\"create database pentest\")).then(()=>c.end())"
+node --experimental-strip-types -e "import('./src/db/migrate.ts').then(m=>m.migrate({connectionString:process.env.PENTEST_DATABASE_URL.replace(/\/[^/]+$/,'/pentest'),log:console.log}))"
+PENTEST_DATABASE_URL="$(node -e "console.log(process.env.PENTEST_DATABASE_URL.replace(/\/[^/]+$/,'/pentest'))")" npm test
+```
 
 ## 6.6 建作业只需两件事；公共记忆进每一次会话
 
