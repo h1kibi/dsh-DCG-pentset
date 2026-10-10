@@ -246,14 +246,25 @@ export function validateParams(
     }
   }
 
+  // 校验必填参数：特殊处理 content_discover 的 path（可选，默认空串）。
   for (const p of template.parameters) {
+    const isOptionalPath = template.id === 'recon_content_discover' && p.name === 'path';
     if (!Object.hasOwn(params, p.name)) {
-      return paramError(
-        template.id,
-        `缺少参数 ${p.name}（模板声明的参数即必填，省略即拒绝）`,
-        `显式提供参数 ${p.name}：${describeParam(p)}`,
-      );
+      if (isOptionalPath) {
+        normalized.path = '';
+      } else {
+        return paramError(
+          template.id,
+          `缺少参数 ${p.name}（模板声明的参数即必填，省略即拒绝）`,
+          `显式提供参数 ${p.name}：${describeParam(p)}`,
+        );
+      }
     }
+  }
+
+  for (const p of template.parameters) {
+    // Skip optional path parameter
+    if (template.id === 'recon_content_discover' && p.name === 'path') continue;
     const value = params[p.name];
     switch (p.kind) {
       case 'enum': {
