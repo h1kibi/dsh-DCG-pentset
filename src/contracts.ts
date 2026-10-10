@@ -1101,6 +1101,11 @@ export interface ToolError {
   readonly message: string;
   readonly approval_id?: string;
   readonly next_action: string;
+  // 详细错误分类，客户端可据此快速判定应该改参数还是改目标还是等待批准
+  readonly error_type?: 'parameter_schema' | 'parameter_validation' | 'policy_rejected' | 'state_error';
+  // 参数错误时的修复建议
+  readonly expected_values?: readonly string[];
+  readonly expected_range?: { readonly min?: number; readonly max?: number };
 }
 
 // ───────────────────────────── 服务接口（面） ─────────────────────────────

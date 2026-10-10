@@ -151,7 +151,14 @@ export interface ReconIntentInput {
 
 export type ReconIntentOutcome =
   | { readonly ok: true; readonly templateId: string; readonly params: Readonly<Record<string, string | number>> }
-  | { readonly ok: false; readonly code: ErrorCode; readonly message: string; readonly nextAction: string };
+  | {
+      readonly ok: false;
+      readonly code: ErrorCode;
+      readonly message: string;
+      readonly nextAction: string;
+      readonly errorType?: 'parameter_schema' | 'parameter_validation' | 'policy_rejected' | 'state_error';
+      readonly expectedValues?: readonly string[];
+    };
 
 /**
  * 把「人话 technique + 少量参数」翻译成模板实例。**纯函数**：工具与测试共用同一份映射。
@@ -182,6 +189,8 @@ export function buildStructuredIntent(family: StructuredFamily, input: ReconInte
         code: 'classification_rejected',
         message: `${family} 的 technique=${input.technique} 不接受参数 ${key}（拼写错误或不支持该参数）`,
         nextAction: `本动作只接受：${[...allowed].join('、')}`,
+        errorType: 'parameter_schema',
+        expectedValues: [...allowed],
       };
     }
     const domain = spec.enums?.[paramName];
@@ -191,6 +200,8 @@ export function buildStructuredIntent(family: StructuredFamily, input: ReconInte
         code: 'classification_rejected',
         message: `${family} 的 technique=${input.technique} 参数 ${key} 取值不在允许集合内：${String(value)}`,
         nextAction: `只允许：${domain.join('、')}`,
+        errorType: 'parameter_validation',
+        expectedValues: domain,
       };
     }
     params[paramName] = value;
@@ -202,6 +213,8 @@ export function buildStructuredIntent(family: StructuredFamily, input: ReconInte
       code: 'classification_rejected',
       message: `${family} 的 technique=${input.technique} 缺少必填参数：${missing.join('、')}`,
       nextAction: `补上这些参数再调用：${missing.join('、')}`,
+      errorType: 'parameter_schema',
+      expectedValues: missing,
     };
   }
   return { ok: true, templateId: `${family}_${input.technique}`, params };
