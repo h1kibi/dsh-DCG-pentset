@@ -182,7 +182,7 @@ describe('动作类别判定：无法归类即拒绝（§10.2.1）', () => {
     // 侦察族经同一入口判定：类别来自模板注册信息，不由参数决定。
     const reconVerdict = await policy.classifyAction({
       templateId: 'recon_port_scan',
-      params: { scope: 'top1000', ports: 'none', ping: 'skip' },
+      params: { scope: 'top1000', ports: 'none', ping: 'skip', restrict_to_scope: 'false' },
     });
     assert.deepEqual(reconVerdict, { ok: true, actionClass: 'active_probing' });
   });

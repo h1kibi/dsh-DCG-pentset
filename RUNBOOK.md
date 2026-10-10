@@ -1063,6 +1063,16 @@ npm run typecheck && npm run lint && npm test && npm run verify
 | 情报阶段看不到 `pentest_scan`（含 `exposure_check`），"配置暴露核查"只能手搓 `curl` | 该工具只发给漏洞分析阶段；2026-10-07 撤下逐项编辑器后没有人类入口能加工具 ⇒ 能力边界只由 Profile 与阶段默认决定 | 把 `pentest_scan` 加入情报收集默认工具面（见下方裁定说明）；提示词改为**按在场工具分节**渲染参数指南 + 一致性锁；`recon-web-surface` 补第 8/9 行 |
 | **`exposure_check` 只要命中候选就崩**：`internal_error: TypeError: 'in <string>' requires string as left operand, not bytes` | `classify_exposure` 写成 `signature.lower() in body.decode(...)`，而 `EXPOSURE_SIGNATURES` 是 **bytes** 字面量（`b"ref:"` / `b'"swagger"'`）⇒ `bytes in str` 必崩；它只在"真的命中候选"时走到，更早的冒烟全落在"与对照同形"分支，**且该纯函数从无单测**（注释里"可无 socket 单测"的意图从未落地） | 改为 **bytes 对 bytes**（`signature.lower() in body.lower()`，不解码）；加文本锁钉住"签名表是 bytes 且比对不得 decode"；实测（自建夹具、只读 GET）：`.git/HEAD`/`.env` → `looks_like=true`、`swagger.json` → `control=same` 判为软 404、**不回显正文** |
 
+### 6.5.13.2 同日第三轮实测（4 条）的修复：零命中的可分辨性 + 档位交集
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| **`port_scan` 扫 33 个端口报 `open_ports=0`，而 3002 实际开放**（差点写进"未开放"） | `ping=syn` ⇒ `-sS -PS`：`-PS` 是**主机发现**探 80，目标丢弃探针被判 down ⇒ **一个端口都没扫**。输出形态（rc=0、有 summary）与"全关"**同形** | 全 down 时给 `warn:` 分支（明说"端口从未被扫"）+ 可执行下一步（换 `ping=skip`）；`summary` 补 `hosts_up/hosts_total/ports_scanned`；`ping` 的语义在 schema 与指南里改写成"**主机存活判定**（不是扫描类型）" |
+| 同样场景下**没有原始件可复核**：只有解析后的摘要 | 动词只回摘要，且 `nmap` 的 `-oX` 输出直接进 stdout 做解析，不落盘 | nmap 族（`port_scan`/`service_probe`/`nse_run`）与 `content_discover` 把原始件写进 `/work/evidence/<目标>/<UTC>-<动词>.{xml,json}`，报告给 `raw_evidence:` 路径；**没有挂载根时回显受限 `raw_head` 并说明**（不让证据随容器消失）。另补 `scaninfo:`（nmap 自报 numservices/services）与 `nmap_done:`（stderr 尾行） |
+| `scope=top100` 被范围闸门拒（"端口集不可枚举"），而沙箱里**查不到 top-N 清单** ⇒ 只能靠记忆列端口（漏了就是静默漏报） | 档位在宿主侧确实不可枚举；但"算交集"的成本被推给模型，而模型手上没有可靠来源（`nmap-service-probes` 是错的文件） | 新增 `restrict_to_scope=true`：容器算 `top-N ∩ ports` 并回报 `used_ports:`；N 取自镜像 `/usr/share/nmap/nmap-services` 频率列（**实测：推出的 top-100 与 `nmap --top-ports 100` 自报的 `services=` 展开逐位相同**）；空交集明确报 `scope_intersection: empty` 且不扫描。闸门口径不变（`ports` 是宿主核验过的授权集合，交集是其子集） |
+| `grep -oE '[一-龥]+'` → `Invalid collation character`（rc=2，管道里像"没命中"） | **不是 locale 缺失**（容器 `LANG` 本就是 `C.UTF-8`）：GNU grep 3.8 对**多字节字符区间**一律拒绝。`LC_ALL=C` 能让它"过"，但那只是退化成字节匹配 | locale 显式钉成 `LANG/LC_ALL=C.UTF-8`（防上游漂移，**不解决**该区间问题）；正确写法是 `grep -oP '\p{Han}+'` 或 python3 `re`（两者实测可用），已写进 `recon-web-surface` 的常见失败表 |
+| 多根部署：写新文件要求带容器路径前缀，但"是哪几个根"要先 `op=list` 才知道 | 工具描述里的挂载根是通用说明，没内联本部署的实际值 | `pentest_workdir` 的描述在装配期内联**实际挂载根**（容器路径 + 读写/只读；无挂载根时明说） |
+
 **顺带澄清（不是缺陷）**：`ffuf 1.1.0` **有**跳过证书校验的开关，且 `content_discover` 在
 `verify_tls=false` + https 时已经传 `-k`（实测 `ffuf -k -h` 正常解析，说明该版本接受 `-k`）。
 「ffuf 不能打自签目标」这条**不成立**，可放心用结构化通道做自签/IP 目标的目录枚举。
@@ -1148,6 +1158,14 @@ grep -c "ports-param" "C:/Users/Administrator/.dsh/profiles/pentest/node_modules
 **流程纪律**：`scripts/dev-sandbox-up.sh up` 带出口白名单闸门（`EGRESS_ALLOW` 为空即拒绝启动），
 只做构建/推送时用 `docker build` + `docker push` + `docker inspect` 三步即可，不要为了绕过闸门
 去编一个 `EGRESS_ALLOW` 值——那是授权声明，不是开关。
+
+**第三轮（同日，2026-10-10）再换钉一次**：分发器又改了三处（原始件落盘 / `restrict_to_scope` 交集 /
+`scaninfo`+`nmap_done`+全 down 告警），流程同上；摘要 `5ee07609c870 → 7548dbc3a2ae → a95b0affb2cd → 266173b38d52`，
+25 份技能戳每次都跟着轮换。
+
+**踩过一次的坑（记下来省时间）**：往 Dockerfile **中段**加 `ENV`（locale 那次）会让其后每一个 `RUN` 层失效——
+本地实测一次重建把整层 apt 又跑了一遍，**1200 秒都没装完**。运行时环境变量放**末尾**（`ENTRYPOINT` 之前）
+表达同一件事，且不砸缓存：改完只有最后几层重建，2 秒完成。
 
 ## 6.6 建作业只需两件事；公共记忆进每一次会话
 

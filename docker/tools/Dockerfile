@@ -262,4 +262,13 @@ COPY pentest-tool /usr/local/bin/pentest-tool
 RUN chmod 0755 /usr/local/bin/pentest-tool
 
 # exec 形式：PID 1 就是包装器本身，宿主侧 SIGKILL 不会留下中间 shell。
+# 显式钉住 UTF-8 locale（base 镜像目前给 `LANG=C.UTF-8`，但别依赖上游默认）。
+# ⚠ **这不会**让 `grep -oE '[一-龥]+'` 变得可用：GNU grep 3.8 对**多字节字符区间**一律报
+# `Invalid collation character`（2026-10-10 操作者实测；`grep` 的退出码是 **2**，而管道里
+# 常被吞掉 ⇒ 看起来像"没命中"的静默失败）。中文抽取请用：
+#   `grep -oP '\p{Han}+'`（PCRE，实测可用）或 python3 `re.findall(r'[\u4e00-\u9fff]+', text)`。
+# 详见 `skills/recon-web-surface` 的「常见失败」一行。
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
 ENTRYPOINT ["/usr/local/bin/pentest-tool"]

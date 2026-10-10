@@ -34,9 +34,14 @@ export interface ReconTechniqueSpec {
 }
 export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Object.freeze({
   port_scan: {
-    defaults: { scope: 'top100', ports: 'none', ping: 'skip' },
+    defaults: { scope: 'top100', ports: 'none', ping: 'skip', restrict_to_scope: 'false' },
     required: [],
-    enums: { scope: ['top100', 'top1000', 'common_services', 'full_tcp'], ping: ['syn', 'connect', 'skip'] },
+    enums: {
+      scope: ['top100', 'top1000', 'common_services', 'full_tcp'],
+      ping: ['syn', 'connect', 'skip'],
+      // 只让模型在"要不要算交集"上二选一；`ping` 也在这里收窄取值域。
+      restrict_to_scope: ['true', 'false'],
+    },
   },
   service_probe: {
     defaults: { intensity: 'light' },

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@a95b0affb2cd：6 块原文配方逐条实跑（靶标 fx-web 172.29.0.2:8080）——①`-sS -Pn -p 8080 -oN /tmp/alive.txt` → `Host is up` + `8080/tcp open`（0.17s，rc=0）；占位符换整份声明目标 `172.29.0.2-7 -p 8080,8443,9000` 时 6/6 up、`.2:8080/.3:8443/.4:9000` open（0.18s）；②`-sT -Pn --top-ports 200 -oN` → 8080 open、199 closed（0.05s）；③`-sV --version-light -p 8080` → `SimpleHTTPServer 0.6 (Python 3.10.21)`；④`--script=banner,http-title,http-headers` 有输出但**无** `banner:` 段（http-title=fixture、Server: SimpleHTTP/0.6 Python/3.10.21）；⑤`arp-scan -I eth0 172.29.0.0/16` → 12 台含 MAC（263s，248 主机/秒）、`fping -a -q` 打印 6 台存活但 rc=1（列表含 1 台不可达，非失败）、`nbtscan -r 172.29.0.0/24` → `172.29.0.7 DC1 <server>`、`traceroute -n -m 5 172.30.0.2` 第 1 跳即网关 172.29.0.1 后全 `*`（跨网段须经跳板）、`mtr -n -r -c 5 172.29.0.2` 单跳 0% 丢包；⑥`tshark -i eth0 -a duration:5 -w /tmp/cap.pcap` 抓包 + 同一条命令内读回 → 24 包含 `GET /index.html HTTP/1.1` 与 `HTTP/1.0 200 OK`（cap/read rc=0；仅有 `cap_set_proc()` 告警）。历史：沙箱实测@a95b0affb2cd：5 块照跑通过（8080 open、网段 6 台存活、top-200、--version-light、NSE 三脚本）；/24 扫 top-200 达 900s 属耗时非语法错。2026-10-06 补第 5/6 步：arp-scan /24 得 9 台、fping 2 台、traceroute 1 跳、masscan 命中 .2、nbtscan 无名字、tshark 34 包"
+  smoked: "沙箱实测@266173b38d52：6 块原文配方逐条实跑（靶标 fx-web 172.29.0.2:8080）——①`-sS -Pn -p 8080 -oN /tmp/alive.txt` → `Host is up` + `8080/tcp open`（0.17s，rc=0）；占位符换整份声明目标 `172.29.0.2-7 -p 8080,8443,9000` 时 6/6 up、`.2:8080/.3:8443/.4:9000` open（0.18s）；②`-sT -Pn --top-ports 200 -oN` → 8080 open、199 closed（0.05s）；③`-sV --version-light -p 8080` → `SimpleHTTPServer 0.6 (Python 3.10.21)`；④`--script=banner,http-title,http-headers` 有输出但**无** `banner:` 段（http-title=fixture、Server: SimpleHTTP/0.6 Python/3.10.21）；⑤`arp-scan -I eth0 172.29.0.0/16` → 12 台含 MAC（263s，248 主机/秒）、`fping -a -q` 打印 6 台存活但 rc=1（列表含 1 台不可达，非失败）、`nbtscan -r 172.29.0.0/24` → `172.29.0.7 DC1 <server>`、`traceroute -n -m 5 172.30.0.2` 第 1 跳即网关 172.29.0.1 后全 `*`（跨网段须经跳板）、`mtr -n -r -c 5 172.29.0.2` 单跳 0% 丢包；⑥`tshark -i eth0 -a duration:5 -w /tmp/cap.pcap` 抓包 + 同一条命令内读回 → 24 包含 `GET /index.html HTTP/1.1` 与 `HTTP/1.0 200 OK`（cap/read rc=0；仅有 `cap_set_proc()` 告警）。历史：沙箱实测@266173b38d52：5 块照跑通过（8080 open、网段 6 台存活、top-200、--version-light、NSE 三脚本）；/24 扫 top-200 达 900s 属耗时非语法错。2026-10-06 补第 5/6 步：arp-scan /24 得 9 台、fping 2 台、traceroute 1 跳、masscan 命中 .2、nbtscan 无名字、tshark 34 包"
 ---
 
 # 网络面清点（recon-network-surface）
@@ -54,8 +54,9 @@ metadata:
 
 | 本 skill 的步骤 | 用这个 technique | 关键参数 |
 |---|---|---|
-| 1 可达性 | `port_scan` | `scope=top100`、`ping=syn` |
+| 1 可达性 | `port_scan` | `scope=top100`、**`ping=skip`**（`-Pn`；**别用 `ping=syn`**，理由见「常见失败」） |
 | 2 端口清点 | `port_scan` | `scope=top1000`（或 `ports=8000,8080-8090` 显式表达式；`none` 表示按档位） |
+| 2b 档位 ∩ 授权段 | `port_scan` | `scope=top100` + `ports=<授权端口>` + **`restrict_to_scope=true`**：容器算交集并回报 `used_ports`（范围只授权少数端口时的正解） |
 | 3 服务指纹 | `service_probe` | `ports=<上一步 open 的端口>`、`intensity=light` |
 | 4 只读脚本核验 | `nse_safe` | `port=<端口>`、`scripts=http-title,http-headers`（白名单由沙箱强制） |
 
@@ -126,6 +127,9 @@ date -u +%FT%TZ && tshark -i eth0 -a duration:5 -w /tmp/cap.pcap && tshark -r /t
 | 全部超时、`0 hosts up` | 目标没接进 `internalNetwork`（沙箱只能到达同网成员） | 报告「目标不可达」，请人类确认目标已接入；**不要**改用外网地址 |
 | `-sS` 报 requires root | 容器没跑在 root（部署回退过） | 报告环境问题，改用 `-sT` 继续，别硬试 |
 | 结果比目标真实开放面少很多 | 范围只声明了部分端口 | 把「覆盖缺口」写进报告，请人类决定是否扩范围 |
+| **`open_ports=0` 而同端口单扫是 open** | `ping=syn` 是「先做主机发现（`-PS` 探 80）」：目标**丢弃探针**就被判 down ⇒ **一个端口都没扫**。输出形态与"扫了但全关"同形 | 换 `ping=skip`（`-Pn`）重扫。**读输出时先看 `host: … state=down` 与 `summary` 的 `ports_scanned`**：`state=down` 时 `open_ports=0` 是漏报形态，不是结论 |
+| 想扫 top-100，但范围只授权了少数端口 ⇒ 档位被闸门拒 | top-N 的端口集由 nmap 决定，宿主侧不可枚举，无法逐个核验授权 | 用 `restrict_to_scope=true` 让**容器**算 `top-N ∩ ports`（回报 `used_ports`）；空交集会明说 `scope_intersection: empty` 且不扫描 |
+| 要复核一次扫描，只有摘要 | 摘要按设计只留 path/status/length 等字段 | 读 `raw_evidence:` 给出的路径（`/work/evidence/<目标>/…`）；没有挂载根时输出里会给受限的 `raw_head` |
 
 ## 不做的事
 - 不做漏洞利用、不投载荷、不 `--script=exploit` 类脚本。

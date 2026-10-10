@@ -124,10 +124,12 @@ describe('结构化动作模板族：注册表与类别', () => {
 describe('结构化动作模板族：参数校验（模板声明的参数即必填）', () => {
   it('缺参数、多参数、枚举越界、端口表达式非法都被拒', () => {
     const cases: readonly [string, Readonly<Record<string, string | number>>][] = [
-      ['recon_port_scan', { scope: 'top100', ping: 'skip' }], // 缺 ports
-      ['recon_port_scan', { scope: 'top100', ports: 'none', ping: 'skip', depth: 2 }], // 多参数
-      ['recon_port_scan', { scope: 'top10', ports: 'none', ping: 'skip' }], // 枚举越界
-      ['recon_port_scan', { scope: 'top100', ports: '80; rm -rf /', ping: 'skip' }], // 端口表达式非法
+      // 注意：除"缺 ports"那条外都带全 `restrict_to_scope`，否则第一条错误会变成
+      // "缺少参数 restrict_to_scope"，把"多参数/枚举越界/表达式非法"这三条测名的意义漂掉。
+      ['recon_port_scan', { scope: 'top100', ping: 'skip' }], // 缺 ports（也缺 restrict_to_scope）
+      ['recon_port_scan', { scope: 'top100', ports: 'none', ping: 'skip', restrict_to_scope: 'false', depth: 2 }], // 多参数
+      ['recon_port_scan', { scope: 'top10', ports: 'none', ping: 'skip', restrict_to_scope: 'false' }], // 枚举越界
+      ['recon_port_scan', { scope: 'top100', ports: '80; rm -rf /', ping: 'skip', restrict_to_scope: 'false' }], // 端口表达式非法
       ['vuln_http_check', { port: 443, scheme: 'auto', check: 'sql_injection' }], // 不存在的核验项
       ['vuln_exposure_check', { port: 80, scheme: 'http', paths: 'env,passwd' }], // 暴露项越界
     ];
@@ -137,7 +139,10 @@ describe('结构化动作模板族：参数校验（模板声明的参数即必�
   });
 
   it('显式取值表达「不指定」与「按默认」：ports=none、sni=none 合法', () => {
-    assert.equal(validateForTest('recon_port_scan', { scope: 'top1000', ports: 'none', ping: 'connect' }).ok, true);
+    assert.equal(
+      validateForTest('recon_port_scan', { scope: 'top1000', ports: 'none', ping: 'connect', restrict_to_scope: 'false' }).ok,
+      true,
+    );
     assert.equal(validateForTest('recon_tls_inspect', { port: 443, sni: 'none', enumerate_protocols: 'on' }).ok, true);
     assert.equal(validateForTest('vuln_tls_weakness', { port: 443, sni: 'none', enumerate_protocols: 'on' }).ok, true);
     // 核验必须真的核验：工具层把 enumerate_protocols 收窄成 on（模板允许 off 但工具不放行）。
@@ -570,6 +575,40 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
       '签名比对不得解码：签名与正文同为 bytes，混用 str 会 TypeError（这条崩只在命中候选时出现）',
     );
     assert.match(cmpLine, /body\.lower\(\)/, '应按 bytes 比对（body.lower()）');
+  });
+
+  it('port_scan 的 restrict_to_scope：宿主声明 / 容器读取 / 交集取自镜像 nmap-services（2026-10-10）', () => {
+    const spec = registry.get('recon_port_scan');
+    assert.ok(spec !== undefined);
+    const declared = spec.template.parameters.find((p) => p.name === 'restrict_to_scope');
+    assert.ok(declared !== undefined && declared.kind === 'enum', '模板必须声明 restrict_to_scope（枚举）');
+    assert.match(spec.commandTemplate, /restrict_to_scope=\{restrict_to_scope\}/, '新参数必须进入命令形态');
+    assert.ok('restrict_to_scope' in spec.carries, '新参数必须有 carries（否则注册期就报错）');
+    assert.equal(
+      STRUCTURED_TECHNIQUES.recon.port_scan?.defaults.restrict_to_scope,
+      'false',
+      'technique 默认必须是 false：默认行为不变（显式 ports 仍整个取代档位）',
+    );
+    // 容器侧：读到该参数、且交集取自 nmap 自己的频率表（不许手抄清单）。
+    const verbStart = DISPATCHER.indexOf('def port_scan(');
+    const verbBody = DISPATCHER.slice(verbStart, DISPATCHER.indexOf('\ndef ', verbStart + 1));
+    assert.match(verbBody, /restrict_to_scope/, '容器侧未读取 restrict_to_scope');
+    assert.match(verbBody, /top_ports\(/, '容器侧必须自己算 top-N（不是让模型列端口）');
+    assert.match(DISPATCHER, /NMAP_SERVICES_FILE = "\/usr\/share\/nmap\/nmap-services"/, 'top-N 的来源必须是镜像自带的 nmap-services');
+    assert.match(verbBody, /used_ports:/, '交集结果必须回报（可复核）');
+  });
+
+  it('nmap 动词的零命中必须可分辨：hosts_up/ports_scanned 进 summary，全 down 时给 warn（2026-10-10）', () => {
+    // 实况：`host: … state=down` + `summary: open_ports=0` 与"扫了 33 个端口全关"**同形**，
+    // 操作者差点把漏报写进报告的"未开放"。修法是把两种情形在输出里分开喊出来。
+    const body = DISPATCHER.slice(DISPATCHER.indexOf('def nmap_ports('), DISPATCHER.indexOf('\ndef port_scan('));
+    assert.match(body, /ports_scanned=/, 'summary 必须带"扫了几个端口"（nmap 自报的 scaninfo 计数）');
+    assert.match(body, /hosts_up=/, 'summary 必须带主机判定计数');
+    assert.match(body, /if hosts_up == 0:/, '全 down 时必须走显式告警分支（否则就是静默漏报）');
+    assert.match(body, /ping=skip/, '告警要给出可执行的下一步（换 -Pn 重扫）');
+    assert.match(body, /land_bytes\(|report_evidence\(/, 'nmap 动词必须落原始件并回报路径');
+    assert.match(DISPATCHER, /EVIDENCE_ROOT = "\/work"/, '原始件的根必须是挂载根 /work');
+    assert.match(DISPATCHER, /def compress_ports\(/, '交集要能压成紧凑端口表达式（可复核）');
   });
 
   it('每个结构化动词的超时：容器默认表与宿主模板一致（port_scan 曾是 300s vs 900s）', () => {

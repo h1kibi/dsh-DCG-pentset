@@ -75,11 +75,23 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         type: 'enum',
         required: false,
         default: 'skip',
-        description: '主机发现方式',
+        description: '**主机存活判定**（不是扫描类型）',
         options: [
-          { value: 'syn', note: 'SYN ping（快，需 NET_RAW，本沙箱可用）' },
-          { value: 'connect', note: 'TCP connect（慢但通用）' },
-          { value: 'skip', note: '跳过主机发现，直接扫端口（默认）' },
+          { value: 'syn', note: '先做 SYN 主机发现（-PS 探 80）。目标丢弃探针时会被判 down ⇒ **一个端口都不扫**，报告里是 `state=down` + `open_ports=0` ——那是漏报形态，不是"全关"' },
+          { value: 'connect', note: 'TCP connect 扫描（-sT -Pn）' },
+          { value: 'skip', note: '跳过存活判定直接扫（-Pn，默认，最不容易漏）' },
+        ],
+      },
+      {
+        name: 'restrict_to_scope',
+        type: 'enum',
+        required: false,
+        default: 'false',
+        description:
+          '**交集扫描**：true 时把档位限制到 `ports` 里的授权集合（容器算 `top-N ∩ ports` 并回报 `used_ports`）。用于"要扫 top-100，但范围只授权了少数端口"；**必须同时给 `ports`**，空交集会明确报 `scope_intersection: empty` 且不扫描',
+        options: [
+          { value: 'true', note: '算 top-N ∩ ports（nmap-services 频率列，与 nmap 自身取舍逐位一致）' },
+          { value: 'false', note: '不交集（默认）；显式 ports 会**整个取代**档位' },
         ],
       },
     ],

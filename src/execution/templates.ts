@@ -679,6 +679,11 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         // 因此「不指定端口」必须是一个**显式取值**，而不是省略。
         { name: 'ports', kind: 'string', pattern: '^(none|\\d{1,5}(-\\d{1,5})?(,\\d{1,5}(-\\d{1,5})?){0,63})$' },
         { name: 'ping', kind: 'enum', values: ['syn', 'connect', 'skip'] },
+        // 交集扫描（2026-10-10 操作者实测 P0）：档位在宿主侧不可枚举 ⇒ 闸门只能按"不可枚举"拒，
+        // 而"算交集"的成本原本被推给模型（模型在沙箱里查不到 top-N 清单 ⇒ 靠记忆列端口 = 静默漏报）。
+        // 打开它：容器用 **nmap-services 频率列**算 `top-N ∩ ports`，并回报 `used_ports:`。
+        // 闸门口径不变——`ports` 仍是宿主逐端口核验过的授权集合，交集是它的子集。
+        { name: 'restrict_to_scope', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       // ── 为什么本模板的两个上限**高于**其余模板（2026-10-08 自查）──
@@ -701,8 +706,9 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       scope: '扫描档位：top100 / top1000 / common_services（约 30 个常见服务端口）/ full_tcp（全 65535，需人类显式选择）',
       ports: 'none 表示按 scope；也可以给显式表达式（如 80,443,8000-8100，最多 64 段）——此时 scope 被忽略。**表达式里的每个端口都必须落在范围条目的已授权端口内**（越界即整条拒绝）',
       ping: 'syn=SYN 扫描（-PS，需 NET_RAW）/ connect=全连接（-sT）/ skip=不判存活直接扫（-Pn）',
+      restrict_to_scope: '**true 时把档位限制到 `ports` 指定的授权集合**：容器算 `top-N ∩ ports` 并在报告里给出 `used_ports`（N 取自镜像 nmap-services 频率列，与 nmap 自己的取舍逐位一致）。用于「要扫 top-100，但范围只授权了少数端口」。**需要同时给出 `ports` 表达式**（用范围条目里已授权的端口）；交集为空时报 `scope_intersection: empty` 且**不扫描**（那不是「0 开放」）',
     },
-    commandTemplate: 'port_scan target={target} scope={scope} ports={ports} ping={ping}',
+    commandTemplate: 'port_scan target={target} scope={scope} ports={ports} ping={ping} restrict_to_scope={restrict_to_scope}',
   },
   {
     template: {

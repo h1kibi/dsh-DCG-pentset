@@ -901,7 +901,18 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         description: '端口表达式（service_probe 必填；port_scan 可选，none 表示按 scope 档位）',
       },
       scope: { type: 'string', enum: ['top100', 'top1000', 'common_services', 'full_tcp'], description: 'port_scan 的扫描档位' },
-      ping: { type: 'string', enum: ['syn', 'connect', 'skip'], description: 'port_scan 的存活判定方式' },
+      ping: {
+        type: 'string',
+        enum: ['syn', 'connect', 'skip'],
+        description:
+          'port_scan 的**主机存活判定**（不是扫描类型）：syn=`-sS -PS`（先探 80 判存活；目标丢弃探针会被判 down ⇒ **一个端口都不扫**，报告里以 `host: … state=down` + `open_ports=0` 呈现——那是漏报形态，不是"全关"）；connect=`-sT -Pn`；skip=`-Pn`（**默认**，不判存活直接扫，最不容易漏）',
+      },
+      restrict_to_scope: {
+        type: 'string',
+        enum: ['true', 'false'],
+        description:
+          'port_scan 的**交集扫描**：true 时把档位限制到 `ports` 里的授权集合（容器算 `top-N ∩ ports`，报告给出 `used_ports`）。用于「要扫 top-100，但范围只授权了少数端口」——否则档位会被范围闸门按"不可枚举"拒绝，而你在沙箱里查不到 nmap 的 top-N 清单。**必须同时给 `ports` 表达式**',
+      },
       intensity: { type: 'string', enum: ['light', 'normal'], description: 'service_probe 的指纹强度' },
       scripts: { type: 'string', description: 'nse_safe 的只读脚本名（逗号分隔，白名单由沙箱强制）' },
       sni: { type: 'string', description: 'tls_inspect 的 SNI；none 表示用目标名' },
@@ -960,6 +971,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         ...(args.ports === undefined ? {} : { ports: args.ports }),
         ...(args.scope === undefined ? {} : { scope: args.scope }),
         ...(args.ping === undefined ? {} : { ping: args.ping }),
+        ...(args.restrict_to_scope === undefined ? {} : { restrict_to_scope: args.restrict_to_scope }),
         ...(args.intensity === undefined ? {} : { intensity: args.intensity }),
         ...(args.scripts === undefined ? {} : { scripts: args.scripts }),
         ...(args.sni === undefined ? {} : { sni: args.sni }),
@@ -1152,10 +1164,20 @@ export function createWorkerTools(deps: WorkerToolDeps) {
    * （范围版本 0）里连 `ls /work` 都跑不了——「读你自己的作业资料」与目标无关，
    * 却被目标闸门挡住。本工具不接触任何目标，只用一条路径约束（必须落在挂载根内）。
    */
+  // **把实际挂载根内联进描述**（2026-10-10 操作者实测 P1）：多根部署写新文件要求带容器路径前缀，
+  // 而"是哪几个根"此前只能先 `op=list` 才知道——工具描述里写清楚，省掉一次往返与一次踩坑。
+  const mountRoots = deps.workdir?.roots ?? [];
+  const rootsFact =
+    mountRoots.length === 0
+      ? '**本部署没有挂载根**（`sandbox.mounts` 为空）：本工具可调用但没有可读写的目录。'
+      : `**本部署的挂载根**：${mountRoots
+          .map((root) => `\`${root.containerPath}\`${root.readOnly === true ? '（只读）' : '（读写）'}`)
+          .join('、')}。`;
   const workdirTool = defineTool({
     name: 'pentest_workdir',
     description:
       '**读写人类挂进沙箱的作业目录**（profile 里 `sandbox.mounts` 声明的宿主目录；容器内路径也在返回值里给出）。' +
+      rootsFact +
       '**它不经过范围闸门**：空范围作业（范围版本 0）里 `pentest_exec` 会被 out_of_scope 拒绝，' +
       '而本工具照常可用——读作业资料（资产清单、既有报告、目标说明、人类放进去的任何文件）就该用它。' +
       `op：\`list\` 列目录、\`read\` 读文本（超 ${Math.round(WORKDIR_READ_LIMIT_BYTES / 1024)}KiB 会截断并标注）、` +
