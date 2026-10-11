@@ -1389,10 +1389,15 @@ export class WorkflowCore {
     );
     const recorded = written.rows[0]?.dsh_session_id;
     if (recorded !== input.dshSessionId) {
-      throw new Error(
+      // **必须带契约码**（2026-10-11 质检 P1）：无码的 `Error` 在控制台会变成 `console/internal`
+      // 且原始 message 不交给客户端，在 Agent 侧会变成未捕获异常——自检的全部价值（把"绑歪"在创建
+      // 时刻炸成**可判定**的拒绝）就没了。这里沿用本文件既有的语义最接近的码：`classification_rejected`
+      // （"请求与库里的身份对不上"，与 `createDshSessionOrMarkFailed` 对会话标识不一致的处置同一路）。
+      throw new WorkflowRejection(
+        'classification_rejected',
         `会话绑定自检失败：会话行 ${input.id} 回读到的 dsh_session_id=${JSON.stringify(recorded)}` +
           `，与调用方给出的 ${JSON.stringify(input.dshSessionId)} 不一致` +
-          '（控制台阶段卡会读不到状态；请检查插入语句的列对齐与触发器）',
+          '（控制台阶段卡会读不到状态）。检查：会话标识是否由同一来源派生、插入语句列是否对齐、是否有触发器改写该列。',
       );
     }
   }

@@ -73,3 +73,37 @@ docker run --rm --network none --entrypoint bash pentest-tools -c '<3b-① 原�
 
 **教训（写下来）**：本轮两条真缺陷都是"**测了零件、没测流程**"——组件渲染测过了、效应里的写序没测。
 第二次追补的修法把"谁说话"收成一条可穷举断言的纯函数，就是为了让这类顺序问题以后只能被结构上排除，而不是靠人盯。
+
+## 追补三：ToolWfAudit（4 条：2 条已在 `f0ee60c` 修掉、2 条新修）
+
+| # | 发现 | 状态 | 处置 |
+|---|---|---|---|
+| P1 | `open_without_version` 对**不做版本探测**的 `port_scan` 每次命中都误报 | **已在 `f0ee60c` 修掉**（它的修法与实现逐字一致：`nmap_ports(..., *, version_scan=False)`，只在 `service_probe` 传 `True`；**不**扫 argv 里的 `-sV` 字符串当闸门） | 无需再改；本轮**把当时声称、实际没落进测试的三条断言补上**（见下"更正二"） |
+| P1 | `port_state_trust` 把只有 1–2 个端口的正常扫描判成 `suspect` | **已在 `f0ee60c` 修掉**（`PORT_STATE_TRUST_MIN_SAMPLE = 8`；且**没有**按"是否显式 ports"分叉——它明确建议别那么分） | 同上 |
+| P2 | **多主机比例口径错**：`ports_scanned` 来自 `scaninfo/numservices`（每台扫多少），而 `open_ports` **跨主机累加** ⇒ 网段扫描（CIDR）算出 >1 的比例并误报（实测桩：45 台各 1 口、36 台开 ⇒ 36/1 ⇒ 假 suspect） | **新修** | 分母改为 `ports_scanned_effective = ports_scanned × max(1, hosts_up)`（nmap 对整段用同一组端口扫每台在线主机）；告警与 summary 都写明"按在线主机折算"；单机口径与旧版逐字一致。冒烟：两台夹具各开 1 口、扫 `/29`（4 台在线、2 口/台）⇒ `open_ports=2 ports_scanned=2 ports_scanned_effective=8 port_state_trust=ok`（**修前是 2/2=1.00 ⇒ 假 suspect**）；真全开（9/9 单机）仍是 `suspect` |
+| P1 | **绑定自检抛无码 `Error`**：控制台折成 `console/internal` 且原始 message 不交给客户端；Agent 侧变成未捕获异常（不是带 `next_action` 的 blocked 载荷）⇒ 自检的全部价值（把"绑歪"炸成**可判定**的拒绝）没了 | **新修** | 改为 `throw new WorkflowRejection('classification_rejected', …)`（沿用本文件既有语义最接近的码，不新造码）；消息里写明三条排查方向。锁：源码锁断言"必须是 `WorkflowRejection(classification_rejected, …)` 且不得退回无码 `Error`" |
+
+`verified_ok`（审计确认没问题的五条）：`insertRetrySession` 走同一段自检（生产 `insert into pentest.worker_sessions` 只此一条）；
+同事务多一次主键回读的代价可接受；`hosts_up==0` 时 `port_state_trust=unknown` 且不与"全 down"告警打架；
+单机 TCP 下 `ports_scanned` 与 `open_ports` 同口径；`nse_run` 不走 `nmap_ports`，不沾这两条误报。
+
+## 更正二：又一次"提交信息声称加了锁、实际没落进测试"
+
+`f0ee60c` 的消息里写了"`version_scan` 闸门三条、`PORT_STATE_TRUST_MIN_SAMPLE` 闸门三条"，
+但 `git grep` 复核发现它们**并不存在**（只有一条常量存在性检查在 `test/sandbox-spec-locks.test.ts`）。
+本轮把它们**真补上**，并补多主机分母的三条断言：
+
+```ts
+assert.match(body, /version_scan: bool = False/, …);                     // 形参存在
+assert.match(body, /if version_scan and open_without_version > 0:/, …);   // 告警挂在闸门上
+assert.match(DISPATCHER, /version_scan=True,/, …);                        // service_probe 真的传了
+assert.match(body, /'n\/a' if not version_scan else open_without_version/, …); // 未探版本写 n/a
+assert.match(DISPATCHER, /PORT_STATE_TRUST_MIN_SAMPLE = \d+/, …);        // 常量存在
+assert.match(body, /ports_scanned_effective >= PORT_STATE_TRUST_MIN_SAMPLE/, …); // 过样本闸门
+assert.match(body, /ports_scanned_effective = ports_scanned \* max\(1, hosts_up\)/, …); // 分母按主机折算
+assert.match(body, /ratio = open_ports \/ ports_scanned_effective/, …);  // 比例用折算分母
+assert.match(body, /ports_scanned_effective=\{ports_scanned_effective\}/, …); // summary 给出折算分母
+```
+
+**两次同类的过度声称**（`81f66bd` 一次、`f0ee60c` 一次）已写进本报告：这是本仓库最不能接受的错误形态
+（把没做的事写成做了），所以这一次的每条断言都用 `git grep` 复核过存在性，并且都跑过（125/125 绿）。

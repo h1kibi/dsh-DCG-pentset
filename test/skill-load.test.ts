@@ -18,6 +18,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 
 import { PgWorkerTools } from '../src/memory/pg-worker-tools.ts';
@@ -317,4 +318,20 @@ describe('loadSkill 装载冻结（真实 PostgreSQL）', { skip: DATABASE_URL =
     const result = await tools.loadSkill({ workerSessionId: id, skillName: name });
     assert.notEqual(result.skill, null, '冻结正确的会话必须能读到正文');
   });
+});
+
+test('绑定自检必须抛**带契约码**的拒绝（无码 Error 会变成 console/internal，诊断被吞）', async () => {
+  // 2026-10-11 质检 P1：`insertWorkerSession` 的自检原先 `throw new Error(...)`（无码）——
+  // 控制台把它折成 `console/internal` 且**原始 message 不交给客户端**，Agent 侧则变成未捕获异常
+  // （不是带 `next_action` 的 blocked 载荷）⇒ 自检的全部价值（把"绑歪"炸成**可判定**的拒绝）就没了。
+  const source = readFileSync(new URL('../src/workflow/core.ts', import.meta.url), 'utf8');
+  assert.match(
+    source,
+    /throw new WorkflowRejection\(\s*'classification_rejected',\s*`会话绑定自检失败/,
+    '自检必须以 WorkflowRejection(classification_rejected, …) 抛出',
+  );
+  assert.ok(
+    !/throw new Error\(\s*`会话绑定自检失败/.test(source),
+    '不得退回无码 Error（那会把诊断吞成 console/internal）',
+  );
 });

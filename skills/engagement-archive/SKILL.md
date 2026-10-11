@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES Pre-engagement, PTES Reporting, NIST SP 800-115 记录纪律]
-  smoked: "沙箱实测@19cd12b3b93c：第 1–6 步的**沙箱侧原文配方**在夹具档案上实跑（`docker/lab-archive` 只读挂到 /mnt/engagement、`/work` 可写、`--network none`，命令带 `set -e` 一次跑完）：①`ls -la` 概览（根目录 3 项＝1 文件 + 2 目录；递归共 4 份文件）；②`find -printf %TY-%Tm-%Td %TH:%TM %s %p | sort -r` 取最近 3 份（handoff-2.md 1115B 证书、报告等）；③四段关键词 `grep -rn -E '结论|线索|排除|时效|…'` 命中 **8 行**（含 `handoff-2.md:11:## 时效`；第八轮质检核过：去掉 `|时效` 是 7 行）（含 `handoff-2.md:7:## 线索（未证实）`、`notes/证书.md:3: 已轮换…不可复用`、`范围版本：v2`）；④`grep -n -A 4 "^#{1,3} *(结论|排除)"` 抽出结论/排除段；⑤`openssl x509 -noout -subject -dates` 读出 `CN=lab.local notAfter=Oct 18 03:07:17 2026 GMT`（旧 PEM 已轮换）；⑥`cat >> /work/notes/archive-read.md` 落盘四段台账。**宿主侧通道 `pentest_workdir`（op=list/read/search/append）本轮未实跑**（需要活会话）；文中每一步都给了沙箱侧等价命令。"
+  smoked: "沙箱实测@41cae6ec4330：第 1–6 步的**沙箱侧原文配方**在夹具档案上实跑（`docker/lab-archive` 只读挂到 /mnt/engagement、`/work` 可写、`--network none`，命令带 `set -e` 一次跑完）：①`ls -la` 概览（根目录 3 项＝1 文件 + 2 目录；递归共 4 份文件）；②`find -printf %TY-%Tm-%Td %TH:%TM %s %p | sort -r` 取最近 3 份（handoff-2.md 1115B 证书、报告等）；③四段关键词 `grep -rn -E '结论|线索|排除|时效|…'` 命中 **8 行**（含 `handoff-2.md:11:## 时效`；第八轮质检核过：去掉 `|时效` 是 7 行）（含 `handoff-2.md:7:## 线索（未证实）`、`notes/证书.md:3: 已轮换…不可复用`、`范围版本：v2`）；④`grep -n -A 4 "^#{1,3} *(结论|排除)"` 抽出结论/排除段；⑤`openssl x509 -noout -subject -dates` 读出 `CN=lab.local notAfter=Oct 18 03:07:17 2026 GMT`（旧 PEM 已轮换）；⑥`cat >> /work/notes/archive-read.md` 落盘四段台账。**宿主侧通道 `pentest_workdir`（op=list/read/search/append）本轮未实跑**（需要活会话）；文中每一步都给了沙箱侧等价命令。"
 ---
 
 # 既有作业档案的消费（engagement-archive）

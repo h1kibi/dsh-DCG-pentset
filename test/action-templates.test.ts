@@ -663,11 +663,25 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
   });
 
   it('端口状态的可信度：近全开（≥80%）必须给可判定的告警与字段（2026-10-11 外部反馈 D6/§2.3）', () => {
-    // 现场（目标 10.25.27.206）：top-1000 回 1000/1000、1-200 段回 200/200，而带载荷只证实 4 个服务。
+    // 现场（外部反馈的一台带外管理控制器；地址从略）：top-1000 回 1000/1000、1-200 段回 200/200，带载荷只证实 4 个服务。
     // 这类目标上"开放端口数"是伪信号；人不会自己去怀疑比例 ⇒ 工具必须给机器可判的字段 + 处置。
     const body = DISPATCHER.slice(DISPATCHER.indexOf('def nmap_ports('), DISPATCHER.indexOf('\ndef port_scan('));
     assert.match(body, /port_state_trust/, 'summary 必须带 port_state_trust 字段（ok/suspect/unknown）');
-    assert.match(body, /ratio = open_ports \/ ports_scanned/, '比例口径必须写死在容器里（不靠人算）');
+    // 分母必须**按在线主机折算**（2026-10-11 质检 P2）：`open_ports` 跨主机累加，而 `ports_scanned`
+    // 是"每台扫了多少端口" ⇒ 网段扫描（`port_scan` 支持 CIDR）会算出 >1 的比例并误报
+    //（实测桩：45 台各扫 1 口、36 台开 ⇒ 36/1 ⇒ 假 suspect）。
+    assert.match(body, /ports_scanned_effective = ports_scanned \* max\(1, hosts_up\)/, '分母 = numservices × 在线主机数');
+    assert.match(body, /ratio = open_ports \/ ports_scanned_effective/, '比例必须用折算后的分母');
+    assert.match(body, /ports_scanned_effective=\{ports_scanned_effective\}/, 'summary 要给出折算分母（可复核比例怎么算的）');
+    // 两条**闸门**（2026-10-11 复检：此前提交信息声称加了这两组断言，实际没落进测试）：
+    assert.match(body, /version_scan: bool = False/, 'nmap_ports 必须有"是否请求了版本探测"的形参');
+    assert.match(body, /if version_scan and open_without_version > 0:/, '"拿不到版本信息"的告警必须挂在版本探测闸门上');
+    // `service_probe` 定义在 `port_scan` **之后**（不在上面的 `body` 切片里）⇒ 这条查全量源码。
+    assert.match(DISPATCHER, /version_scan=True,/, 'service_probe（带 -sV）必须显式传 version_scan=True');
+    assert.match(body, /'n\/a' if not version_scan else open_without_version/, '没探版本时 summary 写 n/a，不写 0');
+    // 常量定义在 `def nmap_ports(` **之前**（紧随其上的注释块）⇒ 同样查全量源码。
+    assert.match(DISPATCHER, /PORT_STATE_TRUST_MIN_SAMPLE = \d+/, '最小样本量必须是常量（可检索）');
+    assert.match(body, /ports_scanned_effective >= PORT_STATE_TRUST_MIN_SAMPLE/, '比例判定必须过最小样本量闸门');
     assert.match(body, /ratio >= 0\.8/, '阈值 0.8 必须显式（近全开）');
     assert.match(body, /port_state_trust = "suspect" if ratio >= 0\.8 else "ok"/, '判定必须可机器复核');
     assert.match(body, /端口状态可能是伪信号/, '可疑时必须显式告警');
