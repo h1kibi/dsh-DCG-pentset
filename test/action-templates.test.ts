@@ -662,6 +662,23 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     assert.match(DISPATCHER, /CHUNK_BYTES_LIMIT = \d+/, 'chunk 字节必须有常量上限');
   });
 
+  it('端口状态的可信度：近全开（≥80%）必须给可判定的告警与字段（2026-10-11 外部反馈 D6/§2.3）', () => {
+    // 现场（目标 10.25.27.206）：top-1000 回 1000/1000、1-200 段回 200/200，而带载荷只证实 4 个服务。
+    // 这类目标上"开放端口数"是伪信号；人不会自己去怀疑比例 ⇒ 工具必须给机器可判的字段 + 处置。
+    const body = DISPATCHER.slice(DISPATCHER.indexOf('def nmap_ports('), DISPATCHER.indexOf('\ndef port_scan('));
+    assert.match(body, /port_state_trust/, 'summary 必须带 port_state_trust 字段（ok/suspect/unknown）');
+    assert.match(body, /ratio = open_ports \/ ports_scanned/, '比例口径必须写死在容器里（不靠人算）');
+    assert.match(body, /ratio >= 0\.8/, '阈值 0.8 必须显式（近全开）');
+    assert.match(body, /port_state_trust = "suspect" if ratio >= 0\.8 else "ok"/, '判定必须可机器复核');
+    assert.match(body, /端口状态可能是伪信号/, '可疑时必须显式告警');
+    assert.match(body, /以「有协议级应答」为真实服务面的判据/, '告警要给出可执行的处置（换判据）');
+    assert.match(body, /recon-network-surface 的第 3b 步/, '告警要指向技能里的具体步骤');
+    // D6 的另一半：`open` 但**拿不到版本信息**的端口（`unknown`/`tcpwrapped`）不许当已知服务。
+    assert.match(body, /open_without_version/, 'summary 必须带 open_without_version（可判字段）');
+    assert.match(body, /version_info=none/, '逐端口行要显式标"没有版本信息"，别让人从缺列里读结论');
+    assert.match(body, /拿不到任何版本信息/, '有这类端口时必须显式告警');
+  });
+
   it('零命中的判别字段：summary 里 `scanned=` 必须把「没扫」与「扫了全关」分开（2026-10-11）', () => {
     const body = DISPATCHER.slice(DISPATCHER.indexOf('def nmap_ports('), DISPATCHER.indexOf('\ndef port_scan('));
     assert.match(body, /scanned=\{scanned\}|scanned=\{/, '正常收尾必须带 scanned=');

@@ -616,6 +616,77 @@ export function intakeFallbackOf(
   return 'hidden';
 }
 
+/**
+ * 绑定缺失时的**降级取数**（外部反馈 D1）——从控制台快照里找出"人类正在看的那个作业"。
+ *
+ * 为什么必须有：卡片只在"按 dsh 会话 id 查到 Worker 绑定"时渲染，绑定一断，**推进按钮就没有落点**
+ * （另一个落点、交接面板，已随 2026-10-09 的面板重构删掉；作业列表也没有推进动作），而 Agent 侧
+ * 又被明令禁止自行起草交接 ⇒ 双向堵死。降级取数用的是**另一条腿**（作业列表 / 控制台的作业快照），
+ * 它不依赖绑定，因此可以把"卡片整张消失"降级成"一条警告 + 照常可推进"。
+ *
+ * 三条纪律（宁可不画，也不猜）：
+ *   1. 只在**恰好一个候选**时降级：人类显式选中的那个；只有一个作业时才自动认领；
+ *      ⇒ 多个作业且没有选中项时返回 `null`（画错作业的推进按钮比不画更糟）；
+ *   2. 快照里的 `state` 必须**属于**那个候选（`engagementId` 相等）——否则状态版本会张冠李戴；
+ *   3. `stateVersion` 必须一起给出：会话卡片没有控制台的作业快照，不传就恒发 0 ⇒ 服务端回
+ *      `stale_state_version`（起稿与确认都会失败，人点了没反应）。
+ */
+export function degradedRunOf(snapshot: {
+  readonly engagements: readonly { readonly id: string; readonly name?: string | null }[];
+  readonly selectedEngagementId: string | null;
+  readonly state: { readonly engagementId: string; readonly stateVersion: number } | null;
+}): { readonly engagementId: string; readonly engagementName: string | null; readonly stateVersion: number } | null {
+  const candidate =
+    snapshot.selectedEngagementId ??
+    (snapshot.engagements.length === 1 ? (snapshot.engagements[0]?.id ?? null) : null);
+  if (candidate === null) return null;
+  const state = snapshot.state;
+  if (state === null || state.engagementId !== candidate) return null;
+  const summary = snapshot.engagements.find((item) => item.id === candidate);
+  return {
+    engagementId: candidate,
+    engagementName: summary?.name ?? null,
+    stateVersion: state.stateVersion,
+  };
+}
+
+/**
+ * 运行快照 → 视图形状（两条腿共用：绑定正常的那条，与 D1 的降级那条）。
+ *
+ * 抽出来是因为"字段搬错一个"的后果在界面上都表现为「点了没反应」：`workerSessionId` 必须是**会话行 id**
+ * （`requestHandoffDraft` 要它），`dshSessionId` 是会话**内容**的标识，两者不可互换。
+ */
+export function runViewOf(snapshot: {
+  readonly mainStatus: MainStatus;
+  readonly currentPhase: Phase | null;
+  readonly active: {
+    readonly id: string;
+    readonly dshSessionId: string;
+    readonly status: SessionStatus;
+    readonly statusNote: string | null;
+    readonly phase: Phase;
+  } | null;
+}): {
+  readonly mainStatus: MainStatus;
+  readonly currentPhase: Phase | null;
+  readonly active: ActiveSessionView | null;
+} {
+  return {
+    mainStatus: snapshot.mainStatus,
+    currentPhase: snapshot.currentPhase,
+    active:
+      snapshot.active === null
+        ? null
+        : {
+            dshSessionId: snapshot.active.dshSessionId,
+            workerSessionId: snapshot.active.id,
+            status: snapshot.active.status,
+            statusNote: snapshot.active.statusNote,
+            phase: snapshot.active.phase,
+          },
+  };
+}
+
 function IntakePromptBody(props: IntakePromptProps): ReactNode {
   const [facts, setFacts] = useState<IntakePromptFacts | null>(null);
   /**
@@ -656,6 +727,17 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
     readonly currentPhase: Phase | null;
     readonly active: ActiveSessionView | null;
   } | null>(null);
+  /**
+   * 绑定缺失时用**作业列表那条腿**认领到的作业（外部反馈 D1）。
+   *
+   * `null` = 没得降级（没有候选，或快照里没有它的状态）——那时才退回到"这张卡片读不到状态"的说明卡。
+   * 非空时下面的阶段条与推进按钮照常渲染：绑定异常降级成一条警告，而不是掐断流程。
+   */
+  const [derived, setDerived] = useState<{
+    readonly engagementId: string;
+    readonly engagementName: string | null;
+    readonly stateVersion: number;
+  } | null>(null);
   const [advanceBusy, setAdvanceBusy] = useState(false);
   const [advanceError, setAdvanceError] = useState<string | null>(null);
   /**
@@ -690,6 +772,28 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             ? { code: 'client_call_failed', message: '读不到在环状态：控制台调用失败或超时' }
             : null);
           setLookupFailed(status !== null && status.engagementId === null);
+          // 绑定缺失 ⇒ **降级取数**（外部反馈 D1）：从控制台快照里认领"人类正在看的那个作业"
+          // （作业列表那条腿，不依赖绑定），拿它的运行快照渲染阶段条与推进按钮。
+          // 认领不到（多个作业且未选中 / 快照里没有它的状态）才退回说明卡。
+          if (status === null || status.engagementId !== null) {
+            setDerived(null);
+          } else {
+            const target = degradedRunOf(controller.getSnapshot());
+            if (target === null) {
+              setDerived(null);
+            } else {
+              const degraded = await controller.runningSnapshotFor(target.engagementId).catch(() => null);
+              if (cancelled) return;
+              setDerived(target);
+              setRunning(degraded === null ? null : runViewOf(degraded));
+              if (degraded !== null && degraded.active !== null
+                  && (degraded.mainStatus === 'handoff_drafting' || degraded.mainStatus === 'transition_confirmation')) {
+                const draft = await controller.currentHandoffDraft(degraded.active.id).catch(() => null);
+                if (cancelled) return;
+                setHandoffDraft(draft);
+              }
+            }
+          }
           // 条目只在**确实有放行待办**时读：没有待办就没有证据要展示，
           // 而这类读端点在 FORCE RLS 下也是真查询，别让常驻卡片每次轮询都白打一发。
           // 没有待办时读一次运行快照：它同时回答「Agent 在哪」与「要不要把界面切过去」。
@@ -698,21 +802,7 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             ? null
             : await controller.runningSnapshotFor(next.engagementId).catch(() => null);
           if (cancelled) return;
-          setRunning(snapshot === null
-            ? null
-            : {
-                mainStatus: snapshot.mainStatus,
-                currentPhase: snapshot.currentPhase,
-                active: snapshot.active === null
-                  ? null
-                  : {
-                      dshSessionId: snapshot.active.dshSessionId,
-                      workerSessionId: snapshot.active.id,
-                      status: snapshot.active.status,
-                      statusNote: snapshot.active.statusNote,
-                      phase: snapshot.active.phase,
-                    },
-              });
+          setRunning(snapshot === null ? null : runViewOf(snapshot));
           // 交接草稿从**服务端**取回（§7.2）。草稿不能只活在「请求它的那次调用」的返回值里：
           // 草稿那一轮的新消息会让本组件重新挂载，局部状态随之丢失——人类看得见草稿正文，
           // 却找不到确认按钮、也改不了字段（2026-10-05 人类报障）。服务端是唯一事实来源。
@@ -817,9 +907,14 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
         // 「确认 / 取消」带的版本来自 `facts.stateVersion`——不刷新就会带着**起稿前**的版本，
         // 人类点下去只会看到 `stale_state_version`（2026-10-05 实测：我在真机上点取消，
         // 服务端果然没落账，草稿一直停在 draft）。
-        void controller.intakeStatus(dshSessionId).then((status) => {
-          setFacts(intakePromptFacts(status));
-        }).catch(() => undefined);
+        if (derived !== null) {
+          // 降级视图没有 `facts`，重读的是**控制台快照**那条腿（阶段条与版本都从它来）。
+          setRefreshTick((value) => value + 1);
+        } else {
+          void controller.intakeStatus(dshSessionId).then((status) => {
+            setFacts(intakePromptFacts(status));
+          }).catch(() => undefined);
+        }
       })
       .finally(() => { setAdvanceBusy(false); });
   };
@@ -865,15 +960,55 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
     return (
       <div className="pentest-chat-card">
         {fallback === 'lookup' ? (
-          // 与同文件其余卡片同一形制：`Card`（带标题）+ 纯文本正文。
-          // 上一版是裸 <p> 且写了字面 markdown（`**不同源**`）——那是我给界面留下的错，
-          // 人类看到的是两个星号。
-          <Card title="这张卡片读不到状态">
-            <p>
-              按本会话的 dsh 会话 id 反查不到 Worker 会话绑定。上栏的「待你判断」徽标走的是作业列表，
-              与这里不同源——所以会出现「徽标在、卡片不在」。控制台「渗透作业」里仍可继续操作。
-            </p>
-          </Card>
+          // **降级视图**（外部反馈 D1）：绑定缺失，但作业列表那条腿认领到了作业 ⇒ 照常给阶段条与
+          // 推进按钮。文案必须说清"这份数据来自哪条腿"，否则人类会以为绑定是好的。
+          derived !== null && running !== null ? (
+            <Card title="阶段推进（降级视图：会话绑定缺失）">
+              <p>
+                按本会话的 dsh 会话 id **反查不到 Worker 会话绑定**——上栏的「待你判断」徽标走的是作业列表，
+                与绑定不同源。下面的阶段与推进按钮取自作业列表上的这个作业；
+                点之前请确认作业名是你要推进的那一个。
+              </p>
+              {handoffDraft === null ? null : (
+                <HandoffEditor
+                  controller={controller}
+                  engagementId={derived.engagementId}
+                  draft={handoffDraft}
+                  expectedStateVersion={derived.stateVersion}
+                  onClose={() => {
+                    setHandoffDraft(null);
+                    setRefreshTick((value) => value + 1);
+                  }}
+                />
+              )}
+              <PhaseStrip
+                engagementName={derived.engagementName}
+                mainStatus={running.mainStatus}
+                currentPhase={running.currentPhase}
+                statusNote={running.active === null ? null : running.active.statusNote}
+              >
+                <AdvanceAction
+                  mainStatus={running.mainStatus}
+                  currentPhase={running.currentPhase}
+                  {...(handoffDraft === null ? { onAdvancePhase: advance } : {})}
+                  advanceBusy={advanceBusy}
+                  advanceError={advanceError}
+                />
+              </PhaseStrip>
+            </Card>
+          ) : (
+            <Card title="这张卡片读不到状态">
+              <p>
+                按本会话的 dsh 会话 id 反查不到 Worker 会话绑定。上栏的「待你判断」徽标走的是作业列表，
+                与这里不同源——所以会出现「徽标在、卡片不在」。
+              </p>
+              <p>
+                降级推进**不可用**：控制台当前没有选中任何作业（或选中的作业状态读不到），
+                认领不出"要推进哪一个"。请在控制台的「渗透作业」里**选中本作业**，这张卡片会立刻换成
+                可推进的降级视图；绑定本身需要修好（换会话或重新登记）才会回到正常视图。
+              </p>
+            </Card>
+          )
         ) : null}
         {error === null ? null : <ErrorBar code={error.code} message={error.message} />}
       </div>

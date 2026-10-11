@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Risk Rating, MITRE ATT&CK T0040]
-  smoked: "沙箱实测@a18f239589fd：5 块原文照跑（业务标签 @tsv、四维 python 打分、影响×可行性排序、影响陈述、priority.json），逐块 exit=0；步骤 2 复现 fx-api=[3,2,2,1]、deep-svc 因缺 *_basis 被判「缺依据」；步骤 3 本轮修掉——python 每行 split 后末列仍含行尾换行、print 再加一换行使每行后多一空行（cat -A 实测 ^I3$ 后跟 $），改成先去掉行尾换行再 split 后输出干净 3 行、高影响但 feasibility=0 的 ad-dc 仍排末位；步骤 5 的 //0 兜底对缺 impact_total/feasibility 的边 exit=0、排序不受影响（投影字段仍为 null，非缺陷）"
+  smoked: "沙箱实测@d6c21580e6f1：5 块原文照跑（业务标签 @tsv、四维 python 打分、影响×可行性排序、影响陈述、priority.json），逐块 exit=0；步骤 2 复现 fx-api=[3,2,2,1]、deep-svc 因缺 *_basis 被判「缺依据」；步骤 3 本轮修掉——python 每行 split 后末列仍含行尾换行、print 再加一换行使每行后多一空行（cat -A 实测 ^I3$ 后跟 $），改成先去掉行尾换行再 split 后输出干净 3 行、高影响但 feasibility=0 的 ad-dc 仍排末位；步骤 5 的 //0 兜底对缺 impact_total/feasibility 的边 exit=0、排序不受影响（投影字段仍为 null，非缺陷）"
 ---
 
 # 业务影响与优先级（business-impact）

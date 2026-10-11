@@ -289,6 +289,22 @@ describe('loadSkill 装载冻结（真实 PostgreSQL）', { skip: DATABASE_URL =
 
     const row = await pool.query('select skill_freeze, model_route from pentest.worker_sessions where id = $1::uuid', [id]);
     assert.equal(row.rowCount, 1);
+    // **创建后必然可反查**（外部反馈 D1）：`insertWorkerSession` 自带绑定自检，而这条锁把
+    // 不变量写下来——按 dsh 会话 id 必须能反查到刚写的那一行（控制台阶段卡与 loadSkill 都靠它）。
+    // 函数体按 `current_tenant_id()` 过滤（SECURITY DEFINER + 租户在场才返回行），
+    // 所以这里显式把租户上下文摆上（与生产一致），查完立刻还原——否则会污染本文件的其它用例。
+    await pool.query("select set_config('pentest.tenant_id', 't', false)");
+    try {
+      const bound = await pool.query(
+        'select worker_session_id, engagement_id from pentest.worker_session_binding_by_dsh($1)',
+        [`dsh-freeze-${id}`],
+      );
+      assert.equal(bound.rowCount, 1, '按 dsh 会话 id 必须反查到刚创建的会话行');
+      assert.equal(bound.rows[0].worker_session_id, id);
+      assert.equal(bound.rows[0].engagement_id, engagementId);
+    } finally {
+      await pool.query("select set_config('pentest.tenant_id', '', false)");
+    }
     const freeze = row.rows[0].skill_freeze;
     assert.ok(Array.isArray(freeze), `skill_freeze 必须是冻结条目数组，实际：${JSON.stringify(freeze)}`);
     assert.equal(freeze.length, 1);

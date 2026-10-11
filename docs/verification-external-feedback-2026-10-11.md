@@ -97,8 +97,17 @@ docker run --rm --entrypoint bash 127.0.0.1:5005/pentest-tools:0.1.0 -c \
 docker run --rm --network none --entrypoint bash 127.0.0.1:5005/pentest-tools:0.1.0 -c 'test -d /work && echo yes || echo no'
 ```
 
+## 修复记录（2026-10-11，同日）
+
+核实后两项均已修（提交见 git log；镜像 `a18f239589fd → d6c21580e6f1`）：
+
+| 项 | 修法 | 证据 |
+|---|---|---|
+| **D1** | ① **降级视图**：绑定缺失时用**作业列表那条腿**（`degradedRunOf`：只认"人类选中的/唯一的"那个作业，且快照里的 `state` 必须属于它）渲染阶段条 + 推进按钮，并把绑定异常降级成一条警告；认领不到才回退到说明卡（文案写明"去控制台选中本作业"）。② Agent 侧拒绝文案分叉出"按钮不可见时怎么判断两种卡片形态"。③ **创建后绑定自检**：`insertWorkerSession` 写完行立刻用工具层同一条解析路径（`worker_session_binding_by_dsh`）核对，查不到即抛错——**刻意不自动改写**（`dsh_session_id` 的权威值是活的会话标识；按"确定性约定"改会把活着的会话也改成查不到） | `IntakePrompt.tsx`（`degradedRunOf`/`runViewOf`/降级卡）、`worker.ts:996-1002`、`core.ts:1373-1402`；锁：`test/skill-load.test.ts` 新增"按 dsh 会话 id 必须反查到刚创建的会话行"（带租户上下文，7/7 绿） |
+| **D6 / §2.3** | ① 技能加 **3b 步**（比例自检 + 载荷复核，`≥0.8` 即判 `SUSPECT`、以"协议级应答"为判据）+ 判读与去噪 2 条 + 常见失败 3 行；② 工具侧 `port_scan` 的 `summary` 加两个**可判字段** `port_state_trust=ok|suspect|unknown` 与 `open_without_version=N`，并在近全开 / 有无版本信息端口时各给一条告警 + 处置 | 冒烟：`-p 8080,9998,9999` ⇒ `ratio=0.33 verdict=ok`、`-p 8080` ⇒ `ratio=1.00 SUSPECT`；载荷复核 `http=200 size=121` vs `http=000`/`rmcp=none(ConnectionRefusedError)`/`ssh=none`；`port_scan` ⇒ `port_state_trust=ok|suspect`、`open_without_version=1`（`version_info=none`）。锁：`test/action-templates.test.ts` 两条新用例 |
+
 ## 一句话结论
 
 **D2/D3/D4/D5 在我们这里已经不存在**（其中 D3/D4 是过去几轮修过并有锁的），
-**D1 与 D6/§2.3 仍然存在**：D1 是"绑定缺失时没有推进入口 + 文案过度承诺"的**流程缺口**（触发条件比他们窄，但缺的是同一套兜底），
-D6/§2.3 是"端口状态这一维度整体失真时，我们没有判据也没有告警"的**技能/工具缺口**。两条都给了最小修法。
+**D1 与 D6/§2.3 也已修**（见上"修复记录"）：D1 的降级视图让"绑定缺失"不再是死路，D6/§2.3 有了可判字段、
+告警与技能判据。仍未做的只有一条、且是**刻意的**：绑定的**自动改绑**（改错方向会让活着的会话也查不到）。

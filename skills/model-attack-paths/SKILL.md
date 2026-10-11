@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, MITRE ATT&CK Enterprise, OWASP WSTG]
-  smoked: "沙箱实测@a18f239589fd：6 块原文照跑（候选边台账 4 条含 technique 缺失兜底 `?`/引用数 0；缺前置条件检出 p2；战术映射含空列表兜底；影响×可行性排序 EVID p1=20、p2=8 全在 ASSUMPTION p3=9、p4=2 之前；冻结假设列 p3 的缺失观测；impact=7 越界被 assert 挡下 exit=1）；观察：grounded=false 且 missing_evidence 也没写的 p4 仍进 TOP——脚本只标 ASSUMPTION，不拦缺口缺失，交付前按判据人工剔除"
+  smoked: "沙箱实测@d6c21580e6f1：6 块原文照跑（候选边台账 4 条含 technique 缺失兜底 `?`/引用数 0；缺前置条件检出 p2；战术映射含空列表兜底；影响×可行性排序 EVID p1=20、p2=8 全在 ASSUMPTION p3=9、p4=2 之前；冻结假设列 p3 的缺失观测；impact=7 越界被 assert 挡下 exit=1）；观察：grounded=false 且 missing_evidence 也没写的 p4 仍进 TOP——脚本只标 ASSUMPTION，不拦缺口缺失，交付前按判据人工剔除"
 ---
 
 # 攻击路径与优先级（model-attack-paths）

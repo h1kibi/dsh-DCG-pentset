@@ -1370,6 +1370,31 @@ export class WorkflowCore {
         budget.maxSeconds,
       ],
     );
+    // **绑定自检**（外部反馈 D1）：会话行写完后立刻回读 `dsh_session_id`，确认它就是调用方给的那个
+    // ——控制台阶段卡与 `loadSkill` 都靠"按 dsh 会话 id 反查得到这一行"，写歪了（列错位、被触发器改过）
+    // 就是"卡片读不到状态"的根因，必须在**创建这一刻**炸出来。
+    //
+    // 两处刻意的选择：
+    //   1. **用行级回读，不用 `worker_session_binding_by_dsh()`**：那个函数是 SECURITY DEFINER + 按
+    //      `current_tenant_id()` 过滤，在夹具/单测里作用域租户与行租户常不一致 ⇒ 假失败（2026-10-11 实测
+    //      16 个用例因它变红）；而我们要保证的性质只是"这一行按 dsh 会话 id 可反查"。
+    //   2. **必须用 `txDb`**：插入发生在调用方的事务里（intake 的 staging 就是），换读连接看不到未提交的行。
+    //
+    // **刻意不自动改写**：`dsh_session_id` 的权威值是**活的**那个 dsh 会话标识（调用方可以显式给，
+    // 见 `intake.ts` 的 `spec.dshSessionId`），由不知情的一方按"确定性约定"去改它，会把活着的
+    // 会话也改成查不到；人侧还有降级视图可以推进（前端 `degradedRunOf`）。
+    const written = await this.deps.txDb.query<{ dsh_session_id: string }>(
+      `select dsh_session_id from pentest.worker_sessions where id = $1::uuid`,
+      [input.id],
+    );
+    const recorded = written.rows[0]?.dsh_session_id;
+    if (recorded !== input.dshSessionId) {
+      throw new Error(
+        `会话绑定自检失败：会话行 ${input.id} 回读到的 dsh_session_id=${JSON.stringify(recorded)}` +
+          `，与调用方给出的 ${JSON.stringify(input.dshSessionId)} 不一致` +
+          '（控制台阶段卡会读不到状态；请检查插入语句的列对齐与触发器）',
+      );
+    }
   }
 
   /**

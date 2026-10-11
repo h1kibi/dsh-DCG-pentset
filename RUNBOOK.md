@@ -576,6 +576,23 @@ node scripts/resync-smoke-stamps.mjs 512b7fa7a1e1   # 26 份 / 28 处
 **夹具新增两形态**（`docker/lab-spa/labspa.py`）：`/waf/` 命名空间的随机路径**断连**（验"基准回退"）、
 `LABSPA_REFUSE_SOFT404=1` 全局断连（验"不可判定 ⇒ `no_baseline`"）。报告：`docs/quality-review-round8-2026-10-11.md`。
 
+#### ⑫ 本轮轮换记录（2026-10-11，外部反馈轮）：D1 降级视图 + D6 端口可信度
+
+**轮换依据**：外部（GitHub 发布版）真作业反馈核实后的修复——`port_scan` 的 summary 加
+`port_state_trust=ok|suspect|unknown` 与 `open_without_version=N`（近全开 / 无版本信息各给一条告警）；
+宿主侧同时改了控制台（绑定缺失时的**降级视图**）、`pentest_prepare_handoff` 的拒绝文案分支、
+`insertWorkerSession` 的**创建后绑定自检**（迁移 016 的函数）；技能 `recon-network-surface` 加第 3b 步。
+
+```bash
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+# 重钉两处：a18f239589fd → d6c21580e6f1
+node scripts/resync-smoke-stamps.mjs d6c21580e6f1   # 26 份 / 28 处
+```
+
+**核实结论**（报告 `docs/verification-external-feedback-2026-10-11.md`）：D2/D3/D4/D5 在我们这里**不存在**
+（D3/D4 更早已修并有锁；D2 结构上不可能——判据与文案读同一个数组）；D1、D6/§2.3 本轮修掉。
+
 ### 4a. 你的个人环境（已配好）
 
 > ⚠️ **改完源码必须先 `npm run build`**：个人 profile 加载的是**构建产物**（`lib/`，经包名解析），
