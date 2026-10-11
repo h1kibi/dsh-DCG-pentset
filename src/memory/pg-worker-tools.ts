@@ -1818,7 +1818,13 @@ SELECT s.id, s.content, s.memory_item_id, s.source_event_id, s.worker_session_id
     const allowedActions = [...new Set(input.allowedActions)];
     for (const action of allowedActions) {
       if (!ACTION_CLASSES.includes(action)) {
-        throw refuse('classification_rejected', `未知动作类别：${String(action)}`, '只提交契约允许的动作类别');
+        // `expected_values`（规范 §6）：合法取值必须结构化地到模型手里（它看不到服务端的枚举表）。
+        throw refuse(
+          'classification_rejected',
+          `未知动作类别：${String(action)}`,
+          '只提交契约允许的动作类别（见 expected_values）',
+          [...ACTION_CLASSES],
+        );
       }
     }
     const now = new Date();

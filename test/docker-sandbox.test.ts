@@ -681,6 +681,16 @@ test('退出码三档（规范 §4）：0=completed / 1=tool_failed / 2=usage_er
   assert.equal(failed.error?.code, 'tool_failed');
   assert.match(failed.error?.next_action ?? '', /不要.*结论|判断/, '要拦住"据失败下目标结论"');
 
+  // 兜底：**任何非零码都不是成功**（2026-10-11 真值表发现）——125 docker 自身失败、
+  // 126 命令不可执行、127 命令不存在、137 被 SIGKILL、255 通用错误。旧实现把它们全记 completed
+  // ⇒ "docker 根本没跑起来"在账本里长成"成功执行"。
+  for (const code of [4, 125, 126, 127, 137, 255]) {
+    const residual = mk(code, '', code === 137 ? 'Killed\n' : 'docker: Error response from daemon\n');
+    assert.equal(residual.status, 'runtime_error', `退出码 ${String(code)} 不得记成 completed`);
+    assert.equal(residual.error?.code, 'tool_failed');
+    assert.equal(residual.exitCode, code, '原始退出码要留在结果里（排障靠它）');
+  }
+
   // 消息只取一行有用的，不是把 stderr 整段搬进 message（整段仍在 stderr 里）
   const noisy = mk(1, '', '\n\nTraceback (most recent call last):\n  File "x.py", line 1\nKeyError: 1\n');
   assert.doesNotMatch(noisy.error?.message ?? '', /Traceback/, 'Traceback 行不是给模型的那一行');

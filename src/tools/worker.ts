@@ -32,11 +32,27 @@ import type {
   ScopeProposal,
   ToolError,
   WorkerReportInput,
+  ToolRunResult,
 } from '../contracts.ts';
 import { DEFAULTS, ERROR_CODES } from '../contracts.ts';
 import type { ErrorCode } from '../contracts.ts';
 import { evidenceRelPath, writeEvidence } from './evidence-sink.ts';
-import { artifactView, memoryRecordsView, memorySearchView } from './result-view.ts';
+import {
+  approvalView,
+  artifactView,
+  intakeView,
+  memoryRecordsView,
+  memorySearchView,
+  planView,
+  reportResultView,
+  scopeProposalView,
+  skillView,
+  toolRunResultView,
+  workdirFileView,
+  workdirListingView,
+  workdirSearchView,
+  workdirWriteView,
+} from './result-view.ts';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DEFAULT_MOUNT_CONTAINER_PATH } from '../execution/docker-sandbox.ts';
@@ -539,10 +555,12 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
     async execute(args, exec) {
       // 会话标识**从执行身份取**，不读模型参数：模型无法把作业绑到别的会话上。
-      return toJson(await deps.bootstrapIntake({
+      const intake = await deps.bootstrapIntake({
         dshSessionId: dshSessionIdOf(exec),
         ...(args.name === undefined ? {} : { name: args.name }),
-      }));
+      });
+      // 规范 §7：`engagementId`→`engagement_id` 等。
+      return toJson(intakeView(intake));
     },
   });
 
@@ -775,7 +793,7 @@ async function registerEvidenceArtifact(
       const session = await workerSessionContextOf(deps, dshSessionId);
       // `status_note: null` 与不填同义（schema 用 oneOf 容忍 null，见上面的说明）。
       const note = typeof args.status_note === 'string' ? args.status_note : undefined;
-      return toJson(await deps.submitReport({
+      const submitted = await deps.submitReport({
             workerSessionId: session.workerSessionId,
             leaseGeneration: session.leaseGeneration,
             report: {
@@ -786,7 +804,9 @@ async function registerEvidenceArtifact(
               payload: args.payload ?? {},
               ...(args.mode === undefined || args.mode === null ? {} : { mode: args.mode }),
             },
-          }));
+          });
+      // 规范 §7：模型可见字段 snake_case（`reportId`→`report_id`、`merged.baseReportId`→`merged.base_report_id`…）。
+      return toJson(reportResultView(submitted));
     },
   });
 const scopeTargetSchema = {
@@ -873,12 +893,9 @@ const requestScopeConfirmation = defineWorkerTool({
         // 留痕字段由服务端按「没有就是空」处理；模型侧既不提供也不回显它。
         authorizationNote: '',
       });
-      // **工具结果是模型上下文**：把留痕字段从回显里摘掉。
-      // 模型只要在回显里看见字段名，就会在回复里谈起它（实测：它会复述
-      // 「本部署不要求授权凭据 / 授权说明留空即可」这类元话术）。人类侧的方案卡片
-      // 读的是库里的行，不依赖这个回显。
-      const { authorizationNote: _recordOnly, ...visible } = proposal as { authorizationNote?: unknown };
-      return toJson(visible);
+      // **工具结果是模型上下文**：留痕字段（`authorization_note`）不回显——"看见字段名就会谈起它"
+      // 那条实测结论现在由 `scopeProposalView` 承载（摘字段与命名映射在同一处，不再各写一半）。
+      return toJson(scopeProposalView(proposal));
     },
   });
 
@@ -933,7 +950,7 @@ const requestScopeConfirmation = defineWorkerTool({
     async execute(args, exec) {
       // 一次调用只解析一次：两处各查一次库纯属浪费，且可能落到不同结果上。
       const workerSessionId = await workerSessionIdOf(deps, exec);
-      return toJson(await deps.requestApproval({
+      const approval = await deps.requestApproval({
         workerSessionId,
         intent: {
           workerSessionId,
@@ -946,7 +963,9 @@ const requestScopeConfirmation = defineWorkerTool({
             command_b64: Buffer.from(args.command, 'utf8').toString('base64'),
           },
         },
-      }));
+      });
+      // 规范 §7：`approvalId`→`approval_id`、`planHash`→`plan_hash`、`expiresAt`→`expires_at`。
+      return toJson(approvalView(approval));
     },
   });
 
@@ -1154,8 +1173,10 @@ const requestScopeConfirmation = defineWorkerTool({
         outcome.kind === 'blocked'
           ? outcome.error
           : {
-              plan: outcome.plan,
-              result: outcome.result,
+              plan: planView(outcome.plan),
+              // 执行结果在这一层是 `unknown`（`outcome` 的形状宽松）；它由 execution 层构造，
+              // 类型就是 `ToolRunResult` ⇒ 在这一处**具名断言**（不是内联成员访问）。
+              result: toolRunResultView(outcome.result as ToolRunResult),
               // 超时/中止时明确标注"这是部分输出"：消费方不该把它当完整结果（§10.3 同一条纪律）。
               ...(partial ? { partial_output: true } : {}),
               // **stderr 非空就自己开口**（见 `stderrMarker` 的说明：空 stdout + 被管道掩掉的
@@ -1374,8 +1395,10 @@ const requestScopeConfirmation = defineWorkerTool({
         outcome.kind === 'blocked'
           ? outcome.error
           : {
-              plan: outcome.plan,
-              result: outcome.result,
+              plan: planView(outcome.plan),
+              // 执行结果在这一层是 `unknown`（`outcome` 的形状宽松）；它由 execution 层构造，
+              // 类型就是 `ToolRunResult` ⇒ 在这一处**具名断言**（不是内联成员访问）。
+              result: toolRunResultView(outcome.result as ToolRunResult),
               // 与 `pentest_exec` 同一口径：stderr 非空就自己开口（空 stdout + 被管道掩掉的 rc
               // = 看起来像"干净的阴性结果"）。
               ...stderrMarker(outcome.result as { readonly stderr?: unknown }),
@@ -1472,8 +1495,10 @@ const requestScopeConfirmation = defineWorkerTool({
         outcome.kind === 'blocked'
           ? outcome.error
           : {
-              plan: outcome.plan,
-              result: outcome.result,
+              plan: planView(outcome.plan),
+              // 执行结果在这一层是 `unknown`（`outcome` 的形状宽松）；它由 execution 层构造，
+              // 类型就是 `ToolRunResult` ⇒ 在这一处**具名断言**（不是内联成员访问）。
+              result: toolRunResultView(outcome.result as ToolRunResult),
               // 与 `pentest_exec` 同一口径：stderr 非空就自己开口（空 stdout + 被管道掩掉的 rc
               // = 看起来像"干净的阴性结果"）。
               ...stderrMarker(outcome.result as { readonly stderr?: unknown }),
@@ -1522,7 +1547,8 @@ const requestScopeConfirmation = defineWorkerTool({
             };
         return toJson(asError(err));
       }
-      return toJson(result.skill);
+      // 规范 §7：技能条目的 `contentHash`→`content_hash`。
+      return toJson(result.skill === null ? null : skillView(result.skill));
     },
   });
 
@@ -1597,9 +1623,10 @@ const requestScopeConfirmation = defineWorkerTool({
           const result = await access.list({ path: args.path, workerSessionId });
           // 附加挂载根信息（P0 #3：让模型知道有哪些根可用）
           const roots = access.rootsFor?.(workerSessionId) ?? access.roots;
-          return toJson({ ...result, roots: roots.map(r => ({ containerPath: r.containerPath, readOnly: r.readOnly ?? false })) });
+          // 规范 §7：模型可见字段 snake_case（内部 `WorkdirRoot` 仍是 camelCase）。
+          return toJson(workdirListingView(result, roots));
         }
-        if (op === 'read') return toJson(await access.read({ path: args.path, workerSessionId }));
+        if (op === 'read') return toJson(workdirFileView(await access.read({ path: args.path, workerSessionId })));
         if (op === 'search') {
           if (args.pattern === undefined) {
             return toJson(asError({
@@ -1609,7 +1636,7 @@ const requestScopeConfirmation = defineWorkerTool({
               next_action: '补上 pattern 再调用；pattern 是 JS 正则，可在大量文档里定位文件与行号',
             }));
           }
-          return toJson(await access.search({ path: args.path, pattern: args.pattern, workerSessionId }));
+          return toJson(workdirSearchView(await access.search({ path: args.path, pattern: args.pattern, workerSessionId })));
         }
         if (args.content === undefined) {
           return toJson(asError({
@@ -1619,8 +1646,8 @@ const requestScopeConfirmation = defineWorkerTool({
             next_action: '补上 content 再调用',
           }));
         }
-        if (op === 'append') return toJson(await access.append({ path: args.path, content: args.content, workerSessionId }));
-        return toJson(await access.write({ path: args.path, content: args.content, workerSessionId }));
+        if (op === 'append') return toJson(workdirWriteView(await access.append({ path: args.path, content: args.content, workerSessionId })));
+        return toJson(workdirWriteView(await access.write({ path: args.path, content: args.content, workerSessionId })));
       } catch (error) {
         if (error instanceof WorkdirError) {
           // 策略性拒绝（越界/只读/没挂载）→ 稳定错误码；操作性未命中（不存在/是目录/超限）

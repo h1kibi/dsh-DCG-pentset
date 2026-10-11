@@ -674,7 +674,8 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     // 旧 summary 只有 `hits=N autocalibration=…`：跑完了干净 vs 跑一半报一堆错**同形**。
     const start = DISPATCHER.indexOf('def content_discover(');
     const body = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef web_crawl(', start));
-    for (const field of ['entries_scanned=', 'duration_ms=', 'stderr_lines=', 'stderr_errorish=']) {
+    // 规范 §7 的固定后缀：`entries_attempted=`（`entries_scanned=` 是待删别名，不再被这条锁承重）。
+    for (const field of ['entries_attempted=', 'duration_ms=', 'stderr_lines=', 'stderr_errorish=']) {
       assert.ok(body.includes(field), `summary 缺 ${field}`);
     }
     assert.match(body, /warn: ffuf 的 stderr 里有/, '有错误迹象时必须显式 warn（别让人从干净数字里读结论）');

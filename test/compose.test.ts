@@ -364,6 +364,9 @@ describe('组合根接线', { skip: DATABASE_URL === undefined ? '未设置 PENT
       assert.equal(typeof workdir?.write, 'function');
       const listing = (await workdir!.list({ path: '.' })) as { entries: readonly { name: string }[] };
       assert.deepEqual(listing.entries.map((e) => e.name), ['hello.md']);
+      // 注意：这里调的是**内部访问器**（`workerTools.workdir`），不是工具返回值 ⇒ 字段名仍是内部
+      // 的 `containerPath`。工具返回给模型的那一层由 `result-view.ts` 统一成 snake_case
+      // （锁在 `test/sandbox-spec-locks.test.ts`）。
       const file = (await workdir!.read({ path: 'hello.md' })) as { text: string; containerPath: string };
       assert.equal(file.text, '# hi\n');
       assert.equal(file.containerPath, '/work/hello.md');

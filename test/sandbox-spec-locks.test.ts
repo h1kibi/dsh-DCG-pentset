@@ -13,7 +13,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { artifactView, memoryRecordsView, memorySearchView } from '../src/tools/result-view.ts';
+import {
+  approvalView,
+  artifactView,
+  intakeView,
+  memoryRecordsView,
+  memorySearchView,
+  planView,
+  reportResultView,
+  scopeProposalView,
+  skillView,
+  toolRunResultView,
+  workdirFileView,
+  workdirListingView,
+  workdirSearchView,
+  workdirWriteView,
+} from '../src/tools/result-view.ts';
+import type { ExecutionPlan, ToolRunResult } from '../src/contracts.ts';
 import type { ArtifactRecord, MemoryRecord, MemorySearchResult } from '../src/tools/worker.ts';
 
 const SNAKE_CASE = /^[a-z][a-z0-9_]*$/u;
@@ -104,6 +120,138 @@ test('模型可见字段一律 snake_case（规范 §7）：三个视图递归�
   assert.equal(search.note, '本作业记忆索引为空', '零命中/降级说明要照旧可达（模型据此分流）');
 });
 
+test('作业目录工具的字段也是 snake_case（规范 §7）：四个视图递归检查', () => {
+  const root = { containerPath: '/work', readOnly: false } as const;
+  const listing = workdirListingView(
+    {
+      path: '.',
+      root: '/work',
+      containerPath: '/work',
+      entries: [{ name: 'a.md', type: 'file', size: 12 }],
+      truncated: false,
+    },
+    [root],
+  );
+  const file = workdirFileView({
+    path: 'a.md',
+    containerPath: '/work/a.md',
+    bytes: 12,
+    text: 'hi',
+    truncated: false,
+    binary: false,
+  });
+  const write = workdirWriteView({ path: 'a.md', containerPath: '/work/a.md', bytes: 3 });
+  const search = workdirSearchView({
+    path: '.',
+    pattern: 'x',
+    matches: [{ path: 'a.md', line: 1, text: 'x' }],
+    filesScanned: 1,
+    truncated: false,
+    skipped: [],
+    files: [{ path: 'a.md', modifiedAt: '2026-10-11T00:00:00.000Z', matches: 1 }],
+  });
+
+  for (const [name, view] of [
+    ['op=list', listing],
+    ['op=read', file],
+    ['op=write', write],
+    ['op=search', search],
+  ] as const) {
+    const bad = collectKeys(view).filter((key) => !SNAKE_CASE.test(key));
+    assert.deepEqual(bad, [], `${name} 的可见字段出现了非 snake_case 键：${bad.join(', ')}`);
+  }
+
+  // 判据字段改名后仍可达（模型据它们判断"要不要带前缀""是否被截断"）
+  assert.equal(listing.container_path, '/work');
+  assert.deepEqual(listing.roots, [{ container_path: '/work', read_only: false }]);
+  assert.equal(file.container_path, '/work/a.md');
+  assert.equal(search.files[0]?.modified_at, '2026-10-11T00:00:00.000Z');
+  assert.equal(search.files_scanned, 1);
+});
+
+test('其余工具面（intake/report/approval/scope/skill/plan/result）也必须过视图（规范 §7）', () => {
+  // 2026-10-11 复查发现：这几处此前是**直通内部类型**（`skill_load` 泄漏 `contentHash`、
+  // `pentest_exec` 的 `plan`/`result` 全是 camelCase）——锁必须覆盖它们，否则"改了三个视图"
+  // 会被误当成"§7 已落实"。
+  const PLAN: ExecutionPlan = {
+    workerSessionId: 'ws-1',
+    templateId: 'http_get',
+    actionClass: 'passive_collection',
+    normalizedTarget: 'example.com',
+    resolvedAddresses: ['93.184.216.34'],
+    normalizedCommand: 'http_get url=https://example.com/',
+    planHash: 'plan-hash',
+    idempotencyKey: 'idem-1',
+    scopeVersion: 1,
+    policyEpoch: 1,
+    leaseGeneration: 1,
+    approvalId: null,
+    timeoutMs: 30_000,
+    maxOutputBytes: 64 * 1024,
+  };
+  const runResult: ToolRunResult = {
+    status: 'completed',
+    exitCode: 0,
+    stdout: 'out',
+    stderr: '',
+    truncated: false,
+    artifactIds: ['a-1'],
+    toolRunId: 'run-1',
+  };
+  const views: Readonly<Record<string, unknown>> = {
+    bootstrap_intake: intakeView({
+      engagementId: 'e-1',
+      workerSessionId: 'ws-1',
+      dshSessionId: 'dsh-ws-1',
+      leaseId: 'l-1',
+      leaseGeneration: 1,
+      scopeVersion: 0,
+      resumed: false,
+      nextStep: '去控制台确认范围',
+    }),
+    plan: planView(PLAN),
+    tool_run_result: toolRunResultView(runResult),
+    report: reportResultView({
+      reportId: 'r-1',
+      stateVersion: 3,
+      findings: { written: 1, skipped: 0 },
+      merged: { mode: 'append', baseReportId: 'r-0', sections: { facts: 2 } },
+    }),
+    approval: approvalView({ approvalId: 'ap-1', planHash: 'h', expiresAt: '2026-01-01T00:10:00.000Z' }),
+    scope_proposal: scopeProposalView({
+      id: 'p-1',
+      engagementId: 'e-1',
+      workerSessionId: 'ws-1',
+      objective: 'o',
+      targets: [],
+      exclusions: [],
+      allowedActions: ['passive_collection'],
+      status: 'pending',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      decidedAt: null,
+    }),
+    skill: skillView({ name: 's', description: 'd', body: 'b', contentHash: 'h', revision: 2 }),
+  };
+
+  for (const [name, view] of Object.entries(views)) {
+    const bad = collectKeys(view).filter((key) => !SNAKE_CASE.test(key));
+    assert.deepEqual(bad, [], `${name} 的可见字段出现了非 snake_case 键：${bad.join(', ')}`);
+  }
+
+  // 语义不能丢：改名后关键字段仍可达
+  assert.equal((views['plan'] as Record<string, unknown>)['plan_hash'], 'plan-hash');
+  assert.equal((views['tool_run_result'] as Record<string, unknown>)['tool_run_id'], 'run-1');
+  assert.equal((views['tool_run_result'] as Record<string, unknown>)['exit_code'], 0);
+  assert.equal(
+    ((views['report'] as { merged: { base_report_id: string } }).merged).base_report_id,
+    'r-0',
+    '`merged.baseReportId` → `merged.base_report_id`（提示词里也引它）',
+  );
+  assert.equal((views['skill'] as Record<string, unknown>)['content_hash'], 'h');
+  // 留痕字段刻意不回显（见 `scopeProposalView` 的说明）
+  assert.equal(Object.hasOwn(views['scope_proposal'] as object, 'authorization_note'), false);
+});
+
 test('内部 camelCase 类型不得直接进工具返回（规范 §7：转换点只有 result-view.ts）', () => {
   const source = readFileSync(new URL('../src/tools/worker.ts', import.meta.url), 'utf8');
   for (const forbidden of [
@@ -113,7 +261,20 @@ test('内部 camelCase 类型不得直接进工具返回（规范 §7：转换�
   ]) {
     assert.equal(source.includes(forbidden), false, `worker.ts 仍有绕过视图的直接返回：${forbidden}`);
   }
-  for (const view of ['artifactView(', 'memoryRecordsView(', 'memorySearchView(']) {
+  for (const view of [
+    'artifactView(',
+    'memoryRecordsView(',
+    'memorySearchView(',
+    'intakeView(',
+    'planView(',
+    'toolRunResultView(',
+    'reportResultView(',
+    'approvalView(',
+    'scopeProposalView(',
+    'skillView(',
+    'workdirListingView(',
+    'workdirSearchView(',
+  ]) {
     assert.equal(source.includes(view), true, `worker.ts 未使用视图：${view}`);
   }
 });

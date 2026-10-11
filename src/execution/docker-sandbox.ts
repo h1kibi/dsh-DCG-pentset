@@ -805,6 +805,26 @@ export function mapOutcome(
       },
     };
   }
+  if (outcome.code !== 0) {
+    // ── 兜底：**任何非零退出码都不是成功**（规范 §4；2026-10-11 由真值表发现）──
+    //
+    // 显式分支只覆盖 1/2/3，而真实的容器/CLI 还会给出别的码：`125`（docker 自己失败）、
+    // `126`（命令不可执行）、`127`（命令不存在）、`137`（128+9 被 SIGKILL/OOM）。旧实现把它们
+    // 一律记 `completed` ⇒ "docker 根本没跑起来"在账本里长成"成功执行"——正是本轮要消灭的那类
+    // 静默失败（`code === 0` 才是唯一成功）。
+    return {
+      ...common,
+      status: 'runtime_error',
+      error: {
+        status: 'blocked',
+        code: 'tool_failed',
+        message: firstDiagnosticLine(err.text) ?? `容器退出码 ${String(outcome.code)}`,
+        next_action:
+          '看 stderr 判断是容器/工具没执行成功（125/126/127 是 docker 侧、137 是被杀）还是目标不可达；' +
+          '**不要**据此下目标侧的结论',
+      },
+    };
+  }
   return { ...common, status: 'completed' };
 }
 
@@ -815,12 +835,20 @@ export function mapOutcome(
  * 过长时截断——消息字段是给模型读的，不是把 stderr 整段搬进来（整段仍在 `stderr` 里）。
  */
 function firstDiagnosticLine(stderr: string): string | null {
-  for (const raw of stderr.split(/\r?\n/u)) {
-    const line = raw.trim();
-    if (line === '' || line.startsWith('Traceback')) continue;
-    return line.length > 400 ? `${line.slice(0, 400)}…` : line;
-  }
-  return null;
+  const lines = stderr
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  // Python 的**栈帧**不是给模型的消息：实测（2026-10-11 质检）一个内部 bug 会把
+  // `File "/opt/pentest-tool", line 3976, in <module>` 当成 `tool_failed` 的 message ——
+  // 那句话既不可照做，也掩盖了真正的异常行（`KeyError: …` 在它后面）。
+  const isFrame = (line: string): boolean =>
+    line.startsWith('Traceback') || line.startsWith('File "') || /^\s+\S/u.test(line);
+  const meaningful = lines.filter((line) => !isFrame(line));
+  // 都像栈（或只有栈）时退回**最后一行**（通常是异常本身），仍不返回帧行。
+  const chosen = meaningful[0] ?? (isFrame(lines.at(-1) ?? '') ? null : lines.at(-1));
+  if (chosen === undefined || chosen === null) return null;
+  return chosen.length > 400 ? `${chosen.slice(0, 400)}…` : chosen;
 }
 
 /** 按字节上限截断，并在尾部标注被截断。 */

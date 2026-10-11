@@ -414,6 +414,71 @@ node scripts/resync-smoke-stamps.mjs 3401b215a4ab
 > `3401b215a4ab…` 上重跑了全部 12 个真容器场景**（见 §6.5.13.8 的实测表）——摘要轮换不是
 >"构建一次就完"。
 
+> ⚠ **⑧ 产生的 `3401b215a4ab…` 已被 ⑨ 取代**（同日的独立复查在容器侧又抓到两处，见 §6.5.13.8
+> 末尾的"复查后的两处修正"）。⑧ 这一段保留，是因为它记录的轮换过程本身仍然成立。
+
+#### ⑨ 本轮轮换记录（2026-10-11，复核轮）：`content_discover` 字段名对齐 + 两条静态锁
+
+**轮换依据**：独立复查（Main）在容器侧又抓到两处，改完必须再走一次 §2.1 全流程：
+
+1. `content_discover` 的 `summary:` 行用了**裸** `attempted=`/`truncated=`/`remaining=`，而同一动词的
+   `coverage:` 行用的是 `entries_attempted=`/… ⇒ **一个动词两套名字**。现已逐字对齐（条目轴
+   `entries_total`/`entries_requested`/`entries_attempted`/`entries_truncated`/`entries_remaining`、
+   请求轴 `requests_total`/`requests_attempted`，两行同值同名；`entries_scanned=` 是旧锁钉住的别名，
+   与 `entries_attempted=` 同值）。
+2. 两条静态锁补进 `test/pentest-tool-static.test.ts`：**收尾可达性**（每个动词要么自己调
+   `report.finish(`，要么经一层共享助手收尾——`service_probe` → `nmap_ports`）与**统计字段命名**
+   （`report.finish(...)`/`report.line("summary: …")` 里的字符串字面量不许出现裸 `attempted=`/
+   `truncated=`/`remaining=`/`total=`）。
+
+```bash
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+node --experimental-strip-types scripts/verify-tool-image.ts <镜像引用>
+# 两处 digest：3401b215a4ab… → d6de07ed3f5c…
+node scripts/resync-smoke-stamps.mjs d6de07ed3f5c
+```
+
+**原样输出**：
+
+```
+# docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+127.0.0.1:5005/pentest-tools@sha256:d6de07ed3f5cab5acc5fe7b74f5202d3f92545a6168f1bf137297d2fa1aa5b65
+
+# node --experimental-strip-types scripts/verify-tool-image.ts 127.0.0.1:5005/pentest-tools@sha256:d6de07ed3f5c…
+工具镜像自检通过：81 项（70 个命令 + 1 个通配前缀 + 8 份字典 + 模板目录）
+
+# node scripts/resync-smoke-stamps.mjs d6de07ed3f5c
+改了 25 份、27 处；替换前的摘要值：3401b215a4ab
+
+# 镜像内分发器 == 工作副本（证明钉住的摘要就是被测代码）
+docker run --rm --entrypoint sha256sum <镜像> /usr/local/bin/pentest-tool → fb90fe57743f1b73b039fe00c717a125def98885b938b2e95e7eec8bf3de1482
+sha256sum docker/tools/pentest-tool                                            → fb90fe57743f1b73b039fe00c717a125def98885b938b2e95e7eec8bf3de1482
+```
+
+**真容器复核（改名后的两行）**：
+
+```
+state=ok
+summary: scanned=true hits=0 entries_total=4723 entries_requested=20 requests_total=20 entries_attempted=20 requests_attempted=20 entries_truncated=false entries_remaining=4703 entries_scanned=20 entry_range=1-20 ext_multiplier=1 duration_ms=827 ffuf_exit=0 stderr_lines=1 stderr_errorish=0 autocalibration=True position=20 maxtime_s=100 ffuf_errors=0 observed_rps=0.0
+coverage: wordlist_entries=4723 entries_total=4723 entry_range=1-20 entries_requested=20 requests_total=20 entries_attempted=20 requests_attempted=20 entries_truncated=false entries_remaining=4703 position=20 reason=completed
+
+# 被 maxtime 截断时（state=partial）：
+summary: scanned=true hits=0 entries_total=4723 entries_requested=60 requests_total=60 entries_attempted=13 requests_attempted=13 entries_truncated=true entries_remaining=4710 entries_scanned=13 entry_range=1-60 … position=13 maxtime_s=12 …
+coverage: … entries_attempted=13 … entries_truncated=true entries_remaining=4710 position=13 reason=completed
+coverage_note: 本次从第 1 条跑到第 13 条（本段 60 条 / 60 次请求），**被截断**（ffuf 到达 maxtime=12s 自行停止）；整本字典还剩 4710 条没跑 ⇒ 下一次 entry_range=14-25
+```
+
+**两条新锁的"失败-先"证据**（不是推断，是拿变异源码真跑）：
+
+- 收尾可达性：把 `nmap_ports` 体内的 4 处 `report.finish(` 全换成 `report.line(` ⇒ 审计立刻报
+  `verbs_without_finish: ['service_probe']`、`service_probe.via = []`（`port_scan` 自己还有一处收尾，故不受影响）；
+- 字段命名：拿**复查时那个版本**（`0e97fda`，裸名那版）跑 ⇒ 报 `bare_stat_fields` 两条
+  （2750 行的 `attempted=`/`truncated=`）；当前版本 ⇒ 0 条。
+
+---
+
 > **`npm run verify:tool-image` 这个 script 名不存在**（RUNBOOK §2.1② 旧写法）——`scripts/verify-tool-image.ts`
 > 在，但没挂到 `package.json` 的 scripts 上。照本文的 `node --experimental-strip-types scripts/verify-tool-image.ts <镜像>`
 > 跑，脚本自己会打印用法与结果。
@@ -1039,8 +1104,10 @@ CRLF 会让容器报 `/usr/bin/env: 'python3\r': No such file or directory`（�
 
 > **墙钟上限 = 模板声明与沙箱上限取较小者**（`min(plan.timeoutMs, DEFAULT_SANDBOX_LIMITS.maxWallClockMs)`）。
 > 出厂两张命令模板的 `timeoutMs` 都是 **300 秒** ⇒ **自由命令 `pentest_exec` 实际是 5 分钟**；
-> 沙箱上限（当前 15 分钟）只是**上限**，不是默认。结构化模板各自声明，`recon_port_scan`/
-> `recon_service_probe` 同样是 300s。会话简报里会写出实际生效的 `wall_clock` 分钟数——以那行为准。
+> 沙箱上限（当前 15 分钟）只是**上限**，不是默认。**各结构化模板的上限以 `src/execution/templates.ts`
+> 的 `timeoutMs` 为准**（2026-10-11 更正：此处曾写死"`recon_port_scan`/`recon_service_probe` 同样是 300s"，
+> 而 `port_scan` 的真值是 **900s**——手抄数字必错，见《沙箱工具规范 v1》§7）。会话简报里会渲染出实际
+> 生效的分钟数（由注册表算出）——**以那行为准**。
 >
 > ⚠ 本条曾在本文件里被写错成"自由命令 15 分钟"（我按 `pentest_exec.timeoutMs` 推断，
 > 漏了模板声明会取小）——**以 `sandbox-brief.ts` 下发给模型的那一行为准**，那是唯一经过
@@ -1456,7 +1523,7 @@ docker run --rm --network $NET $ENV $IMG "<命令行>"
 | ③ | `port_scan … restrict_to_scop=true`（键名拼错） | stderr 首行 + stdout：`usage_error: port_scan 不认识参数 restrict_to_scop；接受的键：ping, ports, restrict_to_scope, scope, target`；stdout 另有 `accepted_keys: …`；**rc=2** |
 | ③b | `http_probe … include_chunks=yes` | `usage_error: include_chunks 只接受 true/false（大小写不敏感），收到 'yes'`；**rc=2**（旧版静默当 false） |
 | ④ | `http_probe … collect=headers paths=/,/nope-a,/nope-b,/hang` | 首行 `state=ok`；`paths_soft404_baseline: status=404 size=469`；`/` → `candidate_endpoint:`；两个 `nope-*` → `note=soft404`；`/hang` → `no_response`；`paths_summary: paths=4 ok=3 no_response=1`；`paths_coverage: paths_total=4 paths_attempted=4 paths_truncated=false paths_remaining=0`；rc=0 |
-| ⑤ | `content_discover … wordlist=common_dirs entry_range=1-20` | 首行 `state=ok`；`coverage: wordlist_entries=4723 entries_total=4723 entry_range=1-20 requested=20 entries_attempted=20 entries_truncated=false entries_remaining=4703 position=20 reason=completed`；`schedulability: … 需要分 10 段（每段约 500 条）：1-500 / …`；rc=0 |
+| ⑤ | `content_discover … wordlist=common_dirs entry_range=1-20` | 首行 `state=ok`；`coverage: wordlist_entries=4723 entries_total=4723 entry_range=1-20 entries_requested=20 requests_total=20 entries_attempted=20 requests_attempted=20 entries_truncated=false entries_remaining=4703 position=20 reason=completed`；`schedulability: … 需要分 10 段（每段约 500 条）：1-500 / …`；rc=0 |
 | ⑥ | `exposure_check … paths=env,git,phpinfo` | 首行 `state=ok`；三条 `control=same looks_like=n/a（与随机对照同形…）`；`paths_coverage: paths_total=3 paths_attempted=3 paths_truncated=false paths_remaining=0`（**阴性结论也回答"扫了什么"**）；rc=0 |
 | ⑦ | `shell_exec command_b64=<echo EARLY_LINE_1; sleep 40>`（注入 8s ⇒ 预算 6.4s） | 首行 `state=aborted`；`summary: … timeout_ms=6400 duration_ms=6408.9 aborted=true aborted_items=1 stdout_bytes=13`；`stdout_partial:` 下**保留了 `EARLY_LINE_1`**；rc=1 |
 | ⑧ | `icmp_ping target=192.168.0.2 count=2 size=32` | 首行 `state=ok`；`icmp_socket: unprivileged_dgram`；`reply: seq=1 … seq=2`；`summary: … packets_sent=2 packets_received=2 loss_pct=0 rtt_avg_ms=0.8`；rc=0（0-1 的端到端回归位） |
@@ -1468,6 +1535,17 @@ docker run --rm --network $NET $ENV $IMG "<命令行>"
 > 夹具注意：`/hang` 那条用例要求夹具**多线程**——单线程 `socketserver.TCPServer` 会被一个 sleep 60 的
 > 请求卡住，后续请求全部排队超时（本轮实测踩到，表现为 ffuf 的 autocalibration 超时退出、
 > `error: ffuf_output_missing`）。这是设施问题，不是分发器问题。
+
+**复查后的两处修正（同日，独立复查发现；镜像摘要 `3401b215a4ab…` → `d6de07ed3f5c…`）**：
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| `content_discover` 的 `summary:` 行是裸 `attempted=`/`truncated=`/`remaining=`，而同一动词的 `coverage:` 行是 `entries_attempted=`/… ⇒ **一个动词两套名字**，模型读 `summary:`（规范 §2 说它是机器可读那行）拿到与规范不一致的键 | 上一轮的字段改名只落到了 `coverage:` 明细行（新加的那行），`summary:` 行沿用了旧写法——**同一份事实两套名字**正是规范 §7 要治的 | 两行改成**逐字对齐**，并把两个轴分开命名：条目轴 `entries_total`/`entries_requested`/`entries_attempted`/`entries_truncated`/`entries_remaining`，请求轴 `requests_total`/`requests_attempted`；`entries_scanned=` 保留为**与 `entries_attempted=` 同值**的别名（旧源码锁钉着它），并加注释说明何时可删 |
+| 行为层锁缺两条：**"忘了收尾"与"裸字段名"都没有源码级判据**（前者只在真容器冒烟时才暴露，而冒烟要六条命令；后者靠人读） | 锁的粒度跟着"上一轮改了什么"走，而不是跟着**契约**走 | `test/pentest-tool-static.test.ts` 补两条：① **收尾可达性**——每个动词要么自己调 `report.finish(`，要么调了一个自身（或其闭包）会收尾的助手（`service_probe` → `nmap_ports` 就是这条路径）；② **统计字段命名**——`report.finish(...)` 与 `report.line("summary: …")` 的字符串字面量不许出现裸 `attempted=`/`truncated=`/`remaining=`/`total=`。两条都用变异源码验过"失败-先"（见 §2.1⑨） |
+
+**还记一条口径（复查确认、**刻意不改**）**：`web_crawl` 在预算耗尽时给 `state=partial` + `pages_truncated=true`
+而**不给 `aborted`**——这是对的：§5 要的是"可分辨"，而 `partial`+`truncated`+`queue_remaining` 已经能分辨；
+改成 `aborted` 会与"扫了一部分"的语义打架。
 
 ---
 

@@ -17,7 +17,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { renderPhaseProfile } from '../src/agents/phase-profiles.ts';
 import { renderSandboxBrief } from '../src/agents/sandbox-brief.ts';
@@ -31,6 +32,8 @@ import { PROFILE_DEFAULTS } from '../src/policy/behavior-profile.ts';
 const REGISTRY = defaultRegistry();
 const FAMILIES = ['recon', 'vuln'] as const;
 const SKILLS_DIR = join(import.meta.dirname, '..', 'skills');
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const PRESETS_DIR = join(REPO_ROOT, 'presets');
 
 test('参数指南与 technique 注册表双向对齐：每个 technique 都有条目，也没有多出来的条目', () => {
   // 2026-10-11 质检 §三 3.4：`nse_safe`/`web_crawl`/`dns_brute`/`whois`/`ct_subdomains`/`dns_axfr`
@@ -98,22 +101,46 @@ test('技能与作者规范里不得出现不存在的速率档位名（`deep` �
   // 2026-10-11 质检 §三 3.2 第 15 条：五份技能 + AUTHORING-SPEC 写 `deep 10/s`，而契约的
   // `BEHAVIOR_PROFILES` 是 `stealth/standard/fast/custom`。这条锁同时覆盖两类文件
   // （`test/skill-pack.test.ts` 的速率锁只扫 SKILL.md，且正则里没有 `deep`，所以它放过了这条漂移）。
-  const files = readdirSync(SKILLS_DIR, { recursive: true })
-    .map((entry) => join(SKILLS_DIR, String(entry)))
-    .filter((full) => full.endsWith('SKILL.md') || full.endsWith('AUTHORING-SPEC.md') || full.endsWith('README.md'));
-  assert.ok(files.length >= 20, `skills 目录扫到的文件太少：${String(files.length)}`);
+  // **范围**（2026-10-11 复查补）：不只 skills —— 模型可见文本还包括 `presets/**` 的 agent 预设
+  // （它整段进提示词，`deep` 就是从这条缝里漏过去的：只扫 skills 的锁看不见它）。
+  const files = [
+    ...readdirSync(SKILLS_DIR, { recursive: true })
+      .map((entry) => join(SKILLS_DIR, String(entry)))
+      .filter((full) => full.endsWith('SKILL.md') || full.endsWith('AUTHORING-SPEC.md') || full.endsWith('README.md')),
+    ...readdirSync(PRESETS_DIR, { recursive: true })
+      .map((entry) => join(PRESETS_DIR, String(entry)))
+      .filter((full) => full.endsWith('.yml') || full.endsWith('.yaml')),
+  ];
+  assert.ok(files.length >= 20, `扫到的文件太少：${String(files.length)}`);
   const offenders: string[] = [];
+  const checkLine = (label: string, line: string, lineNo: number): void => {
+    // ① `<名> N/s` 形态（技能里的速率写法）
+    for (const match of line.matchAll(/([a-z]+)\s+\d+\s*\/\s*s/g)) {
+      const name = match[1] ?? '';
+      if (!(BEHAVIOR_PROFILES as readonly string[]).includes(name)) {
+        offenders.push(`${label}:${String(lineNo)} —— 档位名 ${name} 不存在（不存在的档位名）`);
+      }
+    }
+    // ② `<名> / <名> / …` 形态（预设里的档位清单）。**只在整串里出现至少一个真实档位名时才判**，
+    //    避免把普通的 `foo/bar` 词组误报。
+    // **至少两个**（`{1,}`）而不是三个：预设里的档位清单会**跨行**（"stealth / standard /" 与
+    // "deep / custom）" 各占一行），要求三个就正好漏掉那一行——2026-10-11 复查时这条锁
+    // 在注入 `deep` 回归后仍然绿，就是被这个量词骗过去的。
+    for (const match of line.matchAll(/[a-z]+(?:\s*\/\s*[a-z]+){1,}/g)) {
+      const tokens = match[0].split('/').map((part) => part.trim());
+      if (!tokens.some((token) => (BEHAVIOR_PROFILES as readonly string[]).includes(token))) continue;
+      for (const token of tokens) {
+        if (!(BEHAVIOR_PROFILES as readonly string[]).includes(token)) {
+          offenders.push(`${label}:${String(lineNo)} —— 档位清单 ${match[0]} 里有不存在的档位 ${token}`);
+        }
+      }
+    }
+  };
   for (const file of files) {
+    const label = relative(REPO_ROOT, file);
     readFileSync(file, 'utf8')
       .split('\n')
-      .forEach((line, index) => {
-        for (const match of line.matchAll(/([a-z]+)\s+\d+\s*\/\s*s/g)) {
-          const name = match[1] ?? '';
-          if (!(BEHAVIOR_PROFILES as readonly string[]).includes(name)) {
-            offenders.push(`${file.slice(SKILLS_DIR.length + 1)}:${String(index + 1)} —— 档位名 ${name} 不存在`);
-          }
-        }
-      });
+      .forEach((line, index) => checkLine(label, line, index + 1));
   }
   assert.deepEqual(offenders, [], `合法档位只有 ${BEHAVIOR_PROFILES.join('/')}`);
 });

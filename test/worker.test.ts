@@ -23,6 +23,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { planView } from '../src/tools/result-view.ts';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import {
@@ -549,7 +550,15 @@ test('pentest_exec：命令与端口原样转发（命令编码为 base64，端�
     },
     EXEC,
   );
-  assert.deepEqual(execResult, { plan: PLAN, result: { ok: true } });
+  // 规范 §7：`plan` 过视图（内部 camelCase → 模型可见 snake_case）。
+  // 夹具的 `result` 没有 `status`（视图按字段存在性输出，JSON 往返会丢掉 undefined）⇒ 这里
+  // 只断言"映射后的 plan"与"旧键不再出现"；`toolRunResultView` 的字段映射由命名锁覆盖。
+  assert.deepEqual((execResult as { plan: unknown }).plan, planView(PLAN));
+  assert.equal(
+    Object.hasOwn((execResult as { result: object }).result, 'toolRunId'),
+    false,
+    '旧 camelCase 键（toolRunId）不得出现在模型可见结果里',
+  );
 
   const intent = only(fake.executeCalls).intent;
   assert.deepEqual(intent.params, {
