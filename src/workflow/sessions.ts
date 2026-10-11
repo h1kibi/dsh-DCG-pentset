@@ -6,7 +6,7 @@
  */
 
 import type { BudgetExtension, HumanAbort, HumanPause, HumanResume, Interjection, InterjectionResult, RetryRequest, StartWorkerInput, StartedWorker, SystemPauseRequest, TransitionResult, WorkflowSnapshot } from '../contracts.ts';
-import { isPhase, runActionAvailability } from '../contracts.ts';
+import { isPhase, runActionAvailability, TERMINAL_SESSION_STATUSES } from '../contracts.ts';
 import { planTransition } from './transition-table.ts';
 import { issueLease, reissueLease, revokeLease } from './lease.ts';
 import { DEFAULTS } from '../contracts.ts';
@@ -186,40 +186,60 @@ export class SessionFlow {
         `只有等待人工判断时可以重做（当前 ${engagement.current_status}）`,
       );
     }
+    const currentId = engagement.active_agent_session_id;
+    // ── 复用要有可复用的会话，否则**降级为新建会话**（2026-10-11 外部缺陷报告 §3.1 第三个选项）──
+    //
+    // 旧写法在 `currentId === null` 时无条件拒绝（「请从控制台启动新 Worker」），于是悬空态结算
+    // （会清空指针）之后**连「新建会话」重做都进不去**；而 `reuse: true` 打在一个已终态的会话上
+    // 必然半路失败（`waiting_human → active` 不是 002 触发器允许的边）。
+    //
+    // 现在的规则：「重做」的语义是「这一轮再来一次」——请求复用只在会话**还能用**时成立；
+    // 会话已终态 / 指针已空时**按需新建**，不做静默替换：决策行记 `new_session`、转移行记
+    // `session_reused = false`，账本里看得清这一次实际执行的是哪种。
+    const reuseTargetId = input.reuseSession
+      && currentId !== null
+      && !(await this.#core.sessionIsTerminal(currentId))
+      ? currentId
+      : null;
+    /** **实际**是否复用（请求复用但会话不可用 ⇒ 降级为新建）。计划、决策与转移行都按它记。 */
+    const reuse = reuseTargetId !== null;
     const planned = planTransition({
       type: 'retry',
       fromStatus: 'waiting_human_review',
       toStatus: 'worker_running',
-      reuseSession: input.reuseSession,
+      reuseSession: reuse,
     });
     this.#core.assertPlan(planned);
 
-    const currentId = engagement.active_agent_session_id;
-    if (currentId === null) {
-      throw new WorkflowRejection('lease_required', '没有活动会话可以重做；请从控制台启动新 Worker');
-    }
-
-    const reuse = input.reuseSession;
+    // 新建会话的「来源」= 指针指向的会话，没有就是最后一次会话（血脉与技能继承用它，允许都是 null）。
+    const sourceId = currentId ?? await this.#core.lastSessionId(input.engagementId);
     const decisionId = await this.#core.recordDecision({
       engagementId: input.engagementId,
       operatorId: input.operatorId,
       decisionType: 'retry',
-      subjectId: currentId,
-      decision: reuse ? 'reuse_session' : 'new_session',
+      // 决策的「对象」优先是那次会话；一个会话都没有时（作业刚起步就失败）用作业自己，
+      // 它是 NOT NULL 的 text 列，塞得下。
+      subjectId: sourceId ?? input.engagementId,
+      decision: reuseTargetId !== null ? 'reuse_session' : 'new_session',
       reason: input.reason,
       editedPayload: { taskPrompt: input.taskPrompt, contextRefs: input.contextRefs ?? [] },
     });
 
-    let targetSessionId = currentId;
-    if (!reuse) {
-      // 新建会话：关闭旧会话。租约吊销在**事务外**做——见下。
-      await this.#core.deps.txDb.query(
-        `update pentest.worker_sessions set status = 'superseded', ended_at = now()
-          where id = $1::uuid`,
-        [currentId],
-      );
-      targetSessionId = await this.#core.insertRetrySession(engagement, input, currentId);
+    let targetSessionId: string;
+    if (reuseTargetId === null) {
+      // 新建会话：把旧会话收掉（如果它还在非终态）。**终态行不能改写**——002 的触发器会把
+      // `failed → superseded` 拒成 23001（终态不可回退、不可改写），而悬空态结算后我们面对的
+      // 正是那种行；它已经结束了，没有"收起来"这回事。守卫写在 SQL 里（按库里的真状态判）。
+      if (currentId !== null) {
+        await this.#core.deps.txDb.query(
+          `update pentest.worker_sessions set status = 'superseded', ended_at = now()
+            where id = $1::uuid and not (status = any($2::text[]))`,
+          [currentId, [...TERMINAL_SESSION_STATUSES]],
+        );
+      }
+      targetSessionId = await this.#core.insertRetrySession(engagement, input, sourceId);
     } else {
+      targetSessionId = reuseTargetId;
       // 复用：只递增执行次数、把状态置回 active。
       //
       // **不更新 `task_prompt`**：它是创建时冻结的能力快照的一部分（§2.4），
@@ -247,7 +267,7 @@ export class SessionFlow {
       graphIteration: toInt(engagement.graph_iteration, 'graph_iteration'),
       fromScopeVersion: null,
       toScopeVersion: null,
-      fromSessionId: currentId,
+      fromSessionId: sourceId,
       toSessionId: targetSessionId,
       expectedVersion: input.expectedStateVersion,
       humanDecisionId: decisionId,
@@ -260,7 +280,7 @@ export class SessionFlow {
       currentStatus: 'worker_running',
       activeSessionId: targetSessionId,
     });
-    return { engagement, targetSessionId, reuse, currentId };
+    return { engagement, targetSessionId, reuse, currentId, sourceId };
     });
 
     // ── 事务已提交。租约与 dsh 会话都在事务外处理 ──
@@ -268,16 +288,20 @@ export class SessionFlow {
     // 租约端口用**自己的连接**去 `SELECT ... FOR UPDATE` 那行 `worker_sessions`，
     // 而我们的事务刚刚改过它且尚未提交。若把租约调用放在事务内，它等我们提交、
     // 我们等它返回——**自锁死**。因此所有租约操作必须在事务外。
-    const { engagement, targetSessionId, reuse, currentId } = staged;
+    const { engagement, targetSessionId, reuse, currentId, sourceId } = staged;
     if (reuse) {
-      // 世代推进：旧世代的在途请求被拒（lease_generation_stale）
-      await reissueLease(this.#core.deps.leases, { workerSessionId: currentId, now: this.#core.now() });
+      // 世代推进：旧世代的在途请求被拒（lease_generation_stale）。
+      // `targetSessionId` 就是被复用的那个会话（复用分支没有新建）。
+      await reissueLease(this.#core.deps.leases, { workerSessionId: targetSessionId, now: this.#core.now() });
     } else {
-      await revokeLease(this.#core.deps.leases, {
-        workerSessionId: currentId,
-        reason: 'superseded',
-        now: this.#core.now(),
-      });
+      // 旧会话可能**根本不存在**（作业刚起步就失败、悬空态结算清空指针）——有才吊销。
+      if (currentId !== null) {
+        await revokeLease(this.#core.deps.leases, {
+          workerSessionId: currentId,
+          reason: 'superseded',
+          now: this.#core.now(),
+        });
+      }
       await issueLease(this.#core.deps.leases, {
         workerSessionId: targetSessionId,
         ttlSeconds: DEFAULTS.leaseTtlSeconds,
@@ -316,7 +340,7 @@ export class SessionFlow {
       // 「启动 Agent」省略 toolAllow ⇒ 用阶段默认）。这里曾写「要改能力应走切换阶段或
       // 从控制台显式指定」——**后半句已不成立**：逐项编辑器在 2026-10-07 被撤下，
       // 能力边界只由 Profile 与阶段默认决定，重做只能延续（不能被用来放宽）。
-      const inherited = await this.#core.loadSessionTooling(currentId);
+      const inherited = await this.#core.inheritedTooling(sourceId, caps);
       await this.#core.createDshSessionOrMarkFailed({
         sessionKind: 'phase',
         engagementId: input.engagementId,
@@ -573,8 +597,11 @@ export class SessionFlow {
     try {
       await this.#core.deliverOrFail(session.dsh_session_id, input.message, session.id);
     } catch (error) {
-      // 与重做复用同一条处置：转移已提交、消息没送到 → 会话置 failed（吊销租约）、
-      // 作业置 blocked，人类用 resume 或 abort 决定下一步。
+      // 与重做复用同一条处置：转移已提交、消息没送到 → 会话置 failed（吊销租约）、作业置 blocked；
+      // 若因此构成悬空态（主状态 `worker_running` 而没有活会话）则先做**悬空态结算**——
+      // 回滚到进入 `worker_running` 的那次转移的 `from_status` 并清空活动会话指针
+      // （见 `core.markDeliveryFailure` 与 `dangling.ts`）：人类从回滚后的状态重新选择
+      // （重做会按需新建会话），而不是用 resume 回到原状态。
       await this.#core.markDeliveryFailure({
         engagementId: session.engagement_id,
         workerSessionId: session.id,

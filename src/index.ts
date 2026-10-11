@@ -365,12 +365,21 @@ export async function applyPentest(ctx: Context, config: PluginConfig = {}): Pro
     void own.recovery
       .recoverAll()
       .then((report) => {
-        if (report.engagements.length > 0 || report.errors.length > 0) {
+        // 判据里必须有 `danglingSettled`：只发生悬空态结算时（没有无主会话、没有错误），
+        // 旧判据会让整条启动日志**不打印**——那次回滚在启动侧完全静默（2026-10-11 质检）。
+        if (
+          report.engagements.length > 0
+          || report.errors.length > 0
+          || report.danglingSettled.length > 0
+        ) {
           log(ctx, 'info')(
             `启动对账：处理 ${String(report.engagements.length)} 个 engagement；` +
               `标记已中断 ${String(report.sessionsMarkedInterrupted.length)} 个会话、` +
               `未结算工具 ${String(report.toolRunsMarkedUnknown.length)} 次、` +
               `阻塞 ${String(report.engagementsBlocked.length)} 个 engagement` +
+              (report.danglingSettled.length > 0
+                ? `、结算悬空态 ${String(report.danglingSettled.length)} 个 engagement（主状态回滚，按事件明细）`
+                : '') +
               (report.needsHumanReconfirmation.length > 0
                 ? `；**${String(report.needsHumanReconfirmation.length)} 项需人工重新确认**（高危阶段的未知状态）`
                 : '') +

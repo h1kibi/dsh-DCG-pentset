@@ -222,11 +222,13 @@ describe('悬空态结算（2026-10-11 外部缺陷报告）：规则不变量�
     assert.match(sql, /to_status = 'worker_running'/, '守卫③：锚点必须是"进入 worker_running"的那次转移');
     assert.match(sql, /from_status <> 'worker_running'/, '守卫③：跳过 worker_running → worker_running 这类空转移');
     assert.match(sql, /order by resulting_version desc/, '守卫③：取最近一次这种转移');
-    // ③′ 没有锚点就**不结算**：真库上 8 条"终止"过的作业就是这样被误结算的（2026-10-11 自纠）
-    assert.doesNotMatch(
+    // ③′ 「锚点谓词与 select from_status 同处一个 CTE」——不锁排版（曾经用 doesNotMatch 去挡旧写法，
+    //     但那只能挡住一种格式：去掉 ::uuid、加一个中立谓词、换个别名都能绕过去而语义照样是错的。
+    //     区分新旧锚点的是真库反例：无锚点 ⇒ 不结算、不写事件）。
+    assert.match(
       sql,
-      /select from_status\s+from pentest\.state_transitions\s+where engagement_id = \$1::uuid\s+order by/,
-      '不许退回"最后一次转移的 from_status"——终止记的是 worker_running → worker_running，那是原地踏步',
+      /select from_status[\s\S]{0,200}?to_status = 'worker_running'[\s\S]{0,200}?from_status <> 'worker_running'/u,
+      '锚点 = 进入 worker_running 的那次转移（不是"最后一次转移"）',
     );
     // ④ 清空活动会话指针（它还指着那个死会话）
     assert.match(sql, /active_agent_session_id = null/, '守卫④：清空活动会话指针');
@@ -238,24 +240,39 @@ describe('悬空态结算（2026-10-11 外部缺陷报告）：规则不变量�
     const core = read('src/workflow/core.ts');
     const calls = [...core.matchAll(/await this\.settleDanglingRunning\(/gu)].length;
     assert.ok(calls >= 2, `创建失败与投递失败两条路径都要结算，实际 ${calls} 处调用`);
-    assert.match(core, /创建 dsh 会话失败：\$\{detail\}/, '创建失败那条要把原因带进结算的 detail');
-    assert.match(core, /投递失败：\$\{input\.detail\}/, '投递失败那条同理');
+    // 断言**钉在调用点本身**：这两个字面量在 core.ts 里还出现在别的写入（status_reason、closeSession
+    // 理由）里，只匹配字面量的话把结算的 detail 换成固定串也照样绿（2026-10-11 质检发现的伪锁）。
+    assert.match(
+      core,
+      /await this\.settleDanglingRunning\(input\.engagementId, `创建 dsh 会话失败：\$\{detail\}`\)/u,
+      '创建失败那条要把原因带进结算的 detail',
+    );
+    assert.match(
+      core,
+      /await this\.settleDanglingRunning\(input\.engagementId, `投递失败：\$\{input\.detail\}`\)/u,
+      '投递失败那条同理',
+    );
   });
 
   it('启动对账按**作业**扫悬空态（按"扫到的无主会话"驱动会漏掉报告里的场景）', () => {
     const recovery = read('src/workflow/recovery.ts');
     assert.match(recovery, /#findDanglingRunning\(/, '必须有作业侧的悬空扫描');
+    // 候选的守卫钉在**子查询内容**上：'附近有个 not exists' 挡不住把条件反写成 `status in (…)`
+    // （那样会只扫出有活会话的作业，恰好漏掉报告场景）。
     assert.match(
       recovery,
-      /current_status = 'worker_running'[\s\S]{0,600}?not exists \(/u,
-      '扫描守卫与结算 SQL 同形（worker_running + 没有活会话）',
+      /not exists \(\s*select 1\s+from pentest\.worker_sessions s[\s\S]{0,200}?s\.status not in \('failed', 'closed', 'superseded'\)/u,
+      '扫描守卫必须真的排除活会话',
     );
-    // 候选侧的两条守卫也必须在：否则会扫出"扫了也白扫"的候选（终止过的作业、没有锚点的作业）
-    assert.match(recovery, /e\.status not in \('aborted', 'failed'\)/, '候选要排除运行标记终态（终止过的作业）');
-    assert.match(
-      recovery,
-      /t\.to_status = 'worker_running'[\s\S]{0,200}?t\.from_status <> 'worker_running'/u,
-      '候选必须存在"进入 worker_running"的转移——没有锚点的作业不结算',
+    // 候选要排除运行标记终态（终止过的作业）
+    assert.match(recovery, /e\.status not in \('aborted', 'failed'\)/, '候选要排除运行标记终态');
+    // **候选里不许出现 state_transitions**（2026-10-11 质检）：这次扫描在租户级作用域里跑，
+    // 而那张表的行在那个作用域下不可见（RLS 按作业收窄）——写成 exists(…) 会让候选恒为空，
+    // 整条补扫在 RLS 部署里静默失效。锚点条件由结算 SQL 自己判（逐作业作用域）。
+    assert.doesNotMatch(
+      recovery.slice(recovery.indexOf('#findDanglingRunning'), recovery.indexOf('#settleDanglingCandidates')),
+      /state_transitions/u,
+      '候选扫描不得读 state_transitions（租户作用域下不可见 ⇒ 候选恒空）',
     );
     assert.match(recovery, /#settleDanglingCandidates\(/, '结算要逐个候选执行');
     // 报告的场景里那个会话是**终态**：按"无主会话"驱动会一条都不扫到——这条注释就是那个教训。

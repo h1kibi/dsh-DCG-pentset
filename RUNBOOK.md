@@ -1639,16 +1639,23 @@ docker run --rm --network $NET $ENV $IMG "<命令行>"
 | ② 创建失败只写运行标记，**不回滚主状态** | `createDshSessionOrMarkFailed` 的失败分支（与 `markDeliveryFailure`）只把 `engagements.status` 写成 `blocked`，**从不碰 `current_status`** ⇒ 造出"主状态说在跑、实际没有会话"的悬空态 |
 | ③ 启动对账**不结算**这种悬空态 | 对账找的是"还活着但没人驱动"的会话；`failed` 是终态、不在集合里 ⇒ 恰好在要治的场景下不触发（它的注释里写着「只改运行标记，不动主状态」） |
 
-**处置**（四条）：
+**处置**（五条）：
 
 - **失败即结算**：两条失败路径都调 `WorkflowCore.settleDanglingRunning`——只在 `current_status='worker_running'`、
   **运行标记非终态**、且**确实没有活会话**时，回滚到**"进入 `worker_running` 的那次转移"的 `from_status`**
   （不猜：重做失败回 `waiting_human_review`、重开回 `report_ready`、切换回 `transition_confirmation`、启动回 `ready`），
-  清空 `active_agent_session_id`，推进一版并写事件 `workflow.dangling_running_settled`（SQL 单一来源在 `src/workflow/dangling.ts`）。
-  **没有这个落点就不结算**（`update` 不命中 ⇒ 连事件都不写）。
+  清空 `active_agent_session_id`，推进一版并写事件 `workflow.dangling_running_settled`（SQL 单一来源在 `src/workflow/dangling.ts`；
+  状态回滚与事件**在同一个事务里**）。**没有这个落点就不结算**（`update` 不命中 ⇒ 连事件都不写）。
 - **启动对账**按**作业**驱动补一次结算（`RecoveryReport.danglingSettled`）：这是"客户端拿老版本、服务器上新版本"时的自愈路径。
-- **可用性**加"活动会话存活"：不存活时「重做」禁用，**理由直接指路**（"先「结束技术测试」再「重开技术工作」"）。
-- **界面**：活动会话徽标标注会话状态（`（已失败）`）；自相矛盾态显式告警并给出路，并写明**不要点「终止」**。
+  两个入口（`recoverAll` / `recoverEngagement`）**行为一致**，且**不依赖 `rlsContext` 是否配置**——候选扫描只读
+  `engagements` 与 `worker_sessions`（`state_transitions` 在租户级作用域下不可见，写进候选条件会让它在 RLS 部署里恒空）。
+- **「重做」自己修好那条路**（§3.1 第三个选项）：请求复用但活动会话**已终结或指针为空**时，服务端**按需新建会话**
+  （决策行记 `new_session`、转移行记 `session_reused=false`，血缘用「最后一次会话」、没有就退回阶段默认）——
+  不再"亮着必失败"，也不再要求人先绕道「结束技术测试 → 重开技术工作」（那条路只在还有非终态会话可挂回时可用）。
+  界面上「重做」按钮**不再因为会话死了而变灰**；控制台按会话状态选请求哪种模式（状态未知时按复用请求，服务端兜底）。
+- **界面**：活动会话徽标标注会话状态（`（已失败）`；查不到那一行时说`（状态未知）`——列表未加载/被 200 条上限截断都会走到这里，
+  别把它说成"没有会话"）；自相矛盾态显式告警，并写明**不要点「终止」**（那会让重做与重开永久不可用，只剩归档与清空）。
+- **启动日志**：`danglingSettled` 也计入打印判据——只发生结算时（没有无主会话、没有错误）此前整条日志静默。
 
 **第一版的两条缺陷（真库上 8 条作业现场抓到，已自纠）**：① 候选没看运行标记 ⇒ 把 `aborted`（人类按了「终止」）的
 8 条作业也"结算"了；② 锚点取了"最后一条转移的 `from_status`"，而「终止」记的是 `worker_running → worker_running`
@@ -1658,18 +1665,21 @@ docker run --rm --network $NET $ENV $IMG "<命令行>"
 复核口径：`payload_json->>'rolledBackTo'` 与作业当前主状态同值的就是它们。
 
 **由此产生的行为（不是 bug，但要知道）**：重做失败后作业**回到 `waiting_human_review`**（不是留在 `worker_running`），
-`state_version` 会 +1，界面上多一条「悬空态结算」的审计事件；需要落库核对时按
-`select event_type, payload_json->>'rolledBackTo' from pentest.context_events where event_type='workflow.dangling_running_settled'`。
+`state_version` 会 +1，账本里多一条 `workflow.dangling_running_settled`（**启动日志**会写"结算悬空态 N 个 engagement"；
+控制台**没有**渲染插件账本的时间线视图——`AgentTrace` 渲染的是 dsh 会话事件流，要看这条事件按下面的 SQL 查库）：
+`select payload_json->>'rolledBackTo' from pentest.context_events where engagement_id='<id>' and event_type='workflow.dangling_running_settled'`。
 **终止过 / 运行已判死（`aborted`/`failed`）的作业不会进结算**——它们的出路是归档与清空（见上面「清理作业：归档（默认）与清空内容」）。
 
 **可复跑命令**（测试库，勿指向 `pentest_personal`）：
 
 ```bash
-# 真库行为锁：正例（结算发生）+ 反例×3（活租约会话 ⇒ 不动 / aborted ⇒ 不结算不写事件 / 无锚点 ⇒ 不结算）
-#              + 可用性矩阵 + 存活规则 + 组件渲染
+# 真库行为锁：正例（结算发生 + 事件写进账本）+ 反例×3（活租约会话 ⇒ 不动 / aborted ⇒ 不结算不写事件 / 无锚点 ⇒ 不结算）
+#              + 主状态守卫（report_ready ⇒ 不结算）+ recoverAll 的补扫与候选守卫
+#              + 「重做」的降级（会话已终态 ⇒ 按需新建）与指针为空时的重做
+#              + 可用性矩阵 + 组件渲染（含"查不到那一行不报矛盾"）
 PENTEST_DATABASE_URL='postgresql://postgres:check@127.0.0.1:55446/pentest' \
   node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=60000 \
-  test/recovery.test.ts test/client-run-controls.test.ts test/state-ledger.test.ts
+  test/recovery.test.ts test/client-run-controls.test.ts test/state-ledger.test.ts test/pg-workflow.test.ts
 ```
 
 ---

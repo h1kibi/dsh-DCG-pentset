@@ -287,7 +287,16 @@ export class StartupRecovery {
    */
   async #recover(rows: readonly StaleSessionRow[], limit: number): Promise<RecoveryReport> {
     const scopes = this.#rlsScope;
-    if (scopes === undefined) return this.#recoverGroup(rows);
+    if (scopes === undefined) {
+      // 悬空态补扫按**作业**驱动，与"有没有无主会话"无关，也与"有没有 RLS 作用域"无关：
+      // 这条提前返回本意是「无 RLS 时不逐作业分组」，却把整段补扫一起跳过了
+      // （2026-10-11 质检：未配 rlsContext 的默许装配里 recoverAll 从不结算悬空态，
+      //  而 `recoverEngagement` 两条分支都结算——同一次对账两条入口行为不一致）。
+      return this.#withDanglingSettled(
+        await this.#recoverGroup(rows),
+        await this.#findDanglingRunning(limit),
+      );
+    }
 
     const byEngagement = new Map<string, StaleSessionRow[]>();
     for (const row of rows) {
@@ -442,23 +451,26 @@ export class StartupRecovery {
    * 结算一个作业的**悬空态**（主状态 `worker_running` + 没有活会话）。
    *
    * 规则与 SQL 是单一来源（`dangling.ts`）；这里负责：走 `#write`（**必须有事务上下文**——
-   * 裸 `update` 会被 RLS 静默过滤成 0 行，见 {@link #write} 的说明）、写审计、且**绝不抛**。
+   * 裸 `update` 会被 RLS 静默过滤成 0 行，见 {@link #write} 的说明）、**在同一个事务里**写审计；
+   * 失败不抛（候选循环把它收进报告的 `errors`）。
    *
    * 返回被回滚到的主状态；没有需要结算的悬空态时返回 `null`。
    */
   async #settleDangling(engagementId: string): Promise<string | null> {
-    const rolledBackTo = await this.#write(async (tx) => {
+    return this.#write(async (tx) => {
       const settled = await tx.query<{ settled_from: string | null }>(DANGLING_RUNNING_SETTLE_SQL, [
         engagementId,
       ]);
-      return settled.rows[0]?.settled_from ?? null;
+      const rolledBackTo = settled.rows[0]?.settled_from ?? null;
+      if (rolledBackTo === null) return null;
+      // 结算与它的审计事件**同一个事务**（2026-10-11 质检）：分开写会出现「状态回滚了、账本
+      // 没留痕」（或反向），而这条事件的唯一用途就是在账本里解释这次回滚。
+      await this.#audit(engagementId, null, 'workflow.dangling_running_settled', {
+        detail: '启动对账发现主状态与活动会话矛盾（worker_running 而没有活会话）；已按进入 worker_running 的那次转移的 from_status 结算',
+        rolledBackTo,
+      });
+      return rolledBackTo;
     });
-    if (rolledBackTo === null) return null;
-    await this.#audit(engagementId, null, 'workflow.dangling_running_settled', {
-      detail: '启动对账发现主状态与活动会话矛盾（worker_running 而没有活会话）；已按进入 worker_running 的那次转移的 from_status 结算',
-      rolledBackTo,
-    });
-    return rolledBackTo;
   }
 
   /** 把"结算候选"的结果并进一份既有报告（`recoverEngagement` 的两个分支共用）。 */
@@ -473,11 +485,22 @@ export class StartupRecovery {
   }
 
   /**
-   * 找出**悬空态**的作业：主状态 `worker_running` 而没有任何活会话。
+   * 找出**悬空态**的作业：主状态 `worker_running`、运行标记非终态、且没有任何活会话。
    *
    * 为什么按**作业**扫而不是复用"无主会话"的扫描结果（2026-10-11 外部缺陷报告）：
    * 报告里的那个会话是**终态 `failed`**，它不在无主扫描的集合里（那个扫描只找"还活着但没人驱动"的），
-   * 于是按会话驱动会**恰好在要治的场景下不触发**。守卫与结算 SQL 的 WHERE 逐字一致。
+   * 于是按会话驱动会**恰好在要治的场景下不触发**。
+   *
+   * ── 候选里为什么**没有**「锚点存在」这一条（2026-10-11 质检）──
+   *
+   * 这次扫描在**租户级**作用域里跑（`scopes.run({ engagementId: null }, …)` 见下），而
+   * `state_transitions` 的行在那个作用域下**不可见**（RLS 按作业收窄）：写成
+   * `exists (… state_transitions …)` 会让候选**恒为空**——整条补扫在 RLS 生效的部署里静默失效，
+   * 而且看起来一切正常（本机的超级用户连接更是完全看不出来）。
+   *
+   * 锚点条件因此由**结算 SQL 自己判**（它逐作业执行、在正确的作用域里）：没有锚点就影响 0 行 ⇒
+   * 返回零行 ⇒ 调用方不写事件、不推版本（见 `dangling.ts` 的规则 1）。候选多几个"扫了也白扫"的
+   * 作业没有代价——结算按零行返回，报告里不会出现它。
    */
   async #findDanglingRunning(limit: number): Promise<readonly string[]> {
     const scopes = this.#rlsScope;
@@ -488,15 +511,6 @@ export class StartupRecovery {
           -- 运行标记终态不是悬空态：aborted 是人类按了「终止」、failed 是运行已判死——
           -- 它们的出路是归档与清空（见 dangling.ts 的规则 0）。
           and e.status not in ('aborted', 'failed')
-          -- 结算要有落点：必须存在一次「真正把主状态推进到 worker_running」的转移。
-          -- 只有 worker_running → worker_running（终止）这类空转移的作业不结算——照它回滚是原地踏步。
-          and exists (
-            select 1
-              from pentest.state_transitions t
-             where t.engagement_id = e.id
-               and t.to_status = 'worker_running'
-               and t.from_status <> 'worker_running'
-          )
           and not exists (
             select 1
               from pentest.worker_sessions s
@@ -640,6 +654,10 @@ export class StartupRecovery {
    *
    * 只改运行标记（`engagements.status`），**不动主状态**——主状态如实反映
    * 「上次停在哪」，人类据此判断。这与 §5.1 的两层状态表一致。
+   *
+   * 例外是**悬空态**：主状态是 `worker_running` 而作业确实没有活会话时，主状态本身是自相矛盾的
+   * （两条出边都够不着），那种情形由 `#settleDanglingRunning` 结算掉（`dangling.ts` 的规则），
+   * 不归本方法管。
    */
   async #blockEngagement(engagementId: string, reason: string): Promise<void> {
     await this.#write(async (tx) => tx.query(

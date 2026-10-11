@@ -32,9 +32,9 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 
-import type { ApprovalMode, MainStatus, Phase, RunMarker } from '../../contracts.ts';
+import type { ApprovalMode, Phase } from '../../contracts.ts';
 import type { RunActionAvailability as SharedRunActionAvailability } from '../../contracts.ts';
-import { APPROVAL_MODES, PHASES, runActionAvailability as decideRunActions } from '../../contracts.ts';
+import { APPROVAL_MODES, PHASES, TERMINAL_SESSION_STATUSES, runActionAvailability as decideRunActions } from '../../contracts.ts';
 import { APPROVAL_MODE_HINTS, APPROVAL_MODE_LABELS } from '../presets.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
 import type { SessionStatus } from '../../contracts.ts';
@@ -125,6 +125,27 @@ export function startBlockers(input: {
 }
 
 /**
+ * 活动会话的**三态**：`unknown` = 不知道（快照里还没有/查不到那一行）、`none` = 明确没有指针、
+ * `known` = 拿到了真状态。别把 `unknown` 折进 `none`——那会把"没加载出来"说成"没有会话"。
+ */
+type ActiveSession =
+  | { readonly kind: 'unknown' }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'known'; readonly status: SessionStatus };
+
+/**
+ * 「重做」请求哪种模式：`known` + 活着 ⇒ 复用（省钱：保留推理链与前缀缓存）；`known` + 终态 /
+ * `none`（没有指针）⇒ 新建；`unknown` ⇒ 复用——不拿"没加载出来"当依据去推翻一个还活着的会话。
+ *
+ * 服务端仍会按事实降级（会话不可用时按需新建，见 `retryWorker`），这里只是把**首选意图**说清楚。
+ */
+export function retryReuseSession(activeSession: ActiveSession): boolean {
+  return activeSession.kind === 'known'
+    ? !TERMINAL_SESSION_STATUSES.has(activeSession.status)
+    : activeSession.kind === 'unknown';
+}
+
+/**
  * 运行期动作的可用性 + 客户端渲染的禁用原因。
  *
  * **判定字段继承契约层**（`RunActionAvailability`）：契约新增一条动作时，这里跟着报错，
@@ -142,21 +163,19 @@ interface RunActionAvailability extends SharedRunActionAvailability {
 }
 
 /**
- * 按两个正交字段判定四个运行期动作。
+ * 按两个正交字段判定运行期动作，并给出**每条禁用理由**。
  *
  * **判定取契约层的单源实现**（`contracts.ts` 的 `runActionAvailability`）：
- * 服务端把它当前置（拒绝并报出具体标记），这里按同一函数禁用按钮。此前两边各写一份，
- * 于是「界面挡住、经端点直调却能生效」——终止后还能暂停、再恢复出僵尸作业
- * （2026-10-05 复核 F1）。文案仍留在客户端渲染（服务端只回事实）。
+ * 服务端把**运行控制条的动作**当前置（拒绝并报出具体标记）——暂停/恢复/插话/终止/结束技术测试；
+ * 这里按同一函数禁用按钮，并补上"怎么才能可用"的理由。此前两边各写一份，于是「界面挡住、
+ * 经端点直调却能生效」——终止后还能暂停、再恢复出僵尸作业（2026-10-05 复核 F1）。
+ *
+ * **「重做」与「重开技术工作」是另一回事**（2026-10-11 质检澄清）：这两个判定**只用于界面**
+ * （禁用与理由文案），服务端各有独立守卫——`retryWorker`：主状态 + （不可用时按需新建会话）；
+ * `reopenTechnicalWork`：主状态 + 必须还有非终态会话可挂回。
  */
 export function runActionAvailability(
-  state: {
-    readonly mainStatus: MainStatus;
-    readonly runMarker: RunMarker;
-    readonly activeWorkerSessionId: string | null;
-    /** 活动会话的会话级状态（`null` = 没有活动会话、`undefined` = 不知道）；见契约层 `sessionUsable`。 */
-    readonly activeSessionStatus?: SessionStatus | null;
-  } | null,
+  state: NonNullable<Parameters<typeof decideRunActions>[0]> | null,
 ): RunActionAvailability {
   if (state === null) {
     const why = '尚未选中 engagement';
@@ -169,7 +188,11 @@ export function runActionAvailability(
     };
   }
   const marker = state.runMarker;
-  const decided = decideRunActions(state);
+  const decided = decideRunActions({
+    mainStatus: state.mainStatus,
+    runMarker: state.runMarker,
+    activeWorkerSessionId: state.activeWorkerSessionId,
+  });
   const active = state.activeWorkerSessionId !== null;
   return {
     ...decided,
@@ -206,18 +229,11 @@ export function runActionAvailability(
       : state.mainStatus === 'complete'
         ? '作业已签字导出，追加预算没有意义'
         : `仅运行中或已暂停可追加预算；当前运行标记：${runMarkerLabel(marker)}`,
+    // 「重做」只在主状态不对时禁用：会话不可用不再是禁用条件——服务端会按需新建会话
+    // （2026-10-11 质检）。会话状态仍旧影响**请求哪种模式**，由点击处决定。
     retryWorkerReason: decided.canRetryWorker
       ? null
-      : state.mainStatus !== 'waiting_human_review'
-        ? `仅「等待人工判断」可重做（那时人类刚看过报告）；当前主状态：${mainStatusLabel(state.mainStatus)}`
-        : // 主状态是对的，那就是**活动会话不可用**：重做会复用/新建一个会话，而眼下没有可用的会话。
-          // 这条路必须指出去，否则人类只会看到一个灰按钮（2026-10-11 外部缺陷报告）。
-          `活动 Worker 会话已结束或不存在（${
-            state.activeSessionStatus === null || state.activeSessionStatus === undefined
-              ? '没有活动会话'
-              : sessionStatusLabel(state.activeSessionStatus)
-          }）：` +
-          '先点「结束技术测试」再点「重开技术工作」——那条路会建一个新的会话',
+      : `仅「等待人工判断」可重做（那时人类刚看过报告）；当前主状态：${mainStatusLabel(state.mainStatus)}`,
     reopenTechnicalWorkReason: decided.canReopenTechnicalWork
       ? null
       : `仅「报告就绪（尚未签字）」可重开技术工作；当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}`,
@@ -286,25 +302,39 @@ export function RunControls(props: RunControlsProps): ReactNode {
   /**
    * 活动会话（**会话级状态**在这里才拿得到：`snapshot.sessions` 是 `listWorkerSessions` 的结果）。
    *
-   * `null` = 快照里没有这一行（会话已不存在/已终态被清理）；`undefined`（`state === null`）=
-   * 还没读到作业状态 ⇒ 不参与判定（见契约层 `sessionUsable` 的三态语义）。
+   * 三态**必须分清**（2026-10-11 质检）：`none` = 明确没有活动会话（指针为空）；`unknown` =
+   * 查不到行——会话列表可能还没加载完（`state` 与 `sessions` 是两次独立 emit），也可能被
+   * `listWorkerSessions` 的 200 条上限截断；`known` = 拿到了真状态。
+   *
+   * 第一版把「查不到行」当成 `null`（= 明确没有会话）：列表未就绪的窗口里会误报"自相矛盾"、
+   * 误禁「重做」——把"不知道"说成了事实。
    */
-  const activeSession = state === null || state.activeWorkerSessionId === null
-    ? null
-    : props.snapshot.sessions.find((session) => session.id === state.activeWorkerSessionId) ?? null;
-  const activeSessionStatus: SessionStatus | null | undefined = state === null
-    ? undefined
-    : activeSession?.status ?? null;
+  const activeSession: ActiveSession = state === null
+    ? { kind: 'unknown' }
+    : state.activeWorkerSessionId === null
+      ? { kind: 'none' }
+      : (() => {
+        const row = props.snapshot.sessions.find((s) => s.id === state.activeWorkerSessionId);
+        return row === undefined ? { kind: 'unknown' } : { kind: 'known', status: row.status };
+      })();
   /**
    * **自相矛盾态**（2026-10-11 外部缺陷报告 §3.3）：主状态说「Agent 正在跑」，而活动会话
    * 已经结束（或根本没有会话）。界面此前对此完全沉默，人类只能从两个灰按钮里猜。
+   *
+   * 两条边界：运行标记终态（`aborted`/`failed`）不在此列——那时人是自己按的「终止」，作业是
+   * 「运行已结束」而不是矛盾；会话状态**未知**也不算——不拿"没加载出来"当矛盾（那会误报）。
+   *
+   * 出路（不是"先点恢复"，那样只是把 `blocked` 变回 `running`，矛盾照旧）：启动对账会把它
+   * 结算回上一状态，之后「重做」照常可用（会按需新建会话）。
    */
-  const dangling = state !== null
-    && state.mainStatus === 'worker_running'
-    && (activeSessionStatus === null
-      || activeSessionStatus === 'failed'
-      || activeSessionStatus === 'closed'
-      || activeSessionStatus === 'superseded');
+  const danglingReason = state === null || state.mainStatus !== 'worker_running'
+    || state.runMarker === 'aborted' || state.runMarker === 'failed'
+    ? null
+    : activeSession.kind === 'none'
+      ? '没有活动会话'
+      : activeSession.kind === 'known' && TERMINAL_SESSION_STATUSES.has(activeSession.status)
+        ? `活动会话已${sessionStatusLabel(activeSession.status)}`
+        : null;
 
   const availability = runActionAvailability(
     state === null
@@ -313,7 +343,6 @@ export function RunControls(props: RunControlsProps): ReactNode {
           mainStatus: state.mainStatus,
           runMarker: state.runMarker,
           activeWorkerSessionId: state.activeWorkerSessionId,
-          activeSessionStatus,
         },
   );
   /**
@@ -460,14 +489,14 @@ export function RunControls(props: RunControlsProps): ReactNode {
         )}
         {modeNotice === null ? null : <p className="pentest-runcontrols__notice">{modeNotice}</p>}
       </div>
-      {dangling ? (
+      {danglingReason === null ? null : (
         <p className="pentest-runcontrols__failure" role="alert">
-          {`主状态是「Agent 正在运行」，但${activeSessionStatus === null ? '没有活动会话' : `活动会话已${sessionStatusLabel(activeSessionStatus)}`}——` +
-            '这是一个自相矛盾的状态（通常是重做/切换时新会话创建失败留下的）。出路按顺序点：' +
-            '若「结束技术测试」是灰的，先点「恢复」；然后「结束技术测试」→「重开技术工作」（后者会建新会话）。' +
-            '不要点「终止」：那会让重做与重开永久不可用。'}
+          {`主状态是「Agent 正在运行」，但${danglingReason}——` +
+            '这是一个自相矛盾的状态（通常是重做/切换时新会话创建失败留下的）。' +
+            '启动 dsh 时的对账会把它结算回上一状态，之后「重做」照常可用（会话不可用时会新建会话）；' +
+            '不要点「终止」：那会让重做与重开永久不可用，只剩归档与清空。'}
         </p>
-      ) : null}
+      )}
       <div className="pentest-runcontrols__status">
         <Badge text={state === null ? '状态未知' : runMarkerLabel(state.runMarker)} tone="neutral" />
         <Badge
@@ -480,11 +509,15 @@ export function RunControls(props: RunControlsProps): ReactNode {
             text={
               // 终态会话必须**说出来**：此前只显示会话短 id，人类看到的「活动会话 482fb2a5」
               // 其实是一个已经 failed 的死会话（2026-10-11 外部缺陷报告 §2.5）。
-              activeSession === null
-                ? `活动会话 ${state.activeWorkerSessionId.slice(0, 8)}（快照里已无此行）`
-                : `活动会话 ${state.activeWorkerSessionId.slice(0, 8)}（${sessionStatusLabel(activeSession.status)}）`
+              // 查不到那一行时说「状态未知」而不是「已不存在」——列表未加载/被 200 条上限截断
+              // 都会走到这里（2026-10-11 质检）。
+              activeSession.kind === 'known'
+                ? `活动会话 ${state.activeWorkerSessionId.slice(0, 8)}（${sessionStatusLabel(activeSession.status)}）`
+                : `活动会话 ${state.activeWorkerSessionId.slice(0, 8)}（${
+                  activeSession.kind === 'none' ? '没有活动会话' : '状态未知'
+                }）`
             }
-            tone={activeSession !== null && (activeSession.status === 'failed' || activeSession.status === 'closed' || activeSession.status === 'superseded') ? 'attention' : 'done'}
+            tone={activeSession.kind === 'known' && TERMINAL_SESSION_STATUSES.has(activeSession.status) ? 'attention' : 'done'}
             hint="单活动会话：一个 engagement 同时只有一个 Worker"
           />
         )}
@@ -634,13 +667,15 @@ export function RunControls(props: RunControlsProps): ReactNode {
         <Button
           label="重做"
           onClick={() => {
+            const reuseSession = retryReuseSession(activeSession);
             settle(
               props.controller.retryWorker({
                 engagementId,
                 taskPrompt: taskPrompt.trim() === '' ? '按上一轮的目标再执行一次' : taskPrompt.trim(),
-                reuseSession: true,
+                reuseSession,
               }),
-              () => { setNotice('已重做：复用当前会话，执行次数递增。'); },
+              // 实际走的是复用还是新建由服务端按会话状态定，提示不替它断言（决策与转移行里记得清楚）。
+              () => { setNotice('已重做：Agent 已重新驱动。'); },
             );
           }}
           disabled={!availability.canRetryWorker || busy}

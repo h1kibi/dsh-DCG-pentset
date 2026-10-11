@@ -1428,10 +1428,26 @@ export class WorkflowCore {
     });
   }
 
-  async insertRetrySession(engagement: EngagementRow, input: RetryRequest, sourceSessionId: string): Promise<string> {
+  /**
+   * 重做时新会话要继承的装备面：有来源会话就沿用它的**冻结面**，没有就退回**阶段默认**
+   * （与「启动首个 Worker」同一口径：空继承会造出没有技能、没有工具面的壳）。
+   *
+   * 两处调用——写 `worker_sessions` 行（`insertRetrySession`）与建 dsh 会话——**必须用同一份**，
+   * 否则库里记的能力与真正冻结到 dsh 会话上的会不一样。
+   */
+  async inheritedTooling(
+    sourceSessionId: string | null,
+    caps: { readonly defaultSkillIds: readonly string[]; readonly defaultToolAllow: readonly string[] },
+  ): Promise<{ readonly toolAllow: readonly string[]; readonly skillIds: readonly string[] }> {
+    return sourceSessionId === null
+      ? { skillIds: caps.defaultSkillIds, toolAllow: caps.defaultToolAllow }
+      : await this.loadSessionTooling(sourceSessionId);
+  }
+
+  async insertRetrySession(engagement: EngagementRow, input: RetryRequest, sourceSessionId: string | null): Promise<string> {
     const phase = isPhase(engagement.current_phase) ? engagement.current_phase : 'intelligence-gathering';
     const caps = await this.capabilities().resolve(phase);
-    const inherited = await this.loadSessionTooling(sourceSessionId);
+    const inherited = await this.inheritedTooling(sourceSessionId, caps);
     const id = this.id();
     await this.insertWorkerSession({
       id,
@@ -1448,6 +1464,39 @@ export class WorkflowCore {
       iteration: toInt(engagement.graph_iteration, 'graph_iteration'),
     });
     return id;
+  }
+
+  /**
+   * 会话是否为**终态**（或根本不存在）——「复用」分支的前置校验用它。
+   *
+   * 与对账的判据同源（`TERMINAL_SESSION_STATUSES`）：终态会话复用时会被 002 触发器拒
+   * （`waiting_human → active` 不是合法边），必须让调用方改走新建会话，而不是半路失败。
+   * 行不存在也算终态：指针指向一个不存在的会话时复用同样必失败。
+   */
+  async sessionIsTerminal(workerSessionId: string): Promise<boolean> {
+    const r = await this.deps.txDb.query<{ status: string }>(
+      `select status from pentest.worker_sessions where id = $1::uuid`,
+      [workerSessionId],
+    );
+    const row = r.rows[0];
+    return row === undefined || TERMINAL_SESSION_STATUSES.has(row.status);
+  }
+
+  /**
+   * 作业的**最后一次会话**（不看状态）：新建会话重做时的血缘与装备继承来源。
+   *
+   * 与 `reopenLastSession` 的区别是它**不筛状态**——悬空态结算之后指针被清空，能拿来继承的
+   * 只剩历史里那一行（通常是 `failed` 的那次）。没有会话就是 null（作业刚起步就失败）。
+   */
+  async lastSessionId(engagementId: string): Promise<string | null> {
+    const r = await this.deps.txDb.query<{ id: string }>(
+      `select id from pentest.worker_sessions
+        where engagement_id = $1::uuid
+        order by created_at desc
+        limit 1`,
+      [engagementId],
+    );
+    return r.rows[0]?.id ?? null;
   }
 
   /**
@@ -1572,46 +1621,29 @@ export class WorkflowCore {
   }
 
   /**
-   * 投递失败后的处置：会话置 `failed`（吊销租约）+ 作业置 `blocked` + 记一条事件。
-   *
-   * ── 为什么需要它 ──
-   *
-   * 人类动作（插话唤醒、重做复用）是**先提交转移、再投递消息**：转移在事务里落库，
-   * 投递在事务外。此前投递失败只把异常抛出去，于是库里停在「主状态 worker_running、
-   * 会话 active」，而消息根本没送到——人类看到报错、界面显示运行中，两处事实相反，
-   * 也没有任何补偿动作（对照 `revertHandoffDrafting` 是有显式回退的）。
-   *
-   * ── 为什么不回退主状态 ──
-   *
-   * `worker_running → waiting_human_review` 在状态图上**没有可记账的取值**
-   * （那是 Agent 侧动作、`recorded: false`）。硬改列会在账本里留下读不出来的跳跃，
-   * 回放时看到的状态与实际不符。因此这里走「交给人类」（§15.2）的形态：
-   * 置 `blocked`，人类的出口是 `resume`（blocked → running）或 `abort`。
-   *
-   * ── 失败面 ──
-   *
-   * 本方法**不抛**：它是在错误路径上执行的补偿，掩盖原始错误（会话不可达）比补偿
-   * 本身失败更糟。补偿失败只记警告——与原错误一起出现在日志里，人能看到全貌。
-   */
-  /**
-   * 结算**悬空态**：主状态 `worker_running` + 没有任何活会话（2026-10-11 外部缺陷报告）。
+   * 结算**悬空态**：主状态 `worker_running` + **运行标记非终态** + 没有任何活会话（2026-10-11 外部缺陷报告）。
    *
    * 规则与 SQL 都是单一来源（见 `dangling.ts` 的模块注释）；这里只负责**调用 + 审计 + 绝不抛**。
    * 返回是否真的结算了（没结算时调用方照旧抛主因）。
    */
   async settleDanglingRunning(engagementId: string, detail: string): Promise<boolean> {
     try {
-      const settled = await this.deps.db.query<{ settled_from: string | null }>(
-        DANGLING_RUNNING_SETTLE_SQL,
-        [engagementId],
-      );
-      const rolledBackTo = settled.rows[0]?.settled_from ?? null;
-      if (rolledBackTo === null) return false;
-      await this.audit(engagementId, null, 'workflow.dangling_running_settled', {
-        detail,
-        rolledBackTo,
+      // 状态回滚与它的审计事件必须**同一个事务**（2026-10-11 质检）：
+      // 分开写会出现「状态回滚了、账本没留痕」（或反向），而那条事件的唯一用途就是解释这次回滚。
+      // `tx` 可重入：调用方已经在事务里时并入它，否则自己开一个。
+      return await this.tx(async () => {
+        const settled = await this.deps.txDb.query<{ settled_from: string | null }>(
+          DANGLING_RUNNING_SETTLE_SQL,
+          [engagementId],
+        );
+        const rolledBackTo = settled.rows[0]?.settled_from ?? null;
+        if (rolledBackTo === null) return false;
+        await this.audit(engagementId, null, 'workflow.dangling_running_settled', {
+          detail,
+          rolledBackTo,
+        });
+        return true;
       });
-      return true;
     } catch (error) {
       // 结算失败不掩盖主因：调用方那边抛的才是真正要说的事。
       console.warn(
@@ -1623,6 +1655,34 @@ export class WorkflowCore {
     }
   }
 
+  /**
+   * 投递失败后的处置：会话置 `failed`（吊销租约）+ 作业置 `blocked` + **悬空态结算**（若构成）+ 记一条事件。
+   *
+   * ── 为什么需要它 ──
+   *
+   * 人类动作（插话唤醒、重做复用）是**先提交转移、再投递消息**：转移在事务里落库，
+   * 投递在事务外。此前投递失败只把异常抛出去，于是库里停在「主状态 worker_running、
+   * 会话 active」，而消息根本没送到——人类看到报错、界面显示运行中，两处事实相反，
+   * 也没有任何补偿动作（对照 `revertHandoffDrafting` 是有显式回退的）。
+   *
+   * ── 主状态怎么办：悬空态结算（2026-10-11 外部缺陷报告）──
+   *
+   * 只置 `blocked` 不够：那样作业停在「主状态说在跑、实际没有任何活会话」的悬空态，而该主状态的
+   * 两条出边都够不着（`worker_running → waiting_human_review` 要活着的 Agent 提交报告；「结束技术测试」
+   * 要求运行标记是 `running`，已被写成 `blocked`）——人类盯着两个灰按钮。
+   *
+   * 所以：若作业确实构成悬空态（主状态 `worker_running` + 运行标记非终态 + 没有任何非终态会话），
+   * 就地结算——回滚到「**进入** `worker_running` 的那次转移」的 `from_status`、清空活动会话指针、
+   * 推进一版（登记在 `NON_TRANSITION_VERSION_BUMPS`）、在**同一个事务里**写事件
+   * `workflow.dangling_running_settled`。规则与 SQL 见 `dangling.ts`——**不硬改列**：这一点没变，
+   * 变的是「转移之外的版本推进」现在有登记与事件，账本不会出现读不出来的跳跃。
+   * 非悬空态照旧只置 `blocked`，人类的出口是 `resume`（blocked → running）或 `abort`。
+   *
+   * ── 失败面 ──
+   *
+   * 本方法**不抛**：它是在错误路径上执行的补偿，掩盖原始错误（会话不可达）比补偿
+   * 本身失败更糟。补偿失败只记警告——与原错误一起出现在日志里，人能看到全貌。
+   */
   async markDeliveryFailure(input: {
     readonly engagementId: string;
     readonly workerSessionId: string;

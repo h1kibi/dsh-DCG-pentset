@@ -22,7 +22,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { RunMarker } from '../src/contracts.ts';
 import { ConsoleController } from '../src/client/controller.ts';
 import type { ConsoleSnapshot } from '../src/client/controller.ts';
-import { RunControls, parseLimit, runActionAvailability, startBlockers } from '../src/client/views/RunControls.tsx';
+import { RunControls, parseLimit, retryReuseSession, runActionAvailability, startBlockers } from '../src/client/views/RunControls.tsx';
 import { HandoffPanel, draftRequestBlockers } from '../src/client/views/HandoffPanel.tsx';
 
 const NOW = new Date('2026-09-19T12:00:00Z');
@@ -520,22 +520,16 @@ test('可用性矩阵：四个布尔由 mainStatus × runMarker 完全决定（�
   }
 });
 
-test('重做还要看活动会话是否活着：终态会话/没有会话 ⇒ 禁用，且理由指出出路', () => {
-  // 2026-10-11 外部缺陷报告 P1：`重做` 此前只看主状态与运行标记，于是「活动会话已 failed」
-  // 时按钮照样亮着，人一点就再走一遍失败处置——而失败处置恰恰会把作业留进悬空态。
-  const base = { mainStatus: 'waiting_human_review' as const, runMarker: 'running' as const, activeWorkerSessionId: 'w1' };
+test('「重做」请求哪种模式：会话活着才复用，终态/没有指针 ⇒ 新建，状态未知 ⇒ 复用（不拿"没加载"当依据）', () => {
+  // 2026-10-11 质检：判定从"禁用按钮"改成"选对模式"——服务端在会话不可用时**按需新建**
+  // （`retryWorker` 的降级），所以这里锁的是"首选意图"，不是可用性。
+  assert.equal(retryReuseSession({ kind: 'known', status: 'active' }), true, '活着的会话复用（省钱）');
+  assert.equal(retryReuseSession({ kind: 'known', status: 'waiting_human' }), true, '等人工判断的会话同样可复用');
   for (const status of ['failed', 'closed', 'superseded'] as const) {
-    const a = runActionAvailability({ ...base, activeSessionStatus: status });
-    assert.equal(a.canRetryWorker, false, `活动会话 ${status} 时不得重做（会打在终态行上/半路失败）`);
-    assert.match(String(a.retryWorkerReason), /重开技术工作/, `理由必须指出出路而不是只说为什么不行：${String(a.retryWorkerReason)}`);
+    assert.equal(retryReuseSession({ kind: 'known', status }), false, `${status} 的会话不能复用（002 触发器不许）`);
   }
-  const none = runActionAvailability({ ...base, activeSessionStatus: null });
-  assert.equal(none.canRetryWorker, false, '没有活动会话时可重做必然是 lease_required');
-  assert.match(String(none.retryWorkerReason), /没有活动会话/);
-  // 活着的会话照旧可用；**不知道**时沿用旧判据（不因缺数据把按钮变灰）。
-  assert.equal(runActionAvailability({ ...base, activeSessionStatus: 'active' }).canRetryWorker, true);
-  assert.equal(runActionAvailability({ ...base, activeSessionStatus: 'waiting_human' }).canRetryWorker, true);
-  assert.equal(runActionAvailability({ ...base }).canRetryWorker, true, 'undefined = 不知道 ⇒ 不改判据');
+  assert.equal(retryReuseSession({ kind: 'none' }), false, '没有指针 ⇒ 没有可复用的对象，走新建');
+  assert.equal(retryReuseSession({ kind: 'unknown' }), true, '状态未知 ⇒ 按复用请求（服务端会按事实降级）');
 });
 
 test('悬空态在界面上**显式告警并指路**（主状态说在跑、活动会话已终态）', () => {
@@ -550,8 +544,42 @@ test('悬空态在界面上**显式告警并指路**（主状态说在跑、活�
     }),
   );
   assert.match(html, /自相矛盾的状态/, '矛盾态必须显式说出来（此前界面完全沉默）');
-  assert.match(html, /先点「恢复」/, '要说清第一步点哪里');
-  assert.match(html, /重开技术工作/, '要给出最终出路');
+  assert.match(html, /对账会把它结算回上一状态/, '要说清怎么修：启动对账结算');
+  assert.match(html, /会话不可用时会新建会话/, '出路是「重做」（服务端按需新建），不说假话');
   assert.match(html, /不要点「终止」/, '要警告终止会把重做/重开永久关掉');
+  assert.equal(html.includes('先点「恢复」'), false, '别再指"先恢复"——那只把 blocked 变回 running，矛盾照旧');
   assert.match(html, /活动会话 w-failed（已失败）/, '徽标必须标注终态，别让人以为它是活会话');
+});
+
+test('会话列表里查不到活动会话时**不报矛盾**（列表未加载/被截断 ≠ 没有会话）', () => {
+  // 2026-10-11 质检：`state` 与 `sessions` 是两次独立 emit，`listWorkerSessions` 还有 200 条上限——
+  // 第一版把"查不到行"当成"明确没有会话"，于是那个窗口里会误报矛盾并误判重做模式。
+  const html = renderToStaticMarkup(
+    createElement(RunControls, {
+      controller: inertController(),
+      snapshot: snapshotWith(
+        workflowState({ mainStatus: 'worker_running', runMarker: 'running', activeWorkerSessionId: 'w-absent' }),
+        [],
+      ),
+      now: NOW,
+    }),
+  );
+  assert.equal(html.includes('自相矛盾的状态'), false, '查不到那一行不许说成"没有会话"');
+  assert.match(html, /活动会话 w-absent（状态未知）/, '徽标如实说"状态未知"');
+});
+
+test('终止/判死过的作业不报"矛盾"（运行已结束不是矛盾，自己按的终止）', () => {
+  for (const runMarker of ['aborted', 'failed'] as const) {
+    const html = renderToStaticMarkup(
+      createElement(RunControls, {
+        controller: inertController(),
+        snapshot: snapshotWith(
+          workflowState({ mainStatus: 'worker_running', runMarker, activeWorkerSessionId: 'w-dead' }),
+          [sessionRow({ id: 'w-dead', status: 'closed' })],
+        ),
+        now: NOW,
+      }),
+    );
+    assert.equal(html.includes('自相矛盾的状态'), false, `${runMarker}：作业是"运行已结束"，不是矛盾`);
+  }
 });

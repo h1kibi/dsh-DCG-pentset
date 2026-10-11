@@ -840,6 +840,95 @@ describe('工作流服务', { skip: DATABASE_URL === undefined ? '未设置 PENT
     assert.equal(nextLease.rows[0]!.n, 1);
   });
 
+  test('重做（降级）：请求复用但活动会话已终态 ⇒ 按需新建，不是半路失败', async () => {
+    // 2026-10-11 外部缺陷报告现场：重做失败把会话写成 failed（指针还指着它），人再点「重做」
+    // 请求复用——旧行为会打在终态行上被状态机触发器拒，作业于是悬空、三个按钮全灰。
+    // 「重做」的语义是「这一轮再来一次」，唯一可行的方法就是新建会话（决策行记 new_session、
+    // 转移行记 session_reused=false，账本里看得清）。
+    const s0 = await service.getState(engagementId);
+    const deadId = s0.activeWorkerSessionId!;
+    await markWaitingHuman(engagementId, deadId);
+    await pool.query(
+      `update pentest.worker_sessions set status = 'failed', ended_at = now() where id = $1::uuid`,
+      [deadId],
+    );
+    await pool.query(`update pentest.engagements set status = 'blocked' where id = $1::uuid`, [engagementId]);
+    const s1 = await service.getState(engagementId);
+    const createdBefore = sessions.created.length;
+
+    const r = await service.retryWorker({
+      engagementId,
+      operatorId: 'op',
+      reason: '会话已死，再试一次',
+      expectedStateVersion: s1.stateVersion,
+      taskPrompt: '继续',
+      reuseSession: true,
+    });
+
+    assert.equal(r.sessionReused, false, '会话不可用 ⇒ 降级为新建（不静默复用，也不失败在半路）');
+    assert.notEqual(r.workerSessionId, deadId, '降级必须真的建一个新的');
+    assert.equal(sessions.created.length, createdBefore + 1, '必须真的建了新 dsh 会话');
+    const lineage = await pool.query<{ retry_of_session_id: string | null }>(
+      `select retry_of_session_id from pentest.worker_sessions where id = $1::uuid`,
+      [r.workerSessionId],
+    );
+    assert.equal(lineage.rows[0]?.retry_of_session_id, deadId, '来源会话仍要记（阶段轨道的重做边靠它）');
+    const t = await pool.query<{ session_reused: boolean; from_worker_session_id: string | null; to_worker_session_id: string | null }>(
+      `select session_reused, from_worker_session_id, to_worker_session_id from pentest.state_transitions
+        where engagement_id = $1::uuid and transition_type = 'retry'
+        order by resulting_version desc limit 1`,
+      [engagementId],
+    );
+    assert.equal(t.rows[0]?.session_reused, false, '转移行如实记「没有复用」');
+    assert.equal(t.rows[0]?.to_worker_session_id, r.workerSessionId);
+    const after = await service.getState(engagementId);
+    assert.equal(after.mainStatus, 'worker_running');
+    assert.equal(after.activeWorkerSessionId, r.workerSessionId);
+
+    // 收尾：让作业回到等待人工，后续用例（共享 engagement 夹具）不受本用例影响。
+    await markWaitingHuman(engagementId, r.workerSessionId!);
+  });
+
+  test('重做（新建会话）在活动指针已清空时同样走得通（悬空态结算之后）', async () => {
+    // 悬空态结算会清空 `active_agent_session_id`（`dangling.ts`）。旧行为在指针为空时**连
+    // 新建会话那条也拒绝**（「请从控制台启动新 Worker」），于是结算把人送到了另一个死胡同。
+    const s0 = await service.getState(engagementId);
+    const deadId = s0.activeWorkerSessionId!;
+    await markWaitingHuman(engagementId, deadId);
+    await pool.query(
+      `update pentest.worker_sessions set status = 'failed', ended_at = now() where id = $1::uuid`,
+      [deadId],
+    );
+    await pool.query(
+      `update pentest.engagements set status = 'blocked', active_agent_session_id = null where id = $1::uuid`,
+      [engagementId],
+    );
+    const s1 = await service.getState(engagementId);
+    const createdBefore = sessions.created.length;
+
+    const r = await service.retryWorker({
+      engagementId,
+      operatorId: 'op',
+      reason: '结算后重做',
+      expectedStateVersion: s1.stateVersion,
+      taskPrompt: '继续',
+      reuseSession: false,
+    });
+
+    assert.equal(r.sessionReused, false);
+    assert.equal(sessions.created.length, createdBefore + 1, '指针为空也要能建出新会话');
+    const lineage = await pool.query<{ retry_of_session_id: string | null }>(
+      `select retry_of_session_id from pentest.worker_sessions where id = $1::uuid`,
+      [r.workerSessionId],
+    );
+    assert.equal(lineage.rows[0]?.retry_of_session_id, deadId, '来源退化为「最后一次会话」——继承它的装备面');
+    const after = await service.getState(engagementId);
+    assert.equal(after.mainStatus, 'worker_running');
+    assert.equal(after.activeWorkerSessionId, r.workerSessionId);
+
+    await markWaitingHuman(engagementId, r.workerSessionId!);
+  });
+
   test('amendScope：产生新范围版本并递增 policy_epoch（state_version 不参与）', async () => {
     const before = await service.getState(engagementId);
     await service.amendScope({

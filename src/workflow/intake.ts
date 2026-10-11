@@ -268,9 +268,11 @@ export class IntakeFlow {
           const row = existing.rows[0];
           // 作业是否**仍在 intake**（`auth_pending`）。这条守卫的语义在两个入口上必须一致：
           // 已经离开 intake 的作业不能被 staging 拉回来——那会静默改写一个已经推进的作业
-          // （2026-10-05 独立评审真机复现：绑定会话被对账标为 failed、而
-          // `active_agent_session_id` 不被对账清理，于是控制台每次挂载都把作业复位回
-          // `auth_pending`、`state_version` 递增、`current_phase` 被清空）。
+          // （2026-10-05 独立评审真机复现：绑定会话被对账标为 failed、而当时对账不清理
+          // `active_agent_session_id`，于是控制台每次挂载都把作业复位回 `auth_pending`、
+          // `state_version` 递增、`current_phase` 被清空。**2026-10-11 起**悬空态结算会清空该指针
+          // ——只在 `worker_running` 那一种矛盾态下（见 `dangling.ts`）；这里这条守卫仍然是必需的，
+          // 因为别的主状态下指针失效的清理不在本轮范围内）。
           const leftIntake = found.current_status !== 'auth_pending';
           const reusable =
             row !== undefined

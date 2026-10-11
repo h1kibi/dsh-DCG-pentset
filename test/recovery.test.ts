@@ -510,7 +510,8 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
 
   /**
    * 造出报告里的现场：主状态 `worker_running`、唯一会话已终态 `failed`、运行标记 `blocked`，
-   * 且**最后一次转移**是 `waiting_human_review → worker_running`（即人类点的那次「重做」）。
+   * 且存在一条把主状态推进到 `worker_running` 的转移 `waiting_human_review → worker_running`
+   * （基础夹具里它同时也是最后一条转移 ⇒ **正例不区分新旧锚点**，区分由 aborted / 无锚点两条反例承担）。
    */
   async function seedDangling(input: {
     readonly liveSession?: boolean;
@@ -563,7 +564,7 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
     return { engagementId, deadSessionId, stateVersion: lastVersion };
   }
 
-  test('悬空态结算：主状态 worker_running + 没有活会话 ⇒ 回滚到最近一次转移的 from_status', async () => {
+  test('悬空态结算：主状态 worker_running + 没有活会话 ⇒ 回滚到进入 worker_running 的那次转移的 from_status', async () => {
     const { engagementId, stateVersion } = await seedDangling({});
 
     const report = await recovery().recoverEngagement(engagementId);
@@ -588,6 +589,16 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
     assert.equal(row.active_agent_session_id, null, '活动会话指针必须清空（它还指着那个死会话）');
     assert.equal(Number(row.state_version), stateVersion + 1, '版本推进一格（登记在 NON_TRANSITION_VERSION_BUMPS）');
     assert.equal(row.status, 'blocked', '运行标记保持 blocked（那是「等人类处置」的如实标记）');
+    // 结算必须**在账本里留痕**（2026-10-11 质检）：这条事件的唯一用途就是解释那次回滚，
+    // 少了它，负例的"一个字都没写"断言也没有对照。
+    const events = await pool.query<{ n: number; rolled: string | null }>(
+      `select count(*)::int as n, max(payload_json->>'rolledBackTo') as rolled
+         from pentest.context_events
+        where engagement_id = $1::uuid and event_type = 'workflow.dangling_running_settled'`,
+      [engagementId],
+    );
+    assert.equal(Number(events.rows[0]?.n ?? -1), 1, '结算必须在账本里留下可检索的痕迹');
+    assert.equal(events.rows[0]?.rolled, 'waiting_human_review', 'payload 要带 rolledBackTo');
   });
 
   test('悬空态结算不误伤：还有活会话时**不动**主状态', async () => {
@@ -673,6 +684,56 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
       [engagementId],
     );
     assert.equal(Number(events.rows[0]?.n ?? -1), 0, '没结算就不许写结算事件');
+  });
+
+  test('启动对账按作业补扫：有锚点且没有活会话 ⇒ 进报告；有活会话 ⇒ 不进', async () => {
+    // 这条同时锁**接线**与**候选守卫**（2026-10-11 质检）：测试工厂不传 rlsScope，走的正是
+    // `#recover` 的无作用域分支——第一版那条分支提前返回，`recoverAll` 从不结算（而
+    // `recoverEngagement` 会），两个入口行为不一致且没有任何用例能发现。
+    const dangling = await seedDangling({});
+    const guarded = await seedDangling({ liveSession: true });
+    await newLease({ engagementId: guarded.engagementId, workerSessionId: guarded.deadSessionId, expired: false });
+
+    const report = await recovery().recoverAll();
+
+    assert.deepEqual(
+      report.danglingSettled.filter((x) => x.engagementId === dangling.engagementId),
+      [{ engagementId: dangling.engagementId, rolledBackTo: 'waiting_human_review' }],
+      '按作业扫描必须能把报告场景扫出来（按无主会话驱动会一条都扫不到）',
+    );
+    assert.equal(
+      report.danglingSettled.some((x) => x.engagementId === guarded.engagementId),
+      false,
+      '候选必须排除还有活会话的作业（否则会把正常在跑的作业按回上一态）',
+    );
+  });
+
+  test('结算只在主状态是 worker_running 时：别的主状态 + 有锚点 + 没有活会话 ⇒ 不结算', async () => {
+    // 守卫①的**行为**锁（2026-10-11 质检）：四个现场的主状态全是 worker_running，
+    // 于是把 `current_status = 'worker_running'` 放宽/删掉不会有任何用例变红——而它会去改
+    // `report_ready`/`waiting_human_review` 这些**别的主状态**。
+    const { engagementId, deadSessionId, stateVersion } = await seedDangling({});
+    await pool.query(
+      `update pentest.engagements set current_status = 'report_ready' where id = $1::uuid`,
+      [engagementId],
+    );
+
+    const report = await recovery().recoverEngagement(engagementId);
+
+    assert.deepEqual(report.danglingSettled, [], '主状态不是 worker_running ⇒ 不在本规则内');
+    const after = await pool.query(
+      `select current_status, state_version, active_agent_session_id
+         from pentest.engagements where id = $1::uuid`,
+      [engagementId],
+    );
+    const row = after.rows[0] as {
+      current_status: string;
+      state_version: string | number;
+      active_agent_session_id: string | null;
+    };
+    assert.equal(row.current_status, 'report_ready', '别的主状态不得被按回 worker_running 的历史落点');
+    assert.equal(Number(row.state_version), stateVersion, '版本不得推进');
+    assert.equal(row.active_agent_session_id, deadSessionId, '指针不得被清空');
   });
 });
 
