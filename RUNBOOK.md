@@ -354,6 +354,82 @@ node scripts/resync-smoke-stamps.mjs eeaf87926df5
 > **`test/skill-pack.test.ts` 会红**（证明绑定 `c31de6c1070e`，当前镜像 `eeaf87926df5`）——那是设计如此
 > （镜像一换、旧背书自动失效），轮换脚本跑完即恢复绿色。
 
+#### ⑧ 本轮轮换记录（2026-10-11，第八轮）：容器侧工具面按《沙箱工具规范 v1》统一
+
+**轮换依据**：`docker/tools/pentest-tool` 大改（同一个镜像摘要一次换完）：
+
+- 四组统一参数助手（`param_required/param_optional/param_enum/param_bool/param_int/param_list` +
+  `reject_unknown_keys`）——**所有 20 个动词**的参数读取逐个体换过去；未知键一律 rc=2 并列出接受的键
+  （`shell_exec` 按规范 §1 的例外豁免）；
+- 四条阻断级缺陷（质检 §2.1）：`icmp_ping` 的两个 ICMP 常量、`http_check` 的链式比较、`restrict_to_scope`/
+  `include_chunks` 的静默退化、`run_tool` 超时丢产出；
+- **每条命令首行 `state=` + 次行 `summary:`**（规范 §2），"没扫"与"扫到 0"用 `scanned=` 分开；
+- 有规模的动词补 `<x>_total/_attempted/_truncated/_remaining`（规范 §3）；
+- 截断改走**退出码 3** 通知宿主（规范 §4），`[已截断：` 行保留给人读；
+- `dns_enum`/`dns_brute`/`exposure_check`（外加 `web_crawl`/`tls_probe`/`fetch_chunks`）补自持总 deadline。
+
+```bash
+# ① 构建（只有 COPY pentest-tool 那一层实打实重建，其余层命中缓存）
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+# ② 推本地 registry + 取摘要
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+# ②.5 声明的工具在镜像里真的存在（81 项；脚本没挂 npm script，直接跑）
+node --experimental-strip-types scripts/verify-tool-image.ts <镜像引用>
+# ③ 重钉**两处**（摘要前值 → 新值）
+#    harness.dev.patch.yml                      : eeaf87926df5… → 3401b215a4ab…
+#    ~/.dsh/profiles/pentest/cordis.patch.yml   : 同上（只改 allowedImages[0].digest 一行）
+# ④ 轮换 25 份 skill 的冒烟背书（先真跑、后改摘要，见 §2.1⑤）
+node scripts/resync-smoke-stamps.mjs 3401b215a4ab
+```
+
+**原样输出**：
+
+```
+# docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools   （尾部）
+#19 [stage-1 12/13] COPY pentest-tool /usr/local/bin/pentest-tool
+#19 DONE 0.0s
+#20 [stage-1 13/13] RUN chmod 0755 /usr/local/bin/pentest-tool
+#20 DONE 0.2s
+#21 exporting to image
+#21 exporting manifest list sha256:3401b215a4ab1c5dd55812ec29ab9c5a006e53980a828ad606eb668a28ad8226 0.0s done
+#21 naming to 127.0.0.1:5005/pentest-tools:0.1.0 done
+
+# docker push 127.0.0.1:5005/pentest-tools:0.1.0   （尾部）
+0.1.0: digest: sha256:3401b215a4ab1c5dd55812ec29ab9c5a006e53980a828ad606eb668a28ad8226 size: 856
+
+# docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+127.0.0.1:5005/pentest-tools@sha256:3401b215a4ab1c5dd55812ec29ab9c5a006e53980a828ad606eb668a28ad8226
+
+# node --experimental-strip-types scripts/verify-tool-image.ts 127.0.0.1:5005/pentest-tools@sha256:3401…
+工具镜像自检通过：81 项（70 个命令 + 1 个通配前缀 + 8 份字典 + 模板目录）
+
+# node scripts/resync-smoke-stamps.mjs 3401b215a4ab
+改了 25 份、27 处；替换前的摘要值：29bc65ae9f18
+```
+
+> 本轮中间出现过两个**中间摘要**：`29bc65ae9f18…`（第一版）与更早的 `28…`——都是同一个工作副本的
+> 前一版：把容器自持 deadline 的裕量从**固定 15s** 改成 `min(15s, 注入值/5)`（固定值会把 30s 的
+> `dns_enum` 砍掉一半、把 5s 的 `dns_resolve` 压到 1s 下限），改完再重建。**最终钉住的
+> `3401b215a4ab…` 上重跑了全部 12 个真容器场景**（见 §6.5.13.8 的实测表）——摘要轮换不是
+>"构建一次就完"。
+
+> **`npm run verify:tool-image` 这个 script 名不存在**（RUNBOOK §2.1② 旧写法）——`scripts/verify-tool-image.ts`
+> 在，但没挂到 `package.json` 的 scripts 上。照本文的 `node --experimental-strip-types scripts/verify-tool-image.ts <镜像>`
+> 跑，脚本自己会打印用法与结果。
+
+> **第八轮新增的两条部署口径**（宿主侧与容器侧必须一致）：
+>
+> 1. **容器自持 deadline = 注入值 − `min(15s, 注入值/5)`**（`HOST_KILL_MARGIN_MS` + `host_kill_margin_ms`）。
+>    宿主 kill 计时器从 spawn docker CLI 起算、容器内计时从进程启动起算；而第八轮起报告是
+>    **先缓冲、收尾时一次写出**（首行必须是 `state=`），所以容器必须**先于** kill 收尾，否则 SIGKILL
+>    会让整份报告消失。裕量对长动词封顶 15s、对短动词不超过两成（900s 的 port_scan 丢 1.7%；
+>    30s 的 dns_enum 丢 6s 而不是 15s），下限 1s。宿主按 `plan.timeoutMs` 规划时，
+>    容器实际可用 ≈ `注入值 × 0.8`（长动词接近 `注入值 − 15s`）。模板 `timeoutMs` 与
+>    `DEFAULT_TOOL_TIMEOUT_MS` 的值**都没动**。
+> 2. **容器截断 ⇒ exit 3**（`mapOutcome` 映射成 `status: completed` + `truncated: true`，**不是失败**）；
+>    动词本身失败时仍是 rc=1，截断只在正文里报。
+
 ---
 
 ## 3. 配置
@@ -991,7 +1067,7 @@ CRLF 会让容器报 `/usr/bin/env: 'python3\r': No such file or directory`（�
 **回归锁**：`test/docker-sandbox.test.ts`（argv 不变量：恰好一个 cap、无代理变量、无特权/宿主挂载）、
 `test/policy-profiles.test.ts`（四档预设各有姿态、都写明升级规则、上限进提示词）。
 
-**`tcp_connect` / 工具直连与 banner 判读**：沙箱现在直连内网目标，`state: open` 后报告会带对端
+**`tcp_connect` / 工具直连与 banner 判读**：沙箱现在直连内网目标，`port_state: open` 后报告会带对端
 banner；**TLS 端口的服务不主动发 banner 属正常**，报告如实写「对端未主动发送」，不要当成故障。
 旧的「经代理隧道（`egress: proxy …`）」结论作废——那条路径已不再使用。
 
@@ -1228,6 +1304,46 @@ docker exec dsh-pg-c psql -U postgres -d pentest -c \
 `files`（路径 + 修改时间 + 命中行数，**新的在前**）——他正是靠在 254 个文件里正则考古
 才把丢失的信息捞回来的；清单让"先看最近动过的那几份"成为默认入口。
 
+### 6.5.13.8 提示词教了会被拒的词表、算错的墙钟（2026-10-11）：与词表不同源的第二份副本
+
+**现象**：阶段档案教模型发出的**第一次**强制检索**必被拒**（`classification_rejected`）——因为档案里的
+`memory_search` `kinds` 是十个"业务分类"（`asset`/`service_fingerprint`/`dns_record`/`web_surface`/`attack_path`/…），
+而代码里的 `CHUNK_KINDS` 只有 14 个**来源/形态**类名，两者只有 `finding` 一个交集 ⇒ **九个不存在**。
+同一条线上还有两处：`trust_level` 教的是 `confirmed/likely/speculative` 与 `high/medium/low`（两套虚构档位，
+一套可信度、一套严重度，彼此还矛盾），而 `TrustLevel` 是**来源**语义；`exploitation` 的档案还写"可跨 engagement
+检索（去掉 engagement_id）"——参数面根本没有 `engagement_id`（服务端按会话绑定本作业，§9.4）。
+
+**根因**：**提示词里的词表与代码里的词表不同源**——`phase-profiles.ts` 的 `kinds`/`trustLevels` 是手写的第二份
+（类型还写成 `readonly string[]`，所以编译器也拦不住）。同一类病在数字上有三处：简报把**端口扫描**写成
+"5 分钟"（真值 900s），`internal-discovery` 按 `maxWallClockMs`（沙箱天花板 900s）估**自由命令**的规模
+（真限 300s；该技能自己记的"必被杀"实测来自 2493s 的命令，真正杀它的那一刀在 300s），
+`recon-web-surface` 写 `maxtime 上限 295s`；五份技能 + `AUTHORING-SPEC.md` 还写着**不存在**的档位名 `deep 10/s`。
+
+**处置**（六条，全部落在"删掉手写副本、改从来源渲染"这一条纪律上）：
+
+| # | 位置 | 改法 | 锁 |
+|---|---|---|---|
+| 1 | `phase-profiles.ts` 的 `kinds`/`trustLevels` | 换成 `CHUNK_KINDS`（14 个）/`TrustLevel`（五档）；类型收紧到 `ChunkKind`/`TrustLevel`——**编一个不存在的类名过不了编译**；每个阶段的档案末尾**从词表渲染**合法取值（规范 §6：拒信里的合法值经常拿不到，那就提前给），并写明"要'已确认'就同时过滤 `human_decision` + `tool_observation`" | `test/prompt-facts.test.ts`：渲染产物必须列出全部合法取值，且十个旧分类与两套旧档位**一个都不许再出现** |
+| 2 | `phase-profiles.ts:342`（exploitation） | 删掉"可跨 engagement 检索（去掉 engagement_id）"，改写成"**不能**跨作业：`memory_search` 按会话绑定本作业（参数面没有 `engagement_id`，§9.4）" | 同上：`去掉 engagement_id` 字样在所有阶段档案里为 0 |
+| 3 | 墙钟数字 | **只从模板注册表渲染**：简报渲染自由命令上限（`direct_command` 的 `timeoutMs`）+ 天花板（`maxWallClockMs`），参数指南在**每个 technique 的标题行**渲染 `<family>_<technique>` 的 `timeoutMs`；技能正文改写成"见能力快照/模板声明"，`295s` 与"按 900s 估规模"删掉 | `test/prompt-facts.test.ts` **双向**对拍："指南里出现的每个超时数字都必须是注册表里某个模板的值"，且每个 technique 都渲染出了它的值 |
+| 4 | 速率档位名 | `deep 10/s` → `fast 10/s`（合法枚举 `stealth/standard/fast/custom`）；简报的速率行改成从 `PROFILE_DEFAULTS` 渲染 | 锁扫 `SKILL.md` **与** `AUTHORING-SPEC.md`/`README.md`：速率位置的档位名必须 ∈ `BEHAVIOR_PROFILES`（旧锁只扫 `SKILL.md` 且正则里没有 `deep`，所以它放过了这条漂移） |
+| 5 | 技能里的 technique 名与参数派属 | `recon-dns-cert`：`concurrency`/`wildcard_check` 归 `dns_brute`（不是 `ct_subdomains`）、`include_wildcards` 归 `ct_subdomains`，并写明"两套参数不通用"；`whois_query`（dispatcher 动词名）→ technique 真名 `whois` | 沿用 `test/action-templates.test.ts` 的 technique↔模板对拍 |
+| 6 | 参数指南缺 6 个条目 | 补 `nse_safe`/`web_crawl`/`dns_brute`/`whois`/`ct_subdomains`/`dns_axfr`（参数、**默认值逐条回 `techniques.ts` 核对**、判据）；`TechniqueGuide` 新增 `judgement` 字段并由渲染器输出"**判据**："一行 | `test/prompt-facts.test.ts`：指南与 `STRUCTURED_TECHNIQUES` **双向**对齐（少一个 = 模型靠猜；多一个 = 模型照调必被拒） |
+
+**顺带补齐的两处**（同一份"模型必须知道"的事实，此前只写在代码里）：
+
+- **零命中的两种语义**现在**五个阶段都有**：`hits.length === 0 && note 含"索引为空"` → 去 `pentest_workdir`
+  读作业目录；`note 含"没有命中"` → 换查询词。此前只有情报/威胁建模写了，而"上游刚交报告、索引器还没跑"
+  恰恰最容易发生在漏洞分析/利用验证/后渗透三阶段。
+- **输出怎么读**写进了参数指南的开头（规范 §2/§3）：首行固定是 `state=`（`ok`/`failed`/`no_target`/`aborted`/`partial`，
+  其中 `ok` **包含"扫完是 0"**）、其后是机器可读的 `summary:` 行、「没扫」与「扫到 0」不同形
+  （`scanned=false` vs `scanned=true` 且计数 0）、覆盖度四字段 `*_total`/`*_attempted`/`*_truncated`/`*_remaining`
+  怎么读（`*_truncated=true` 时命中只能当下界读；`*_remaining>0` 时用 `entry_range=` 续跑）。
+
+**方法论**：这六条都不是措辞问题，而是"**模型照做就会失败**"。所以修法只有一条：
+**能从注册表/契约渲染的一律改渲染、删掉手写副本；渲染不了的用测试对拍锁住**——
+否则下一次轮换（改一个 `timeoutMs`、改一个枚举成员）会在同一处再漂一次，而漂移方向不可预测。
+
 ### 6.5.13.3 同日第四轮实测（3 条）的修复：静默失败的三张脸
 
 | 现象 | 根因 | 修复 |
@@ -1300,6 +1416,60 @@ docker run -d --name fx-probe --network pentest-lab-internal -v <夹具>:/srv:ro
 
 **结论**：两条诉求都不是"加一个功能"，而是把**已经有的事实**（这条路径是端点吗 / 这次跑到哪了）
 从"人得自己看出来"变成"工具自己说出来"，并且让复核动作留在可审计的结构化通道里。
+
+### 6.5.13.8 第八轮实测（2026-10-11）：容器侧工具面按《沙箱工具规范 v1》统一
+
+**现象**：2026-10-11 质检（`docs/quality-review-sandbox-tools-2026-10-11.md` §二）在**分发器运行时行为**
+这一层找到 10 条缺陷（4 条阻断级），既有的锁（对拍模板/technique/动词三处**字符串**）一条都抓不住。
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| `icmp_ping` 先打印 `resolved:`/`icmp_socket:` 再 `internal_error: NameError`，零产出且与"目标不回 ICMP"同形 | 两个 ICMP 类型常量**只被用、从未被定义** | 补常量 + **静态断言**（AST：无 used-but-undefined 名字）。本轮静态锁在**旧版**源码上跑出来的就是 `['ICMP_ECHO_REPLY','ICMP_ECHO_REQUEST']`（失败-先、通过-后都有据） |
+| 真 XST 反射与安全目标同形（`echo_risk` 恒 false） | `"<" not in body is False` 是 Python **链式比较** ⇒ `("<" not in body) and (body is False)`，而 body 是 str ⇒ 恒假 | 改成 `"<" in trace_text`；**AST 断言禁止把 `is`/`is not` 与其它比较混用成链式比较** |
+| 拼错键名（`restrict_to_scop`）→ 完整 top-100 SYN 扫描照跑、rc=0 无提示；`include_chunks=TRUE` 静默当 false | 每个动词自己 `params.get(...) == "true"`，**没有未知键拒绝** | 四组统一助手（`param_required/param_optional/param_enum/param_bool/param_int/param_list`）+ `reject_unknown_keys`：未知键 **rc=2 并列出接受的键**；`restrict_to_scope`/`include_chunks` 改用 `param_bool`（严格读取）。键集合的**唯一声明**是 `TOOL_PARAMS`，由静态锁对拍"声明 == 实际读取" |
+| 超时把**已产出的 stdout** 丢掉（ffuf 进度、whois 的 inetnum、nse 的部分输出全消失） | `run_tool` 超时分支 `return 124, "", …` | 用 `TimeoutExpired.stdout/stderr`；`shell_exec` 同一处理，并把 `aborted=true aborted_items=N` 写进 `summary`（规范 §5） |
+| 容器截断**常不置位**宿主 `truncated`（宿主判据是字节数，而容器按行截断后可能仍小于上限） | 截断只体现为一行人类可读文本 | 截断走**退出码 3**（宿主按码置 `truncated: true`）；`[已截断：…]` 行保留给人读，但**不承重** |
+| 空列表参数（`record_types=,` / `paths=,`）⇒ `records=0`、rc=0：**"一个都没查"与"查过确实没有"同形** | 只判空字符串 | `param_list` 对**空项/空列表**一律 rc=2；阴性结论必须自带 `attempted/total` |
+| 列表/记录切片**不报被省略**（`ct_lookup [:500]`、`web_crawl [:100]`、`dns_axfr [:400]`） | 切片是静默的 | `<x>_total / <x>_listed / <x>_truncated / <x>_remaining` 自报（切片上限收成常量 `CT_LISTED_LIMIT`/`AXFR_LISTED_LIMIT`） |
+| `dns_enum`/`dns_brute`/`exposure_check` **没有总预算 deadline**：名义 30/120s，实际按解析器/逐项累加可数倍超支 ⇒ 宿主 SIGKILL | 逐项各拿满 `timeout_s` | 三个动词 + `web_crawl`/`tls_probe`/`fetch_chunks` 全部自持 `monotonic()` deadline（`deadline_for`/`remaining_s`） |
+| 每条命令**只报自己的字段**，没有统一状态；"没扫"与"扫到 0"靠散文区分 | 规范 §2 缺位 | 每个动词输出**首行 `state=ok|failed|no_target|partial|aborted`、次行 `summary: k=v …`**；`scanned=false`（没扫 + 原因）与 `scanned=true`（扫到 0）分开；**"一条都没跑"一律 `aborted`+rc=1**（细节见下） |
+| 行为层没有锁（质检 §2.3「未锁」1–6） | 只锁字符串 | 新增 `test/pentest-tool-static.test.ts`（AST：未定义名 / 链式比较 / 键集合对拍 / 每个动词必达 `report.finish` / 状态名域 / 截断信号 / **输出上限跨层对拍**（容器默认 256KiB < 宿主兜底 8MiB，且每张模板 ≤ 宿主兜底）/ **孤儿动词双向差集**）与 `test/pentest-tool-behavior.test.ts`（逐动词 argv 冒烟 + 本机可跑动词形态 + 助手/纯函数边界 + `run_tool` 超时保产出） |
+
+**"没扫"与"跑了一部分"的分界（本轮定下的读法）**：`probed/attempted == 0` ⇒ `state=aborted` + rc=1
+（这次什么都没查，报告里别写阴性结论）；`0 < attempted < total` ⇒ `state=partial` + rc=0（数据可用但不完整，
+`*_truncated=true`/`*_remaining=N` 已自报）；全部尝试完 ⇒ `ok`（**哪怕命中是 0**）。
+
+**实测（真容器 = 本轮新镜像，实验室夹具，非推断）**：夹具是 `python3 -m http.server`（线程版，另有 `/hang`），
+网络用**本轮临时创建的 `pentest-toolstd-lab`**（不占 `pentest-lab-internal`），跑完即删。
+
+```bash
+IMG='127.0.0.1:5005/pentest-tools@sha256:3401b215a4ab…'
+NET=pentest-toolstd-lab
+ENV='-e PENTEST_RESOLVED_ADDRESSES=["192.168.0.2"] -e PENTEST_TIMEOUT_MS=60000 -e PENTEST_MAX_OUTPUT_BYTES=262144'
+docker run --rm --network $NET $ENV $IMG "<命令行>"
+```
+
+| # | 命令（节选） | 原样结论（节选） |
+|---|---|---|
+| ① | `http_get target=http://192.168.0.2:8080/ method=GET path=/ follow_redirects=false` | 首行 `state=ok`；`summary: scanned=true status=200 method=GET url=… body_bytes=987 redirect_hops=0 verify_tls=true`；rc=0 |
+| ② | `port_scan … scope=top100 ports=1 ping=connect restrict_to_scope=true`（空交集） | 首行 `state=no_target`；`summary: scanned=false open_ports=not_scanned hosts_up=n/a ports_scanned=0 label=port_scan reason=empty_scope_intersection`；`scope_resolution: … = 0 个`；rc=0（**"没扫"不再与"扫了全关"同形**） |
+| ③ | `port_scan … restrict_to_scop=true`（键名拼错） | stderr 首行 + stdout：`usage_error: port_scan 不认识参数 restrict_to_scop；接受的键：ping, ports, restrict_to_scope, scope, target`；stdout 另有 `accepted_keys: …`；**rc=2** |
+| ③b | `http_probe … include_chunks=yes` | `usage_error: include_chunks 只接受 true/false（大小写不敏感），收到 'yes'`；**rc=2**（旧版静默当 false） |
+| ④ | `http_probe … collect=headers paths=/,/nope-a,/nope-b,/hang` | 首行 `state=ok`；`paths_soft404_baseline: status=404 size=469`；`/` → `candidate_endpoint:`；两个 `nope-*` → `note=soft404`；`/hang` → `no_response`；`paths_summary: paths=4 ok=3 no_response=1`；`paths_coverage: paths_total=4 paths_attempted=4 paths_truncated=false paths_remaining=0`；rc=0 |
+| ⑤ | `content_discover … wordlist=common_dirs entry_range=1-20` | 首行 `state=ok`；`coverage: wordlist_entries=4723 entries_total=4723 entry_range=1-20 requested=20 entries_attempted=20 entries_truncated=false entries_remaining=4703 position=20 reason=completed`；`schedulability: … 需要分 10 段（每段约 500 条）：1-500 / …`；rc=0 |
+| ⑥ | `exposure_check … paths=env,git,phpinfo` | 首行 `state=ok`；三条 `control=same looks_like=n/a（与随机对照同形…）`；`paths_coverage: paths_total=3 paths_attempted=3 paths_truncated=false paths_remaining=0`（**阴性结论也回答"扫了什么"**）；rc=0 |
+| ⑦ | `shell_exec command_b64=<echo EARLY_LINE_1; sleep 40>`（注入 8s ⇒ 预算 6.4s） | 首行 `state=aborted`；`summary: … timeout_ms=6400 duration_ms=6408.9 aborted=true aborted_items=1 stdout_bytes=13`；`stdout_partial:` 下**保留了 `EARLY_LINE_1`**；rc=1 |
+| ⑧ | `icmp_ping target=192.168.0.2 count=2 size=32` | 首行 `state=ok`；`icmp_socket: unprivileged_dgram`；`reply: seq=1 … seq=2`；`summary: … packets_sent=2 packets_received=2 loss_pct=0 rtt_avg_ms=0.8`；rc=0（0-1 的端到端回归位） |
+| ⑨ | `http_check … check=security_headers` | 首行 `state=ok`；`summary: … checks_done=1 headers_total=6 headers_present=0 verify_tls=true`；rc=0 |
+| ⑩ | `port_scan … scope=top100 ports=8080 ping=connect restrict_to_scope=true` | 首行 `state=ok`；`summary: scanned=true open_ports=1 hosts_up=1 hosts_total=1 ports_scanned=1 label=port_scan`；`used_ports: 8080`；`port: port=8080 proto=tcp state=open reason=syn-ack`；rc=0（**"扫到 1"**） |
+| ⑪ | `tcp_connect target=192.168.0.2 port=8080` | 首行 `state=ok`；`port_state: open`（旧版这句写的是 `state: open`，与新的首行撞名）；`summary: … port=8080 port_state=open connect_ms=0.2 banner_bytes=0 egress=direct`；rc=0 |
+| ⑫ | `shell_exec command_b64=<seq 1 500>` + `PENTEST_MAX_OUTPUT_BYTES=2048` | 输出被容器自己截断：尾行 `[已截断：输出超过 PENTEST_MAX_OUTPUT_BYTES=2048 字节，本次由容器自行截断；宿主按 exit 3 识别]`；**rc=3** |
+
+> 夹具注意：`/hang` 那条用例要求夹具**多线程**——单线程 `socketserver.TCPServer` 会被一个 sleep 60 的
+> 请求卡住，后续请求全部排队超时（本轮实测踩到，表现为 ffuf 的 autocalibration 超时退出、
+> `error: ffuf_output_missing`）。这是设施问题，不是分发器问题。
+
+---
 
 ## 6.5.14 本机跑测试需要独立的 `pentest` 测试库（2026-10-10 补）
 

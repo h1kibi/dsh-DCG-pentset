@@ -20,6 +20,7 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import type { DefineToolOptions, ParameterSchemaSpec, ToolDefinition, ValueSchemaSpec } from '@deepseek-ai/dsh-tools';
 // JsonValue 由 dsh-tools 从 dsh-util-values 引入但未再导出，因此直接从来源导入。
 import type { JsonValue } from '@deepseek-ai/dsh-util-values';
 import type {
@@ -32,12 +33,13 @@ import type {
   ToolError,
   WorkerReportInput,
 } from '../contracts.ts';
-import { DEFAULTS } from '../contracts.ts';
+import { DEFAULTS, ERROR_CODES } from '../contracts.ts';
+import type { ErrorCode } from '../contracts.ts';
 import { evidenceRelPath, writeEvidence } from './evidence-sink.ts';
+import { artifactView, memoryRecordsView, memorySearchView } from './result-view.ts';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DEFAULT_MOUNT_CONTAINER_PATH } from '../execution/docker-sandbox.ts';
-import { PHASE_ORDER } from '../workflow/phases.ts';
 // 结构化动作的技巧表搬到了 execution/techniques.ts（提示词与测试共用同一份），
 // 这里再导出一次，既有调用点不必改。
 export {
@@ -52,6 +54,79 @@ import { WorkdirError, WORKDIR_READ_LIMIT_BYTES } from '../execution/workdir.ts'
 import type { WorkdirFile, WorkdirListing, WorkdirSearchResult, WorkdirWriteResult } from '../execution/workdir.ts';
 
 /** 工具实现依赖的服务面（全部由宿主注入，便于测试）。 */
+/**
+ * 把"拒绝"统一变成**载荷**交给模型（规范 §6，2026-10-11）。
+ *
+ * 起因（质检 §三 3.1）：`PgWorkerToolRefusal` 带着完整的 `payload`（`blocked` + `code` +
+ * `next_action` + `expected_values`），但**没有任何一层把它渲染出来**——它以异常形式穿过工具边界，
+ * 而错误的 `message` 只是 `${code}: ${message}`。于是模型既看不到"下一步该做什么"，
+ * 也看不到"合法取值是哪些"（合法取值恰恰写在 `next_action` 里）。实测形态：模型照阶段档案传
+ * `kinds: asset` 被拒后，只能猜 14 个合法值。
+ *
+ * 两类拒绝都覆盖：
+ *   - 带 `payload` 的（`PgWorkerToolRefusal`）⇒ 原样透传（含 `expected_values`）；
+ *   - 只有 `code` + `message` 的（`WorkflowRejection`）⇒ 补一句诚实的下一步（状态机类拒绝
+ *     **重发无效**，要么改输入要么等人类，这一点必须说出来）。
+ */
+function blockedPayloadOf(error: unknown): ToolError | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const payload: unknown = (error as { readonly payload?: unknown }).payload;
+  if (isToolErrorPayload(payload)) return payload;
+  const code: unknown = (error as { readonly code?: unknown }).code;
+  const message: unknown = (error as { readonly message?: unknown }).message;
+  if (
+    typeof code === 'string' &&
+    typeof message === 'string' &&
+    (ERROR_CODES as readonly string[]).includes(code)
+  ) {
+    return {
+      status: 'blocked',
+      code: code as ErrorCode,
+      message,
+      next_action: '这是状态/流程类拒绝：按 message 处理；**不要原样重发**（重发不会改变结论）',
+    };
+  }
+  return null;
+}
+
+function isToolErrorPayload(value: unknown): value is ToolError {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record['status'] === 'blocked' &&
+    typeof record['code'] === 'string' &&
+    typeof record['message'] === 'string' &&
+    typeof record['next_action'] === 'string'
+  );
+}
+
+/**
+ * Worker 工具的统一入口：比 `defineTool` 多**一个** catch 点（规范 §6）。
+ *
+ * 为什么是包装而不是每个工具各写一遍 try/catch：14 个工具里任何一个漏写，就会出现
+ * "这一个工具的拒绝没有 next_action"——那正是本次质检发现的形状。包装让这条不变量只写一遍。
+ * 非拒绝类异常照旧抛出（那是 bug，不该被伪装成载荷）。
+ */
+function defineWorkerTool<const S extends ParameterSchemaSpec, const O extends ValueSchemaSpec>(
+  options: DefineToolOptions<S, O>,
+): ToolDefinition {
+  return defineTool<S, O>({
+    ...options,
+    async execute(args, exec) {
+      try {
+        return await options.execute(args, exec);
+      } catch (error) {
+        const blocked = blockedPayloadOf(error);
+        if (blocked === null) throw error;
+        // 所有 Worker 工具的 `output.schema` 都是 `{ type: 'json' }` ⇒ 载荷是合法的输出值。
+        // 断成 `never` 是**必要**的：写出输出类型（`InferValue<O>`）会让 TS 去比较泛型标量
+        // （TS2321 "Excessive stack depth"）——这里表达的是"输出面是 json"这一已知事实。
+        return toJson(blocked) as never;
+      }
+    },
+  });
+}
+
 export interface WorkerToolDeps {
   /**
    * 证据落盘的宿主根（挂载目录的宿主侧路径；沙箱里对应 `/work`）。
@@ -321,14 +396,45 @@ function renderJson(_args: unknown, value: JsonValue): { type: 'text'; text: str
   return [{ type: 'text', text: JSON.stringify(value, null, 2) }];
 }
 
+/**
+ * `verify_tls` 的说明**只写一份**（规范 §7：同一事实不许手写第二份）。
+ *
+ * 此前这段在 `pentest_recon` 与 `pentest_scan` 里各抄一份，两份只在末尾的"适用"清单上不同——
+ * 那种"几乎逐字相同"的复制正是漂移的温床（2026-10-11 质检 §三 3.4：同一段说明在 5 处复制）。
+ * 差异部分由下方拼接，正文只有这一份。
+ */
+const VERIFY_TLS_DOC =
+  '是否校验 TLS 证书，**默认 true**（**能用默认就用默认**：证书有效时默认就能通，IP 目标也一样）。' +
+  '只有**校验真的失败**（自签/链不全/SAN 不匹配）才传 false——此后该次结果不再证明证书链可信，' +
+  '报告里会写明未校验。';
+
+/**
+ * 「工具拒绝怎么读」**只写一份**（规范 §6）：模型据 `code` 分支，而不是解析 message 文本。
+ *
+ * 为什么必须有（2026-10-11 质检 §三 3.3）：20 个 `ERROR_CODES` 此前在面向模型的文本里**零解释**，
+ * 而它们的处置完全不同——改参数、等放行、等人类推进状态、停下请人改范围。分不清就会"原样重发"，
+ * 白烧一轮（甚至对目标重复动作）。
+ */
+const REFUSAL_DOC =
+  '**拒绝怎么读**（`status:"blocked"` 的返回）：按 `code` 分支，不要解析 message 文本——' +
+  '`usage_error` / `classification_rejected`（带 `expected_values`）⇒ **改参数后重发**，合法取值就在 `expected_values` 里；' +
+  '`approval_required` / `approval_expired` / `approval_consumed` ⇒ 走放行流程：重新申请，拿到 `approval_id` 后**同一条命令**再执行；' +
+  '`lease_required` / `lease_expired` / `lease_revoked` / `lease_generation_stale` / `stale_state_version` / `engagement_halted` / `budget_exhausted` ⇒ ' +
+  '**原样重发无效**：要么等人类推进状态/续租，要么先收尾交给人类；' +
+  '`scope_violation` / `target_not_adjudicated` / `authorization_expired` ⇒ 目标不在当前授权范围内：**停下并请人类裁决**，不要换目标试；' +
+  '`sandbox_unavailable` ⇒ 沙箱/容器侧不可用（不是目标结论），报到控制台由人处理。';
+
 /** 构造全部 Worker 工具定义。 */
 export function createWorkerTools(deps: WorkerToolDeps) {
-  const memorySearch = defineTool({
+  const memorySearch = defineWorkerTool({
     name: 'memory_search',
     description:
       '检索本 engagement 的记忆（混合检索：语义近邻 + 全文 + 三元组）。' +
-      '返回带来源与可信度标注的片段。检索范围受当前范围版本约束：' +
-      '未纳入范围的资产内容不会返回。思考链默认参与检索。',
+      '返回 `hits[]`（每条含 `memory_id`/`excerpt`/`score`/`trust`/`citation`/`source{event_id,worker_session_id,phase,occurred_at}`）' +
+      '、`index_watermark` 与（零命中/降级时的）`note`。检索范围受当前范围版本约束：' +
+      '未纳入范围的资产内容不会返回。思考链默认参与检索。' +
+      REFUSAL_DOC,
+
     parameters: {
       query: { type: 'string', required: true, description: '待检索的问题' },
       phase: { type: 'string', description: '可选：限定阶段' },
@@ -356,7 +462,7 @@ export function createWorkerTools(deps: WorkerToolDeps) {
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
     async execute(args, exec) {
       const workerSessionId = await workerSessionIdOf(deps, exec);
-      return toJson(await deps.search({
+      const result = await deps.search({
         workerSessionId,
         query: args.query,
         phase: args.phase,
@@ -365,11 +471,13 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         assetIds: args.asset_ids,
         includeReasoning: args.include_reasoning,
         limit: args.limit ?? 8,
-      }));
+      });
+      // 规范 §7：模型可见字段一律 snake_case（内部类型不动，见 result-view.ts 的说明）。
+      return toJson(memorySearchView(result));
     },
   });
 
-  const memoryRead = defineTool({
+  const memoryRead = defineWorkerTool({
     name: 'memory_read',
     description: '按标识读取记忆或事件的完整内容。返回原文、内容哈希、来源与标签。',
     parameters: {
@@ -391,23 +499,33 @@ export function createWorkerTools(deps: WorkerToolDeps) {
         };
         return toJson(asError(err));
       }
-      return toJson(await deps.read({ workerSessionId: await workerSessionIdOf(deps, exec), refs: args.refs }));
+      const records = await deps.read({ workerSessionId: await workerSessionIdOf(deps, exec), refs: args.refs });
+      return toJson(memoryRecordsView(records));
     },
   });
 
-  const artifactRead = defineTool({
+  const artifactRead = defineWorkerTool({
     name: 'artifact_read',
-    description: '读取一条证据的元数据与（已授权的）内容。二进制证据只返回元数据与引用。',
+    description:
+      '读取一条证据的元数据与（已授权的）内容。二进制证据只返回元数据与引用。' +
+      '返回：`artifact_id` / `media_type` / `byte_size` / `content_hash` / `truncated` / `metadata`，' +
+      '外加 `inline`（仅"未加密 + 内联 + 文本类 + 未超阈值"时才有原文）或 `storage_ref`（受控引用，' +
+      '文件证据是宿主路径）——两者**必有其一**，二进制证据不会把字节交给模型。' +
+      '标识来自 `pentest_exec` 的 `artifact_ref`（形如 `artifact:<uuid>`）。',
     parameters: {
-      artifact_id: { type: 'string', required: true, description: '证据标识' },
+      artifact_id: { type: 'string', required: true, description: '证据标识（来自 artifact_ref 的 uuid 部分）' },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
     async execute(args, exec) {
-      return toJson(await deps.readArtifact({ workerSessionId: await workerSessionIdOf(deps, exec), artifactId: args.artifact_id }));
+      const record = await deps.readArtifact({
+        workerSessionId: await workerSessionIdOf(deps, exec),
+        artifactId: args.artifact_id,
+      });
+      return toJson(artifactView(record));
     },
   });
 
-  const bootstrapIntakeTool = defineTool({
+  const bootstrapIntakeTool = defineWorkerTool({
     name: 'pentest_bootstrap_intake',
     description:
       '当人类在**本会话**里发起一次渗透测试任务时，用它把本会话登记为一个新作业的授权范围 intake。' +
@@ -537,7 +655,7 @@ async function registerEvidenceArtifact(
   }
 }
 
-  const submitReport = defineTool({
+  const submitReport = defineWorkerTool({
     name: 'pentest_submit_report',
     description:
       '提交本轮任务报告并进入等待人工判断。' +
@@ -704,7 +822,7 @@ const scopeTargetSchema = {
     wildcardSubdomain: { type: 'boolean', description: '是否显式匹配一级子域' },
   },
 } as const;
-const requestScopeConfirmation = defineTool({
+const requestScopeConfirmation = defineWorkerTool({
     name: 'pentest_request_scope_confirmation',
     description:
       '提交一个供人类确认的目标与动作范围方案。当前 intake 会话只负责问清范围，' +
@@ -765,7 +883,7 @@ const requestScopeConfirmation = defineTool({
   });
 
 
-  const writeStatusNote = defineTool({
+  const writeStatusNote = defineWorkerTool({
     name: 'pentest_write_status_note',
     description:
       '写入本轮的短状态便签（刚做完什么、下一步、需要人类提供什么）。' +
@@ -788,7 +906,7 @@ const requestScopeConfirmation = defineTool({
     },
   });
 
-  const requestApproval = defineTool({
+  const requestApproval = defineWorkerTool({
     name: 'pentest_request_action_approval',
     description:
       '为一条**沙箱命令**申请放行。**一次只提一条**：本会话已有待处理申请时，再提会被拒绝并附上那条的 id' +
@@ -832,7 +950,7 @@ const requestScopeConfirmation = defineTool({
     },
   });
 
-  const prepareHandoff = defineTool({
+  const prepareHandoff = defineWorkerTool({
     name: 'pentest_prepare_handoff',
     description:
       '人类说「进入下一阶段」时用本工具**告诉他去哪里点**——你**不能**自己生成交接草稿。' +
@@ -857,7 +975,7 @@ const requestScopeConfirmation = defineTool({
     },
   });
 
-  const pentestExec = defineTool({
+  const pentestExec = defineWorkerTool({
     name: 'pentest_exec',
     description:
       '**在沙箱里跑一条命令**（唯一的目标接触通道）。' +
@@ -875,7 +993,9 @@ const requestScopeConfirmation = defineTool({
       '人类在放行卡上看到的就是你写的命令原文，批准后带 `approval_id` 执行**同一条**命令。' +
       '另外仍然转给人类的是**超出预设**的动作与默认禁用类别（persistence/destructive/exfiltration）。' +
       '**免批不等于可以自作主张**——范围裁决（只打已裁决地址、端口记账）与沙箱加固照旧，' +
-      '不要因为免批就扩大范围或提权。',
+      '不要因为免批就扩大范围或提权。' +
+      REFUSAL_DOC,
+
     parameters: {
       command: { type: 'string', required: true, description: '在沙箱内执行的命令原文（shell 语法）' },
       port: {
@@ -1013,7 +1133,8 @@ const requestScopeConfirmation = defineTool({
                   outcome.plan.normalizedTarget,
                 ]),
               ].filter((hint) => hint !== ''),
-              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+              // 规范 §7：模型可见字段 snake_case（内部仍叫 `toolRunId`）。
+              ...(outcome.toolRunId === undefined ? {} : { tool_run_id: outcome.toolRunId }),
             });
             evidence = {
               ok: true,
@@ -1057,13 +1178,14 @@ const requestScopeConfirmation = defineTool({
                         : { evidence_artifact_error: evidence.artifactError }),
                     }
                   : { evidence_failed: true, evidence: evidence.detail }),
-              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+              // 规范 §7：模型可见字段 snake_case（内部仍叫 `toolRunId`）。
+              ...(outcome.toolRunId === undefined ? {} : { tool_run_id: outcome.toolRunId }),
             },
       );
     },
   });
 
-  const pentestRecon = defineTool({
+  const pentestRecon = defineWorkerTool({
     name: 'pentest_recon',
     description:
       '**结构化侦察动作**（唯一入口是它，而不是让你手写 nmap/ffuf 命令）。' +
@@ -1073,7 +1195,9 @@ const requestScopeConfirmation = defineTool({
       '侦察类动作按 `active_probing`/`passive_collection` 记账，由范围、租约、节奏（stealth 1rps / standard 5rps / fast 10rps）约束；' +
       '需要人批的是**超出预设**的动作（会转给人类）与 `exploit_validation`/`lateral_movement` 两个逐次放行类别；自由命令模板 `direct_command`（走 pentest_exec）按会话阶段定类：①②③ 免批，④ 记 `exploit_validation`、⑤ 记 `lateral_movement` ⇒ 这两个阶段逐条人批。' +
       '**DNS 类 technique（dns_enum/dns_brute）走 UDP**：范围条目要声明 udp，否则会被范围闸门拒绝。' +
-      '先扫面（port_scan）再指纹（service_probe/tls_inspect/http_probe），最后才目录与爬取——顺序写进了 recon-network-surface/recon-web-surface 两份 skill。',
+      '先扫面（port_scan）再指纹（service_probe/tls_inspect/http_probe），最后才目录与爬取——顺序写进了 recon-network-surface/recon-web-surface 两份 skill。' +
+      REFUSAL_DOC,
+
     parameters: {
       technique: {
         type: 'string',
@@ -1144,7 +1268,8 @@ const requestScopeConfirmation = defineTool({
         type: 'string',
         enum: ['true', 'false'],
         description:
-          '是否校验 TLS 证书，**默认 true**（**能用默认就用默认**：证书有效时默认就能通，IP 目标也一样）。只有**校验真的失败**（自签/链不全/SAN 不匹配）才传 false——此后该次结果不再证明证书链可信，报告里会写明未校验；而报告里堆这种免责声明会稀释真正要看的结论。适用：http_probe / content_discover / web_crawl / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
+          VERIFY_TLS_DOC +
+          '适用：http_probe / content_discover / web_crawl / http_check / exposure_check（http_get 同理，但它在插件侧没有模板）',
       },
       wordlist: {
         type: 'string',
@@ -1254,13 +1379,14 @@ const requestScopeConfirmation = defineTool({
               // 与 `pentest_exec` 同一口径：stderr 非空就自己开口（空 stdout + 被管道掩掉的 rc
               // = 看起来像"干净的阴性结果"）。
               ...stderrMarker(outcome.result as { readonly stderr?: unknown }),
-              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+              // 规范 §7：模型可见字段 snake_case（内部仍叫 `toolRunId`）。
+              ...(outcome.toolRunId === undefined ? {} : { tool_run_id: outcome.toolRunId }),
             },
       );
     },
   });
 
-  const pentestScan = defineTool({
+  const pentestScan = defineWorkerTool({
     name: 'pentest_scan',
     description:
       '**结构化核验动作**（漏洞分析阶段的只读面）：把一条候选变成「成立 / 不成立 / 需要更多证据」。' +
@@ -1268,7 +1394,9 @@ const requestScopeConfirmation = defineTool({
       '**不需要逐条人工放行**；它只发读取类请求、不写目标、不下载内容' +
       '（配置面暴露只报存在性、长度、哈希与形态判定）。' +
       '判据写进对应的 skill：一条候选没有可判定的判据就不要核验，先补情报。' +
-      '需要发载荷（SQLi/XSS/SSRF/上传…）的验证**不属于本工具**：那是利用验证阶段的 `poc_run`/`pentest_exec`，逐条人批。',
+      '需要发载荷（SQLi/XSS/SSRF/上传…）的验证**不属于本工具**：那是利用验证阶段的 `poc_run`/`pentest_exec`，逐条人批。' +
+      REFUSAL_DOC,
+
     parameters: {
       technique: {
         type: 'string',
@@ -1293,7 +1421,7 @@ const requestScopeConfirmation = defineTool({
         type: 'string',
         enum: ['true', 'false'],
         description:
-          '是否校验 TLS 证书，**默认 true**（**能用默认就用默认**：证书有效时默认就能通，IP 目标也一样）。只有**校验真的失败**（自签/链不全/SAN 不匹配）才传 false——此后该次结果不再证明证书链可信，报告里会写明未校验；而报告里堆这种免责声明会稀释真正要看的结论。适用：http_check / exposure_check',
+          VERIFY_TLS_DOC + '适用：http_check / exposure_check',
       },
       sni: { type: 'string', description: 'tls_weakness 的 SNI；none 表示用目标名' },
       enumerate_protocols: { type: 'string', enum: ['on', 'off'], description: 'tls_weakness 必须为 on' },
@@ -1349,13 +1477,14 @@ const requestScopeConfirmation = defineTool({
               // 与 `pentest_exec` 同一口径：stderr 非空就自己开口（空 stdout + 被管道掩掉的 rc
               // = 看起来像"干净的阴性结果"）。
               ...stderrMarker(outcome.result as { readonly stderr?: unknown }),
-              ...(outcome.toolRunId === undefined ? {} : { toolRunId: outcome.toolRunId }),
+              // 规范 §7：模型可见字段 snake_case（内部仍叫 `toolRunId`）。
+              ...(outcome.toolRunId === undefined ? {} : { tool_run_id: outcome.toolRunId }),
             },
       );
     },
   });
 
-  const skillLoad = defineTool({
+  const skillLoad = defineWorkerTool({
     name: 'skill_load',
     description:
       '读取本会话**已装载** skill 的正文（方法论、步骤、命令与判据）。' +
@@ -1415,7 +1544,7 @@ const requestScopeConfirmation = defineTool({
       : `**配置声明的挂载**：${mountRoots
           .map((root) => `\`${root.containerPath}\`${root.readOnly === true ? '（只读）' : '（读写）'}`)
           .join('、')}；**其中 \`/work\` 实际跟随本会话在宿主上的工作目录**（会话 cwd 覆盖它）。`;
-  const workdirTool = defineTool({
+  const workdirTool = defineWorkerTool({
     name: 'pentest_workdir',
     description:
       '**读写人类挂进沙箱的作业目录**（profile 里 `sandbox.mounts` 声明的宿主目录；容器内路径也在返回值里给出）。' +

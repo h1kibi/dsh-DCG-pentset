@@ -30,7 +30,24 @@
  *   - 行为预设：跨阶段的姿态约束（隐蔽 / 常规 / 穷尽）
  */
 
-import type { Phase } from '../contracts.ts';
+import { CHUNK_KINDS } from '../memory/chunks.ts';
+import type { ChunkKind } from '../memory/chunks.ts';
+import type { Phase, TrustLevel } from '../contracts.ts';
+
+/**
+ * `TrustLevel` 的合法取值（`src/contracts.ts` 是唯一来源）。
+ *
+ * `satisfies readonly TrustLevel[]` 是这里的锁：契约增删成员，这行**编译期**就红，
+ * 不会留下一个"提示词教的词表在代码里不存在"的第二份副本（那正是 2026-10-11 质检
+ * §三 3.1 第 11/12 条的形态：档案教的 10 个 `kinds` 里 9 个不存在）。
+ */
+const TRUST_LEVELS = [
+  'human_decision',
+  'tool_observation',
+  'agent_claim',
+  'model_reasoning',
+  'external_untrusted',
+] as const satisfies readonly TrustLevel[];
 
 /**
  * 阶段 Profile 的固定结构（便于测试验证完整性）。
@@ -65,8 +82,16 @@ export interface PhaseProfile {
     readonly startupQuery?: {
       readonly description: string;
       readonly phase?: string;
-      readonly kinds?: readonly string[];
-      readonly trustLevels?: readonly string[];
+      /**
+       * 真实枚举：`CHUNK_KINDS`（`src/memory/chunks.ts`）。
+       *
+       * 类型写成 `ChunkKind` 而不是 `string` 是**有意的**：2026-10-11 之前这里写的是
+       * 十个"业务分类"（`asset`/`dns_record`/…），其中九个在代码里不存在 ⇒ 档案教模型发出的
+       * **第一次**强制检索必被拒。类型收紧后，编一个不存在的类名根本过不了编译。
+       */
+      readonly kinds?: readonly ChunkKind[];
+      /** 真实枚举：`TrustLevel`（`src/contracts.ts`）——描述记忆的**来源**，不是可信度分级。 */
+      readonly trustLevels?: readonly TrustLevel[];
       readonly limit?: number;
     };
     /** 定期检查：每 N 轮工具调用后提醒检索（避免遗忘已有结论）。 */
@@ -76,7 +101,7 @@ export interface PhaseProfile {
     };
     /** 关键触发场景：何时应该主动检索。 */
     readonly triggers: readonly string[];
-    /** 检索结果的使用指南（如何解读 indexWatermark、零命中、低分命中）。 */
+    /** 检索结果的使用指南（如何解读 index_watermark、零命中、低分命中）。 */
     readonly usageGuidance: string;
   };
 }
@@ -129,24 +154,25 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
       '**上下游接口**：\n' +
       '- **消费**：范围快照（纳入/排除的网段与域）、人类提供的已知入口（IP/域名/URL）、公共记忆里的作业规则。\n' +
       '- **交付**：资产图谱 + 服务清单 + 覆盖报告 → 威胁建模阶段据此绘制信任边界与攻击路径。\n' +
-      '- **记忆标注**：每条资产/服务/banner 记成 `asset` / `service_fingerprint` / `dns_record` / `web_surface` 分类，' +
-      '便于后续阶段检索；不确定的推断标记 `provisional=true`。',
+      '- **记忆标注**：资产/服务/banner 的实测记录记成 `tool_observation`（banner、抓包、HTTP 交换原文）' +
+      '与 `fact`（清点确认的结论，如"地址:端口 → 产品/版本"）；资产归属写在 `asset_ids` 字段里，' +
+      '**不要自造分类名**（`kinds` 只认 `CHUNK_KINDS`，见下）；不确定的推断标记 `provisional=true`。',
 
     retrievalStrategy: {
       mandatoryOnStart: false, // 第一阶段，启动时无前序可检；但运行时有 triggers 补充检索点（两者独立）
       triggers: [
-        '发现新资产或服务时，检索是否已在其他扫描中出现过',
-        '遇到不可达目标时，检索是否有其他阶段的网络拓扑信息',
+        '发现新资产或服务时，检索本作业是否已清点过（避免重复扫描）',
+        '遇到不可达目标时，检索本作业是否已有该地址的网络/拓扑结论',
         '字典枚举前，检索已知的高价值路径（robots/sitemap/.git）',
-        '提交报告前，检索本作业所有 asset/service_fingerprint 分类内容汇总',
+        '提交报告前，检索本作业所有 `fact` / `tool_observation` 内容汇总',
       ],
       usageGuidance:
-        '**memory_search 使用指南**：\n' +
+        '**memory_search 使用指南**（本阶段主要检索 `tool_observation` 与 `fact`）：\n' +
         '- 会话简报里写有**创建那一刻**的索引状态：若写着「本作业记忆索引为空（0 个分块）」，本作业就还没有可检索内容 → 直接走 workdir，不要反复重试检索。\n' +
-        '- `indexWatermark` 是**账本链序号**（不是时间）：`0` = 本作业还没有任何事件落成分块（新作业，或索引器还没跑）；非 0 才是「已索引到哪一条事件」。\n' +
+        '- `index_watermark` 是**账本链序号**（不是时间）：`0` = 本作业还没有任何事件落成分块（新作业，或索引器还没跑）；非 0 才是「已索引到哪一条事件」。\n' +
         '- `hits.length === 0 && note 含"索引为空"`：库里真的没有可检索内容（不是"没找到"）→ 用 `pentest_workdir` 读作业目录（`op=list` / `op=search` 递归正则）。\n' +
         '- `hits.length === 0 && note 含"没有命中"`：有内容但查询词不对 → 换实体名/IP/端口/产品名重试。\n' +
-        '- `kinds` 过滤：本阶段主要检索 `asset` / `service_fingerprint` / `dns_record` / `web_surface`。\n' +
+        '- `kinds` 只接受 `CHUNK_KINDS` 里的值（见本节末尾的合法取值），写别的必被拒。本阶段用 `tool_observation`（命令/探针/HTTP 交换的原始产出）与 `fact`（清点确认的事实）。\n' +
         '- 零命中时**必读 note 字段**：里面有具体的失败原因和备选查询建议。',
     },
   },
@@ -186,30 +212,32 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
 
     interfaces:
       '**上下游接口**：\n' +
-      '- **消费**：情报阶段的资产清单 + 服务指纹 + DNS/证书 + Web面 + AD面，检索时用 `asset` / `service_fingerprint` 等分类。\n' +
+      '- **消费**：情报阶段的资产清单 + 服务指纹 + DNS/证书 + Web面 + AD面，检索时用 `fact` / `tool_observation`。\n' +
       '- **交付**：攻击面分析 + 候选路径 + 验证计划 → 漏洞分析阶段逐条核验路径的可行性。\n' +
-      '- **记忆标注**：信任边界记成 `trust_boundary`、攻击路径记成 `attack_path`、假设记成 `provisional=true`。',
+      '- **记忆标注**：信任边界与攻击路径都是**推断**，记成 `hypothesis`；引用了工具实测证据的部分记成 `fact`；' +
+      '不确定的加 `provisional=true`。',
 
     retrievalStrategy: {
       mandatoryOnStart: true, // 必须先检索情报阶段的资产清单
       startupQuery: {
-        description: '会话开始时召回所有情报阶段的资产与服务',
+        description: '会话开始时召回情报阶段清点出的资产与服务（它们记成 fact / tool_observation）',
         phase: 'intelligence-gathering',
-        kinds: ['asset', 'service_fingerprint', 'dns_record', 'web_surface'],
+        kinds: ['fact', 'tool_observation'],
         limit: 50,
       },
       triggers: [
         '绘制信任边界前，检索所有入口/出口资产',
-        '推演攻击路径时，检索特定服务的已知漏洞（从其他作业）',
+        '推演攻击路径时，检索本作业已有的服务指纹与版本（记忆检索只覆盖本作业）',
         '发现矛盾（新扫描 vs 旧结论）时，检索该资产的完整历史',
-        '构建攻击树前，检索 attack_path / exploit 分类的已有路径',
+        '构建攻击树前，检索本作业已有的 `hypothesis`（此前的路径推断）',
       ],
       usageGuidance:
-        '**memory_search 使用指南**：\n' +
+        '**memory_search 使用指南**（本阶段主要检索 `fact` 与 `tool_observation`）：\n' +
         '- 会话开始**必须先检索**情报阶段资产清单（phase=intelligence-gathering）。\n' +
         '- `hits` 为空但 `note` 说"索引为空" → 情报阶段未完成或未索引 → 用 pentest_workdir 读取。\n' +
+        '- `hits.length === 0 && note 含"没有命中"` → 有内容但查询词不对 → 换资产名/IP/端口/产品名重试。\n' +
         '- `memory_search` **只覆盖本作业**（服务端按会话绑定，没有 engagement_id 参数；§9.4 隔离）。要参考别的作业或人类带进来的同类服务攻击路径，用 `pentest_workdir` 读作业目录（`op=list` / `op=search` 递归正则），不要据此断定"没有可参考的先例"。\n' +
-        '- 检索 attack_path 时可按 trust_level 过滤：`confirmed` > `likely` > `speculative`。\n' +
+        '- `trust_levels` 按**来源**过滤（不是可信度打分）：`human_decision`（人类裁定）/ `tool_observation`（工具实测）算"已确认"，`agent_claim`（Agent 自述）/ `model_reasoning`（推理）是推断，`external_untrusted` 是外部材料。要"已确认"就同时过滤 `human_decision` + `tool_observation`。\n' +
         '- 零命中时必读 note 字段的备选查询建议，可能是 phase/kinds 过滤过严。',
     },
   },
@@ -246,17 +274,17 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
 
     interfaces:
       '**上下游接口**：\n' +
-      '- **消费**：威胁建模的验证计划 + 攻击路径 + 候选弱点，检索时用 `attack_path` / `trust_boundary` 分类。\n' +
+      '- **消费**：威胁建模的验证计划 + 攻击路径 + 候选弱点，检索时用 `hypothesis`（另有 `fact`）。\n' +
       '- **交付**：已确认漏洞清单 + 评级 + 可利用性判定 → 利用验证阶段按优先级逐条最小化验证。\n' +
-      '- **记忆标注**：已确认漏洞记成 `finding`（trust=high）、未证实候选记成 `finding`（provisional=true）、' +
-      '已排除项记成 `excluded_candidate`。',
+      '- **记忆标注**：已确认漏洞记成 `finding`（`trust_levels` 用 `tool_observation`——有工具实测证据）、' +
+      '未证实候选记成 `hypothesis`（`provisional=true`）、已排除项记成 `limitation`（写清排除依据）。',
 
     retrievalStrategy: {
       mandatoryOnStart: true, // 必须先检索威胁建模的验证计划
       startupQuery: {
-        description: '会话开始时召回威胁建模阶段的攻击路径与验证计划',
+        description: '会话开始时召回威胁建模阶段的攻击路径与验证计划（它们记成 hypothesis）',
         phase: 'threat-modeling',
-        kinds: ['attack_path', 'trust_boundary', 'verification_plan'],
+        kinds: ['hypothesis', 'fact'],
         limit: 30,
       },
       periodicCheck: {
@@ -264,17 +292,18 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
         description: '每 15 轮工具调用后提醒检索已确认的漏洞，避免重复核验',
       },
       triggers: [
-        '核验新 CVE 前，检索该服务是否已在其他作业中被证实存在漏洞',
-        '遇到 WAF/IDS 拦截时，检索是否有其他作业的绕过技巧',
-        '发现假阳性时，检索是否有其他作业也遇到并排除了该工具误报',
-        '提交报告前，检索本作业所有 finding 分类内容去重',
+        '核验新 CVE 前，检索本作业是否已有该服务的版本/指纹结论',
+        '遇到 WAF/IDS 拦截时，检索本作业此前是否有同一目标的拦截记录与应对',
+        '发现假阳性时，检索本作业是否已排除过同一工具的同类误报',
+        '提交报告前，检索本作业所有 `finding` 内容去重',
       ],
       usageGuidance:
-        '**memory_search 使用指南**：\n' +
-        '- 会话开始**必须先检索**威胁建模的验证计划（phase=threat-modeling）。\n' +
-        '- `hits` 为空 → 威胁建模未完成或未交付验证计划 → 通知人类或回退上一阶段。\n' +
+        '**memory_search 使用指南**（本阶段主要检索 `hypothesis`、`finding`、`tool_observation`）：\n' +
+        '- 会话开始**必须先检索**威胁建模的验证计划（phase=threat-modeling, kinds=hypothesis）。\n' +
+        '- `hits.length === 0 && note 含"索引为空"` → 库里还没有可检索内容（常见于上游刚交报告、索引器还没跑）→ 用 `pentest_workdir` 读作业目录（`op=list` / `op=search`），**不要**据此判定"没有验证计划"或"无漏洞"。\n' +
+        '- `hits.length === 0 && note 含"没有命中"` → 有内容但查询词不对 → 换 CVE 编号/服务名/端口/路径重试，或放宽 kinds。\n' +
         '- 核验 CVE 时要查历史验证结果：本作业记忆里没有时**不能**跨 engagement 检索（服务端按会话绑定本作业；§9.4），改从 `pentest_workdir` 的作业目录里找（`op=search` 递归正则）。\n' +
-        '- 检索 finding 时按 trust_level 过滤：`high` = 已确认，`medium` = 待复核，`low` = 疑似假阳性。\n' +
+        '- `trust_levels` 是**来源**语义，不是"确认度"打分：要"已确认"就过滤 `human_decision` + `tool_observation`；待复核的推断是 `agent_claim` / `model_reasoning`；外部资料是 `external_untrusted`（不算证据）。\n' +
         '- 定期检索（每 15 轮）避免重复核验已确认的漏洞，特别是多目标场景。\n' +
         '- 零命中时必读 note 字段，可能是 kinds 过滤过严或查询词不匹配 CVE 编号。',
     },
@@ -314,34 +343,35 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
 
     interfaces:
       '**上下游接口**：\n' +
-      '- **消费**：漏洞分析的已确认漏洞清单 + 评级 + 验证计划，检索时用 `finding`（trust=high）分类。\n' +
+      '- **消费**：漏洞分析的已确认漏洞清单 + 评级 + 验证计划，检索时用 `finding`（配 `trust_levels=tool_observation`）。\n' +
       '- **交付**：复现记录 + 影响边界 + 已控资产清单 → 后渗透阶段据此确认影响范围并规划清理。\n' +
-      '- **记忆标注**：复现成功记成 `exploit_proof`（trust=high）、影响边界记成 `impact_scope`、' +
-      '已控资产记成 `compromised_asset`（含凭据类型与有效期）。',
+      '- **记忆标注**：复现成功记成 `finding`（`trust_levels=tool_observation`，附复现记录的证据引用）、' +
+      '命令与响应原文记成 `tool_observation` / `http_exchange`、人类放行裁定记成 `decision`。',
 
     retrievalStrategy: {
       mandatoryOnStart: true, // 必须先检索漏洞分析的已确认漏洞清单
       startupQuery: {
-        description: '会话开始时召回所有已确认漏洞（trust=high）',
+        description: '会话开始时召回所有已确认漏洞（有工具实测证据的 finding）',
         phase: 'vulnerability-analysis',
         kinds: ['finding'],
-        trustLevels: ['high'],
+        trustLevels: ['tool_observation', 'human_decision'],
         limit: 20,
       },
       triggers: [
-        '验证新漏洞前，检索是否已经复现过（避免重复探测）',
-        '遇到 WAF 拦截时，检索是否有其他作业的编码变体绕过技巧',
-        '载荷无回显时，检索该服务是否在其他作业中用过带外通道',
-        '提交报告前，检索本作业所有 exploit_proof / compromised_asset 分类内容汇总',
+        '验证新漏洞前，检索本作业是否已经复现过（避免重复探测）',
+        '遇到 WAF 拦截时，检索本作业此前记录过的编码变体与绕过尝试',
+        '载荷无回显时，检索本作业是否用过带外通道（以及当时的信号形态）',
+        '提交报告前，检索本作业所有 `finding` / `tool_observation` 内容汇总',
       ],
       usageGuidance:
-        '**memory_search 使用指南**：\n' +
-        '- 会话开始**必须先检索**漏洞分析的已确认漏洞（phase=vulnerability-analysis, kinds=finding, trust=high）。\n' +
-        '- `hits` 为空 → 漏洞分析未完成或无 P0-P1 漏洞 → 通知人类或回退上一阶段。\n' +
-        '- 验证前先检索 exploit_proof 避免重复探测同一漏洞（特别是多目标场景）。\n' +
-        '- 可跨 engagement 检索同类漏洞的 PoC 载荷与绕过技巧（去掉 engagement_id）。\n' +
-        '- 检索 compromised_asset 时按时间排序，最近获得的凭据可能仍有效。\n' +
-        '- 零命中时必读 note 字段，可能是 trust_level 过滤过严或 phase 设置错误。',
+        '**memory_search 使用指南**（本阶段主要检索 `finding`、`tool_observation`）：\n' +
+        '- 会话开始**必须先检索**漏洞分析的已确认漏洞（phase=vulnerability-analysis, kinds=finding, trust_levels=tool_observation,human_decision）。\n' +
+        '- `hits.length === 0 && note 含"索引为空"` → 库里还没有可检索内容（常见于上游刚交报告、索引器还没跑）→ 用 `pentest_workdir` 读作业目录（`op=list` / `op=search`），不要当成"没有已确认漏洞"。\n' +
+        '- `hits.length === 0 && note 含"没有命中"` → 有内容但查询词不对 → 换目标/端口/漏洞名（CVE 编号）重试。\n' +
+        '- 验证前先检索既有 `finding` 避免重复探测同一漏洞（特别是多目标场景）。\n' +
+        '- **不能**跨 engagement 检索同类漏洞的 PoC 载荷或绕过技巧：`memory_search` 按会话绑定本作业（参数面没有 engagement_id，§9.4）。要借鉴别的作业或人类带来的材料，用 `pentest_workdir` 读作业目录。\n' +
+        '- `trust_levels` 按**来源**过滤：复现成功的补充记录应带 `tool_observation`，人类裁定用 `human_decision`。\n' +
+        '- 零命中时必读 note 字段，可能是 trust_levels 过滤过严或 phase 设置错误。',
     },
   },
 
@@ -381,32 +411,34 @@ export const PHASE_PROFILES: Readonly<Record<Phase, PhaseProfile>> = Object.free
 
     interfaces:
       '**上下游接口**：\n' +
-      '- **消费**：利用验证的已控资产清单 + 影响边界 + 复现记录，检索时用 `compromised_asset` / `impact_scope` 分类。\n' +
+      '- **消费**：利用验证的已控资产清单 + 影响边界 + 复现记录，检索时用 `finding`（配 `trust_levels=tool_observation`）。\n' +
       '- **交付**（回环）：新内网资产清单 + 跳板信息 + 范围修订建议 → 下一轮情报收集据此扫描新网段。\n' +
       '- **交付**（结束）：完整影响边界 + 清理清单 + 残留项 → 控制台生成报告草稿。\n' +
-      '- **记忆标注**：影响边界记成 `impact_boundary`、清理项记成 `cleanup_item`、新内网资产记成 `internal_asset`（provisional=true）。',
+      '- **记忆标注**：有证据的影响边界记成 `fact`、推断的记成 `hypothesis`；已执行的清理记成 `fact`、' +
+      '残留未清的记成 `limitation`；新内网资产记成 `fact`（`provisional=true`，待下一轮确认）。',
 
     retrievalStrategy: {
       mandatoryOnStart: true, // 必须先检索利用验证的已控资产清单
       startupQuery: {
-        description: '会话开始时召回所有已控资产与影响边界',
+        description: '会话开始时召回所有已控资产与影响边界（利用阶段记成 finding / tool_observation）',
         phase: 'exploitation',
-        kinds: ['compromised_asset', 'impact_scope', 'exploit_proof'],
+        kinds: ['finding', 'tool_observation'],
         limit: 20,
       },
       triggers: [
         '核查影响边界前，检索该资产的完整利用记录',
         '规划清理时，检索本作业所有留下的残留物（跨阶段）',
         '判定回环前，检索前序所有阶段的资产清单，避免重复扫描',
-        '建立跳板隧道前，检索是否有其他作业的隧道配置经验',
+        '建立跳板隧道前，检索本作业此前记录过的隧道配置',
       ],
       usageGuidance:
-        '**memory_search 使用指南**：\n' +
-        '- 会话开始**必须先检索**利用验证的已控资产（phase=exploitation, kinds=compromised_asset）。\n' +
-        '- `hits` 为空 → 利用验证未完成或无成功利用 → 通知人类或回退上一阶段。\n' +
+        '**memory_search 使用指南**（本阶段主要检索 `finding`、`tool_observation`、`decision`）：\n' +
+        '- 会话开始**必须先检索**利用验证的已控资产（phase=exploitation, kinds=finding）。\n' +
+        '- `hits.length === 0 && note 含"索引为空"` → 库里还没有可检索内容（上游刚交报告、索引器还没跑是常见情形）→ 用 `pentest_workdir` 读作业目录（`op=list` / `op=search`），不要当成"没有成功利用"。\n' +
+        '- `hits.length === 0 && note 含"没有命中"` → 有内容但查询词不对 → 换资产名/IP/端口重试。\n' +
         '- 规划清理时需跨阶段检索（去掉 phase 参数）所有残留物：临时文件/测试账户/扫描记录。\n' +
-        '- 判定回环时检索所有阶段的 asset / internal_asset 避免重复扫描已知网段。\n' +
-        '- 检索 cleanup_item 时按时间倒序，最近的残留优先清理。\n' +
+        '- 判定回环时检索所有阶段的清点结论（`fact` / `tool_observation`）避免重复扫描已知网段。\n' +
+        '- `trust_levels` 按**来源**过滤：要"已确认"就同时过滤 `human_decision` + `tool_observation`。\n' +
         '- 零命中时必读 note 字段，可能是 kinds 过滤过严或上一阶段未标注正确分类。',
     },
   },
@@ -466,6 +498,18 @@ export function renderPhaseProfile(phase: Phase): string {
   }
 
   sections.push('', strategy.usageGuidance);
+
+  // 合法取值必须到模型手里（规范 §6：拒信里的合法值经常拿不到）——**从契约/词表渲染**，
+  // 不手写第二份。这两行是 2026-10-11 质检 §三 3.1 的直接修复：此前档案教的十个 `kinds`
+  // 里九个不存在、`trust_level` 教的是另一套虚构档位 ⇒ 模型第一次强制检索必被拒，
+  // 而且被拒之后也看不到合法值。
+  sections.push(
+    '',
+    '**检索字段的合法取值**（写别的值一律被服务端拒）：',
+    `- \`kinds\`（\`CHUNK_KINDS\`，共 ${String(CHUNK_KINDS.length)} 个）：${CHUNK_KINDS.map((kind) => `\`${kind}\``).join('、')}`,
+    `- \`trust_levels\`（\`TrustLevel\`，描述记忆的**来源**，不是可信度打分）：${TRUST_LEVELS.map((level) => `\`${level}\``).join('、')}`,
+    '  ⇒ 要「已确认」的结果，就同时过滤 `human_decision`（人类裁定）+ `tool_observation`（工具实测）。',
+  );
 
   return sections.filter((line) => line !== '').join('\n');
 }

@@ -355,7 +355,10 @@ export function searchWorkdir(
     }
     const resolved = resolveInRoots(roots, target.root.containerPath.replace(/\/+$/, '') + '/' + rel);
     let buf: Buffer;
-    let modifiedAt = '';
+    // 这里的 `modifiedAt` 与 `buf` 同批赋值（都在 try 里，都在成功路径上被读）；
+    // 不写初值是因为 `no-useless-assignment` 会对"赋值后必被覆盖"的初值报错，
+    // 而 catch 分支必然 `continue`/`break`——走到下面的语句时它一定已赋值。
+    let modifiedAt: string;
     try {
       const st = statSync(resolved.abs);
       if (!st.isFile() || st.size > WORKDIR_SEARCH_MAX_FILE_BYTES) {

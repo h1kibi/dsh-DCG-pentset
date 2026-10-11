@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [OWASP WSTG, OWASP Top 10 2021, PayloadsAllTheThings, HackTricks]
-  smoked: "沙箱实测@eeaf87926df5：6 块原文照跑（fx-web 172.29.0.2:8080），输出全部可判读。块0 软404基线三行一致 `404 469`；块1 POST /login → `code=501 size=497`、无 Set-Cookie/Location（SimpleHTTP 不支持 POST，认证面不存在，非缺陷）；块2 GET / 与 POST /login 均无 Set-Cookie（静态站无会话）；块3 与块1 合并进同一容器（/tmp 不跨容器）：anon/auth 均 `404 469`、id=1/2/1001 全 `404 469`，未授权/IDOR 均排除；块4 探针 token 与 `<u>` 计数均 0、`AND 1=1`/`1=2` 同为 `404 469`，输入面未命中；块5 OPTIONS→`501 Unsupported method` 判未实现，安全头一条不缺（纯 HTTP，HSTS 不适用）。ffuf 命中 0：唯一「命中」是 raft-small-directories.txt 第 4255 行空行顶到站点根（200/171，-ac 也挡不住），原 jq `.input.FUZZ` 只打印空路径，加 `select(.input.FUZZ != \"\")` 后为 0。"
+  smoked: "沙箱实测@3401b215a4ab：6 块原文照跑（fx-web 172.29.0.2:8080），输出全部可判读。块0 软404基线三行一致 `404 469`；块1 POST /login → `code=501 size=497`、无 Set-Cookie/Location（SimpleHTTP 不支持 POST，认证面不存在，非缺陷）；块2 GET / 与 POST /login 均无 Set-Cookie（静态站无会话）；块3 与块1 合并进同一容器（/tmp 不跨容器）：anon/auth 均 `404 469`、id=1/2/1001 全 `404 469`，未授权/IDOR 均排除；块4 探针 token 与 `<u>` 计数均 0、`AND 1=1`/`1=2` 同为 `404 469`，输入面未命中；块5 OPTIONS→`501 Unsupported method` 判未实现，安全头一条不缺（纯 HTTP，HSTS 不适用）。ffuf 命中 0：唯一「命中」是 raft-small-directories.txt 第 4255 行空行顶到站点根（200/171，-ac 也挡不住），原 jq `.input.FUZZ` 只打印空路径，加 `select(.input.FUZZ != \"\")` 后为 0。"
 ---
 
 # Web 面候选漏洞核验（vuln-web-checks）
@@ -19,7 +19,7 @@ metadata:
 ## 前提与边界
 - 全程只发探测请求，不写入、不删改目标数据；需要身份时只用范围里提供的凭据。
 - 只碰授权目标；沙箱**可出网**（2026-10-05 起），但依赖公网的模板/外部资源只作线索：目标证据以目标上实测为准。
-- 速率由宿主限速（stealth 1/s、standard 5/s、deep 10/s）。**不要**用 `-rate 0` 或 `--min-rate` 顶速；
+- 速率由宿主限速（stealth 1/s、standard 5/s、fast 10/s）。**不要**用 `-rate 0` 或 `--min-rate` 顶速；
   被排队是预期行为，不是故障，不重试绕过。
 - 每个测试项只给一个结论：要么「命中 + 证据行」，要么「未命中 + 排除依据」，不写「视情况而定」。
 

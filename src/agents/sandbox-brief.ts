@@ -25,6 +25,7 @@
  */
 
 import {
+  FREE_COMMAND_TEMPLATE_ID,
   SANDBOX_TEMPLATE_DIR,
   SANDBOX_TOOL_GROUPS,
   SANDBOX_WORDLISTS,
@@ -32,8 +33,17 @@ import {
 } from '../contracts.ts';
 import type { Phase, SandboxMount, SessionKind } from '../contracts.ts';
 import { SANDBOX_TMPFS_SIZE, DEFAULT_SANDBOX_LIMITS, HOST_OUTPUT_BUFFER_LIMIT_BYTES } from '../execution/docker-sandbox.ts';
+import { defaultRegistry } from '../execution/templates.ts';
 import { RECON_TECHNIQUES, VULN_TECHNIQUES } from '../execution/techniques.ts';
+import { PROFILE_DEFAULTS } from '../policy/behavior-profile.ts';
 import { renderTechniqueParamsGuide } from './technique-params-guide.ts';
+
+/** 毫秒渲染成人读时长（超时只从注册表来，提示词里不写第二份——规范 §7）。 */
+function humanDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds > 0 && seconds % 60 === 0) return `${String(seconds / 60)} 分钟（${String(seconds)}s）`;
+  return `${String(seconds)}s`;
+}
 /** 字节数转成人读的形式（提示词里出现 262144 这种数字没有意义）。 */
 function humanBytes(bytes: number): string {
   if (bytes % (1024 * 1024) === 0) return `${String(bytes / (1024 * 1024))}MiB`;
@@ -82,6 +92,13 @@ export function renderSandboxBrief(
   );
   const wordlists = SANDBOX_WORDLISTS.map((w) => `/usr/share/wordlists/${w.file}（${w.purpose}）`);
   const wallClockMinutes = Math.round(DEFAULT_SANDBOX_LIMITS.maxWallClockMs / 60000);
+  // 自由命令的单条上限只从模板注册表读（规范 §7：提示词里的数字不许手写第二份）。
+  // 2026-10-11 质检 §三 3.2 第 14 条：这里原本手写成"自由命令 5 分钟"，而端口扫描被写成
+  // "5 分钟"（真值 900s）——同一段话里就有一处与注册表相反。
+  const templateRegistry = defaultRegistry();
+  const freeCommandLabel = humanDuration(
+    templateRegistry.get(FREE_COMMAND_TEMPLATE_ID)?.template.timeoutMs ?? 0,
+  );
   // 环境事实里**最该常驻**的一条（2026-10-08 操作者实测 P0-1）：它决定资产底数对不对，
   // 而漏报的形态是"看起来完全正常"。放在简报里比放在 skill 里更靠前——skill 要装才看得见。
   const hostgroupFact =
@@ -128,10 +145,11 @@ export function renderSandboxBrief(
       : '因此需要留存的东西**当场落进记忆**（status_note / 报告 / 证据）；先落到上面那个挂载目录再整理也可以，但记忆里的状态才是交接的依据。',
     '',
     '**限额**（按这个规划命令，超限即失败或截断）：',
-    `- 墙钟：${String(wallClockMinutes)} 分钟是沙箱**天花板**（没有任何动作默认吃满），每条的实际上限按动作定 ——`,
-    '  自由命令 `pentest_exec` **5 分钟**；结构化动作更小（端口扫描 5 分钟、爬取 3 分钟、探针类 1 分钟）。',
+    `- 墙钟**天花板**：${String(wallClockMinutes)} 分钟（\`maxWallClockMs\`，没有任何动作默认吃满；实际取「模板超时」与它的**较小者**）。`,
+    `- 单条的实际上限**按动作定**：自由命令 \`pentest_exec\` ${freeCommandLabel}（模板 \`${FREE_COMMAND_TEMPLATE_ID}\` 的 \`timeoutMs\`）；` +
+      '各结构化动作的上限写在下面参数指南里每个 technique 的标题行 —— **两处都由模板注册表渲染，这里不再手抄一份**。',
     hostgroupFact,
-    '  ⇒ 规划长任务按 **5 分钟**一段切，别按天花板算。',
+    `  ⇒ 规划长任务按 **${freeCommandLabel}** 一段切（那是自由命令的限制），别按天花板算。`,
     ...(mounts.length === 0
       ? []
       : [
@@ -142,7 +160,7 @@ export function renderSandboxBrief(
     `- 资源：CPU ${DEFAULT_SANDBOX_LIMITS.cpus} 核 / 内存 ${DEFAULT_SANDBOX_LIMITS.memory} / 进程数 ${String(DEFAULT_SANDBOX_LIMITS.pidsLimit)}`,
     `- 临时空间：\`/tmp\` 上限 ${SANDBOX_TMPFS_SIZE}（大字典与中间结果要留意）`,
     `- 输出：单条命令 stdout 上限约 ${humanBytes(TYPICAL_OUTPUT_CAP)}（宿主侧另有 ${humanBytes(HOST_OUTPUT_BUFFER_LIMIT_BYTES)} 缓冲上限，超了尾部被丢弃）`,
-    '- 单条命令正文 ≤ 8192 字符（`pentest_exec`）；速率按行为预设限速（stealth 1 请求/秒、standard 5、fast 10）',
+    `- 单条命令正文 ≤ 8192 字符（\`pentest_exec\`）；速率按行为预设限速（${(['stealth', 'standard', 'fast'] as const).map((profile) => `${profile} ${String(PROFILE_DEFAULTS[profile].pacing.rate)} 请求/秒`).join('、')}；custom 从 stealth 基线起，可被部署上限收窄）`,
     '**长输出先落盘再筛**：`<命令> > /tmp/out.json 2>/tmp/err` 然后用 `jq`/`grep`/`head` 取字段——直接把上万行倒进输出等于自截断。',
     '',
     // ── 通道宣传必须与**本会话的工具面**一致（2026-10-07）──
@@ -176,12 +194,14 @@ export function renderSandboxBrief(
     `**nuclei 模板**：${SANDBOX_TEMPLATE_DIR}（镜像自带的自建只读模板）。**不要从网上下载模板库**——上游模板集含入侵性用例，与「核验不可破坏」的纪律冲突；`,
     '  用法：`nuclei -u <目标> -t /opt/pentest-templates -disable-update-check -jsonl`。',
     '',
-    '**退出码与失败语义**：`0` = 命令跑完并拿到结果（目标返回 4xx/5xx 也是结果）；`1` = 工具级失败（连不上/解析失败）；',
+    '**退出码与失败语义**：`0` = 命令跑完并拿到结果（目标返回 4xx/5xx 也是结果；**"扫完是 0"也是 0**）；`1` = 工具级失败（连不上/解析失败）；',
     '`2` = 用法错误（读输出里的 `usage_error`，它会列出允许的取值）；`124` = 超时（拆小规模重跑，不要原样重试）。',
+    '工具级结果的首行固定是 `state=`（`ok` / `failed` / `no_target` / `aborted` / `partial`，沙箱工具规范 v1 §2），其后是机器可读的 `summary:` 行；',
+    '**「没扫」与「扫到 0」不同形**（`scanned=false` vs `scanned=true` 且计数为 0）、覆盖度看 `*_total`/`*_attempted`/`*_truncated`/`*_remaining` —— 这套读法在下面的参数指南里逐条讲。',
     '',
     '**哪些事不要在这台沙箱里硬跑（主动提出交给人类）**：',
     '- 吃 GPU、吃内存、吃时间的离线破解与大规模爆破/喷洒（`hashcat` 这类、10^6 量级的字典、全端口全脚本扫描）、',
-    '  镜像内编译构建、需要图形界面或长时间驻留的任务——这些在宿主机或专用机器上做，快得多，也不占沙箱的 15 分钟/2g 预算。',
+    `  镜像内编译构建、需要图形界面或长时间驻留的任务——这些在宿主机或专用机器上做，快得多，也不占沙箱的 ${String(wallClockMinutes)} 分钟/${DEFAULT_SANDBOX_LIMITS.memory} 预算。`,
     '- 做法：把「要跑什么、在哪跑、期望产出什么」写清楚交给人，**不要用降级参数硬凑一个结果**——降级跑出来的结论不可复核。',
     '- 需要常驻进程/持续交互的能力同样不在本沙箱内（C2、等待目标回连、网络投毒）：容器是一次性的，没有常驻、没有入站端口。',
     '  这类需求属于「交人类在沙箱外做」，不是「换个参数再试一次」。',

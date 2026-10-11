@@ -14,6 +14,8 @@
  */
 
 
+import { defaultRegistry } from '../execution/templates.ts';
+
 /**
  * 参数的人读说明（比枚举值更详细的语义解释）。
  * 
@@ -38,7 +40,24 @@ export interface TechniqueGuide {
   readonly technique: string;
   readonly purpose: string;
   readonly params: readonly ParamGuide[];
+  /** 怎么读这条动作的输出（判据）。缺省表示判据已写在 purpose/params 里。 */
+  readonly judgement?: string;
   readonly example: string;
+}
+
+/**
+ * 模板注册表：**超时上限的唯一来源**。
+ *
+ * 规范 §7：渲染给模型的"数字型事实"必须从唯一来源渲染，手写第二份即视为缺陷
+ * （2026-10-11 质检 §三 3.2 第 14 条就是手写副本漂移：技能按 900s 估规模，而自由命令真限 300s）。
+ * 这里按 `templateId = <family>_<technique>` 反查 `timeoutMs`，指南里的每个数字都由它渲染。
+ */
+const TEMPLATE_REGISTRY = defaultRegistry();
+
+/** 该 technique 的模板墙钟上限（秒）；注册表里没有就不渲染这一行（不猜）。 */
+function templateTimeoutSeconds(family: 'recon' | 'vuln', technique: string): number | undefined {
+  const spec = TEMPLATE_REGISTRY.get(`${family}_${technique}`);
+  return spec === undefined ? undefined : Math.round(spec.template.timeoutMs / 1000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -121,6 +140,30 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
       },
     ],
     example: 'pentest_recon(technique="service_probe", targetSelector="192.168.1.10", ports="22,80,443", intensity="light", purpose="...")',
+  },
+  {
+    technique: 'nse_safe',
+    purpose: '只读 NSE 脚本扫描：拿服务 banner、认证方式、证书这类**服务级**事实',
+    params: [
+      {
+        name: 'port',
+        type: 'integer',
+        required: true,
+        description: '脚本针对的端口（先从 `port_scan` 拿到开放端口，再对它跑脚本）',
+      },
+      {
+        name: 'scripts',
+        type: 'string',
+        required: false,
+        default: 'http-title,http-headers',
+        description:
+          '只读脚本名（逗号分隔，**最多 8 个**）。白名单由沙箱侧强制：`*brute*`/`*dos*`/exploit 类一律拒绝。可用的有 banner、http-title、http-headers、http-methods、http-security-headers、http-server-header、ssl-cert、ssl-enum-ciphers、smb-os-discovery、smb-security-mode、smb2-security-mode、ftp-anon、ssh-auth-methods、rdp-ntlm-info、smtp-commands',
+        example: 'scripts="ftp-anon,ssh-auth-methods"',
+      },
+    ],
+    judgement:
+      '命中会输出 `script: <脚本名>` + `output:` 块。**没有 `script:` 行 = 这些脚本在该端口没有可报告的结论**，不是"端口没开"（端口状态看 `port_scan`）。示例：`ftp-anon` 打出 `Anonymous FTP login allowed` 才算可读匿名 FTP。',
+    example: 'pentest_recon(technique="nse_safe", targetSelector="192.168.1.10", port=21, scripts="ftp-anon", purpose="...")',
   },
   {
     technique: 'http_probe',
@@ -290,11 +333,64 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         required: false,
         default: '（空串＝整本字典）',
         description:
-          '**字典分段**（操作者诉求 #4）：`A-B`，1 基双闭区间，如 `1-2000`。大字典在**单条命令的墙钟内跑不完**（`common_dirs` 4723 条按 5 请求/秒需 ~945s，而单条上限 295s）——用 `1-2000` / `2001-4000` … 多次调用拼完。每次返回都自证：`coverage: wordlist_entries=… entry_range=… requested=… attempted=… truncated=… position=… remaining=…`，并在超可调度量时直接写「需要分 N 段」（这是数学，不是判断）',
+          '**字典分段**（操作者诉求 #4）：`A-B`，1 基双闭区间，如 `1-2000`。大字典在**单条命令的墙钟内跑不完**（`common_dirs` 4723 条按 5 请求/秒需 ~945s，超过本动作的墙钟上限——上限由模板注册表渲染在上面的标题行，不在这里手抄）——用 `1-2000` / `2001-4000` … 多次调用拼完。每次返回都自证：`coverage: wordlist_entries=… entries_total=… entry_range=A-B requested=… entries_attempted=… entries_truncated=… entries_remaining=… position=… reason=completed|host_timeout`（另有一行 `coverage_hit_span: position_max_hit=… hits=…`），并在超可调度量时直接写「需要分 N 段」（这是数学，不是判断）',
         example: 'entry_range="1-2000"',
       },
     ],
     example: 'pentest_recon(technique="content_discover", targetSelector="192.168.1.10", scheme="https", wordlist="common_dirs", rate=5, path="api", purpose="...")',
+  },
+  {
+    technique: 'web_crawl',
+    purpose: '爬取站点：按链接逐页走，抽出页面、表单与查询参数（比字典枚举更"跟着站点的形状走"）',
+    params: [
+      {
+        name: 'port',
+        type: 'integer',
+        required: false,
+        default: 80,
+        description: '目标 Web 端口',
+      },
+      {
+        name: 'scheme',
+        type: 'enum',
+        required: false,
+        default: 'http',
+        description: '协议（这里没有 auto，必须明确）',
+        options: [
+          { value: 'http', note: '明文 HTTP' },
+          { value: 'https', note: 'TLS 加密' },
+        ],
+      },
+      {
+        name: 'depth',
+        type: 'integer',
+        required: false,
+        default: 2,
+        description: '爬取深度（1-3）；从 `/` 起算，只跟**同主机**链接',
+      },
+      {
+        name: 'max_pages',
+        type: 'integer',
+        required: false,
+        default: 100,
+        description: '页数硬上限（1-500）；单页最多读 512KiB',
+      },
+      {
+        name: 'verify_tls',
+        type: 'enum',
+        required: false,
+        default: 'true',
+        description:
+          '是否验证 TLS 证书：**能用默认就用默认**（证书有效时默认就能通，IP 目标也一样）；只有**校验真的失败**（自签/链不全/SAN 不匹配）才设 false',
+        options: [
+          { value: 'true', note: '验证证书（默认）' },
+          { value: 'false', note: '跳过验证（校验失败时才用；此后该次结果不再证明证书链可信）' },
+        ],
+      },
+    ],
+    judgement:
+      '汇总行 `summary: pages=N forms=M params=K queue_remaining=R`。逐页 `page: <路径> status=<码> links=<n>`，`form:` 行给表单的 action/method/inputs（参数名线索）。**`queue_remaining>0` = 触到 `max_pages` 被截住**，不是"站点只有这么多页"；`page: … error=<异常类名>` 的行是**没取到**（连接失败/超时），不是"页面不存在"。',
+    example: 'pentest_recon(technique="web_crawl", targetSelector="192.168.1.10", scheme="https", depth=2, max_pages=100, purpose="...")',
   },
   {
     technique: 'dns_enum',
@@ -320,6 +416,89 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
       },
     ],
     example: 'pentest_recon(technique="dns_enum", targetSelector="example.com", record_types="A,MX,TXT", purpose="...")',
+  },
+  {
+    technique: 'dns_axfr',
+    purpose: 'DNS 区域传送（AXFR）：向该区权威服务器要整份区文件（成功即拿到全部主机名）',
+    params: [],
+    judgement:
+      '先看 `nameservers:`（该区权威列表，来自 NS 记录），再逐个尝试，每台回一行：`zone: <区> server=<ns> records=<n>  ← 区域传送成功（高价值）` 是成功；`zone: <ns> refused detail=<异常类名>` 是拒绝。汇总 `summary: transferred=<记录数>`。**全部 refused 是正常结果**（绝大多数 DNS 不开放 AXFR）——写成"AXFR 未开放"，不要写成"没跑"或"失败"。',
+    example: 'pentest_recon(technique="dns_axfr", targetSelector="example.com", purpose="...")',
+  },
+  {
+    technique: 'dns_brute',
+    purpose: '子域爆破：用字典逐个查 A 记录（主动，会打到解析器，注意速率与授权）',
+    params: [
+      {
+        name: 'wordlist',
+        type: 'enum',
+        required: false,
+        default: 'subdomains_5k',
+        description: '字典档位（镜像内固定）',
+        options: [{ value: 'subdomains_5k', note: '5000 个常见子域标签（默认）' }],
+      },
+      {
+        name: 'concurrency',
+        type: 'integer',
+        required: false,
+        default: 10,
+        description: '并发查询数（1-20）；默认建议 ≤10，避免被解析器限速',
+      },
+      {
+        name: 'wildcard_check',
+        type: 'enum',
+        required: false,
+        default: 'on',
+        description: '泛解析剔除：先用 3 个随机标签探测通配，命中与通配答案相同的记录会被剔除',
+        options: [
+          { value: 'on', note: '剔除泛解析命中（默认）' },
+          { value: 'off', note: '不剔除（结果里会混进泛解析记录，谨慎读）' },
+        ],
+      },
+    ],
+    judgement:
+      '先看 `wildcard: detected|none` 与 `wildcard: … addresses=…`：`detected` 时，与通配答案相同的命中**已被剔除**，`found` 里只剩真子域。汇总 `summary: labels=<字典条数> found=<命中数> wildcard_filtered=yes|no`。因此 `found=0` 有两种读法：`wildcard_filtered=yes` 时可能被泛解析掩盖（换 `-` 前缀/更多随机探测确认），`wildcard_filtered=no` 才是"这本字典在这个域上确实没有命中"。',
+    example: 'pentest_recon(technique="dns_brute", targetSelector="example.com", wordlist="subdomains_5k", concurrency=10, wildcard_check="on", purpose="...")',
+  },
+  {
+    technique: 'whois',
+    purpose: 'WHOIS 归属查询：域名查注册局/注册商，IP 查分配机构与网段',
+    params: [
+      {
+        name: 'kind',
+        type: 'enum',
+        required: false,
+        default: 'domain',
+        description: '查什么（**按目标类型选**：域名用 domain，IP 用 ip）',
+        options: [
+          { value: 'domain', note: '域名 → 注册局/注册商/创建与到期/NS（默认）' },
+          { value: 'ip', note: 'IP → 分配机构、inetnum/netname 网段归属' },
+        ],
+      },
+    ],
+    judgement:
+      '字段逐行回 `whois_<字段>: <值>`（registrar / name_server / inetnum / netname / orgname / country / …），并附 `raw_head:` 原文前 40 行。两种**不是失败**的形态要分清：`note: 私有/回环/保留地址段没有注册局记录`（`kind=ip` 且目标是内网地址时的**预期行为**，不要重试）；真正的失败是 `error: whois_failed`（rc=1，附 `next_action`）——**别把失败读成"没有记录"**。查询量小、走第三方，输出里 `pinning: none`。',
+    example: 'pentest_recon(technique="whois", targetSelector="example.com", kind="domain", purpose="...")',
+  },
+  {
+    technique: 'ct_subdomains',
+    purpose: '证书透明度日志查询：从 CT 日志里拿该域签发过的证书覆盖的主机名（被动，不碰目标）',
+    params: [
+      {
+        name: 'include_wildcards',
+        type: 'enum',
+        required: false,
+        default: 'false',
+        description: '是否保留 `*.example.com` 形式的通配项',
+        options: [
+          { value: 'false', note: '剥掉 `*.` 前缀（默认）' },
+          { value: 'true', note: '保留通配形式（想看通配证书覆盖范围时用）' },
+        ],
+      },
+    ],
+    judgement:
+      '逐行 `subdomain: <名字>`，汇总 `summary: entries=<CT 条目数> unique_names=<去重子域数>`；`unique_names` 是**已列出**的数量（列出上限 500 条），不等于日志里的全量。本动作依赖 crt.sh **出网**：取不到是 `error: request_failed`（rc=1）——**不是"该域没有证书"**。输出里 `pinning: none`（走第三方）。',
+    example: 'pentest_recon(technique="ct_subdomains", targetSelector="example.com", include_wildcards="false", purpose="...")',
   },
   {
     technique: 'tls_inspect',
@@ -517,9 +696,16 @@ const VULN_GUIDES: readonly TechniqueGuide[] = [
 //                           渲染函数
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** 渲染单个 technique 的参数表（Markdown 表格）。 */
-function renderTechniqueGuide(guide: TechniqueGuide): string {
-  const lines = [`**${guide.technique}**：${guide.purpose}`, ''];
+/** 渲染单个 technique 的参数表（Markdown 表格）。`family` 用于从注册表渲染超时上限（唯一来源）。 */
+function renderTechniqueGuide(guide: TechniqueGuide, family: 'recon' | 'vuln'): string {
+  const timeoutSeconds = templateTimeoutSeconds(family, guide.technique);
+  const lines = [
+    `**${guide.technique}**：${guide.purpose}`,
+    timeoutSeconds === undefined
+      ? ''
+      : `墙钟上限：**${String(timeoutSeconds)}s**（模板 \`${family}_${guide.technique}\` 的 \`timeoutMs\`；本行由注册表渲染，不手抄）`,
+    '',
+  ];
 
   if (guide.params.length === 0) {
     lines.push('（无参数）');
@@ -541,11 +727,37 @@ function renderTechniqueGuide(guide: TechniqueGuide): string {
     }
   }
 
+  if (guide.judgement !== undefined) {
+    lines.push('', `**判据**：${guide.judgement}`);
+  }
+
   lines.push('');
   lines.push(`示例：\`${guide.example}\``);
   lines.push('');
   return lines.join('\n');
 }
+
+/** 读输出的纪律：状态行、summary、覆盖度四字段、「没扫」与「扫到 0」的区别（规范 §2/§3）。 */
+const OUTPUT_READING_GUIDE: readonly string[] = [
+  '═══ 读输出：状态行、覆盖度、阴性结论怎么读 ═══',
+  '',
+  '沙箱里的**每个动词**输出都自报状态（沙箱工具规范 v1 §2）——**别只看有没有内容**：',
+  '',
+  '- **首行固定是 `state=`**：`ok`（跑完并拿到结果，**含"扫完是 0"**）/ `failed`（工具级失败、目标不可达）/ ' +
+    '`no_target`（**没扫**：范围为空、没有可解析目标）/ `aborted`（被墙钟 deadline 提前终止）/ `partial`（只跑了一部分）。',
+  '- 其后是 **`summary:` 行**（机器可读的 `key=value`，空格分隔），再后才是逐条明细（`path<TAB>…`、`port=…` 等）。' +
+    '**结论从 summary 的字段读，不要从"明细看起来有几行"去推**。',
+  '- **「没扫」与「扫到 0」不同形**：`scanned=false`（并给出原因）⇒ 范围为空/参数为空/被 deadline 提前终止，' +
+    '这是**未覆盖**；`scanned=true` 且计数为 0 ⇒ 真的扫完是 0。前者写进报告的"未覆盖"，后者才是阴性结论。',
+  '- **覆盖度四字段**（§3：凡有总量上限的动词都给）：`<x>_total` 本次总量（字典条数/路径条数/主机数/脚本数/结果条数）、' +
+    '`<x>_attempted` 实际尝试数、`<x>_truncated` 是否被截断（**显式** `true`/`false`，不得靠"数字看起来小"推断）、' +
+    '`<x>_remaining` 还剩多少。**`*_truncated=true` 时命中数只能当下界读**；`*_remaining>0` 时用分段参数（如 `entry_range=`）续跑。',
+  '- **阴性结论**（0 命中/0 端口/无记录）必须能回答"你扫了什么、扫了多少"：`attempted=` 或 `total=` 至少给一个——' +
+    '两个都没有，就不能说"没有"。',
+  '- **退出码与状态是三档**（§4）：`0` 成功（含扫完是 0）/ `1` 运行时失败 / `2` 用法错误（输出里有 `usage_error:` 与**合法取值**）/ ' +
+    '`124` 超时（容器保留已产出的输出，别当"没发出去"）。',
+  '',
+];
 
 /**
  * 渲染结构化动作参数指南（注入到沙箱简报的两条通道对比表之后）。
@@ -559,7 +771,7 @@ export function renderTechniqueParamsGuide(include: {
   readonly recon: boolean;
   readonly vuln: boolean;
 }): string {
-  const sections: string[] = [];
+  const sections: string[] = [...OUTPUT_READING_GUIDE];
   if (include.recon) {
     sections.push(
       '═══ 结构化侦察动作参数指南 ═══',
@@ -567,7 +779,7 @@ export function renderTechniqueParamsGuide(include: {
       '以下是 `pentest_recon` 工具各个 technique 的参数说明。',
       '优先用结构化通道：参数少、免手写命令、①②③阶段免批。',
       '',
-      ...RECON_GUIDES.map(renderTechniqueGuide),
+      ...RECON_GUIDES.map((guide) => renderTechniqueGuide(guide, 'recon')),
       '',
     );
   }
@@ -577,7 +789,7 @@ export function renderTechniqueParamsGuide(include: {
       '',
       '以下是 `pentest_scan` 工具各个 technique 的参数说明。',
       '',
-      ...VULN_GUIDES.map(renderTechniqueGuide),
+      ...VULN_GUIDES.map((guide) => renderTechniqueGuide(guide, 'vuln')),
     );
   }
   return sections.join('\n');

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [NVD CVE API 2.0, CISA KEV, OSV, GitHub Advisory Database, MITRE CVE]
-  smoked: "沙箱实测@eeaf87926df5：线索正则抽出 CVE-2021-44228 与「lodash 4.17.15」；2026-10-08T23:38Z 本轮外网在线——NVD 200（CVE-2021-44228 10 CRITICAL + apache:log4j CPE 区间）、CISA-KEV 命中（Apache/Log4j2 added=2021-12-10 ransomware=Known）、OSV 6 条 GHSA、第 6 步探测回 JSON（404 body=可达），全 exit=0（外网间歇，旧记录同日相反）；离线分支用 --network none 复现：第 6 步报 curl: (6) Could not resolve host: api.osv.dev（判据是文本，管道给 head 吞掉退出码→exit=0），第 2 步 curl 失败后 jq 读不到 /tmp/nvd.json→exit=2；本轮修掉第 6 步本地材料配方——原 find 的 '*nvd*'/'*kev*' 命中 nvdimm/clockevent/ikev2/nukeviet 等 52 行噪声且漏真实 KEV 文件名，改为匹配 *nvd*.json/*kev*.json/*known_exploited*.json 后实测空输出（镜像确无自带缓存）"
+  smoked: "沙箱实测@3401b215a4ab：线索正则抽出 CVE-2021-44228 与「lodash 4.17.15」；2026-10-08T23:38Z 本轮外网在线——NVD 200（CVE-2021-44228 10 CRITICAL + apache:log4j CPE 区间）、CISA-KEV 命中（Apache/Log4j2 added=2021-12-10 ransomware=Known）、OSV 6 条 GHSA、第 6 步探测回 JSON（404 body=可达），全 exit=0（外网间歇，旧记录同日相反）；离线分支用 --network none 复现：第 6 步报 curl: (6) Could not resolve host: api.osv.dev（判据是文本，管道给 head 吞掉退出码→exit=0），第 2 步 curl 失败后 jq 读不到 /tmp/nvd.json→exit=2；本轮修掉第 6 步本地材料配方——原 find 的 '*nvd*'/'*kev*' 命中 nvdimm/clockevent/ikev2/nukeviet 等 52 行噪声且漏真实 KEV 文件名，改为匹配 *nvd*.json/*kev*.json/*known_exploited*.json 后实测空输出（镜像确无自带缓存）"
 ---
 
 # 漏洞情报查证（vuln-intel）

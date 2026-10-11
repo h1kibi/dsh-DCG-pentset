@@ -654,3 +654,34 @@ test('按会话给出挂载列表：整份列表原样生效（含 :ro）；目�
   await mk(undefined).run({ plan: plan() }, new AbortController().signal);
   assert.equal((calls.at(-1) ?? []).includes('-v'), false, '无 resolver 时不得凭空多出挂载');
 });
+
+test('退出码三档（规范 §4）：0=completed / 1=tool_failed / 2=usage_error', () => {
+  // 现场（2026-10-11 质检 §2.1 第 3 条）：此前**任意非 null 码都记 completed**，
+  // 于是"参数拼错"在账本里长成"成功执行"，模型照抄错参数再烧一轮。
+  const mk = (code: number, stdout = '', stderr = '') =>
+    mapOutcome(
+      { aborted: false, timedOut: false, code, stdout, stderr },
+      64 * 1024,
+    );
+
+  const ok = mk(0, 'summary: open_ports=3\n');
+  assert.equal(ok.status, 'completed');
+  assert.equal(ok.exitCode, 0);
+
+  const usage = mk(2, '', 'usage_error: 未知参数 restrict_to_scop（接受：restrict_to_scope ports scope）\n');
+  assert.equal(usage.status, 'runtime_error', '用法错误不得记成 completed');
+  assert.equal(usage.error?.code, 'usage_error');
+  assert.match(usage.error?.message ?? '', /restrict_to_scop/, '消息要能被直接照做（带键名/合法取值）');
+  assert.match(usage.error?.next_action ?? '', /改参数/, '要说清这是参数问题、不是目标结论');
+  assert.equal(usage.stdout, '', '用法错误时 stdout 照旧保留');
+  assert.match(usage.stderr ?? '', /usage_error/, 'stderr 原文照旧保留（消息字段只是摘一行）');
+
+  const failed = mk(1, '', 'nmap: command not found\n');
+  assert.equal(failed.status, 'runtime_error');
+  assert.equal(failed.error?.code, 'tool_failed');
+  assert.match(failed.error?.next_action ?? '', /不要.*结论|判断/, '要拦住"据失败下目标结论"');
+
+  // 消息只取一行有用的，不是把 stderr 整段搬进 message（整段仍在 stderr 里）
+  const noisy = mk(1, '', '\n\nTraceback (most recent call last):\n  File "x.py", line 1\nKeyError: 1\n');
+  assert.doesNotMatch(noisy.error?.message ?? '', /Traceback/, 'Traceback 行不是给模型的那一行');
+});

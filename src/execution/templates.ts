@@ -849,7 +849,8 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         // 空串 = 站点根；形状与容器侧 `PATH_PREFIX_RE` 同一字符集，`..` 段由容器侧拒绝。
         { name: 'path', kind: 'string', pattern: "^[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,160}$" },
         // 字典分段（2026-10-11 操作者诉求 #4）：`common_dirs` ≈ 4723 条，按声明节奏 5 req/s
-        // 需要 ~945s，而单条命令上限（maxtime）只有 295s ⇒ **数学上就不可调度**；实测 ffuf 到
+        // 需要 ~945s，而单条命令的墙钟上限（本模板 `timeoutMs`，容器侧再减 15s 收尾裕量）远小于它
+        // ⇒ **数学上就不可调度**（这不是判断，是算术）；实测 ffuf 到
         // maxtime 就停（命中停在 position=4313），而旧 summary 里看不见"被截断"。
         // 语义：**1 基、双闭区间**的字典条目编号（条目 = 去空行/去注释后的行），空串 = 整本字典。
         // 选它而不是 `resume_from=<游标>`：区间自证"从第几条跑到第几条"、可拼、可去重、可核账。
@@ -870,7 +871,7 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       verify_tls: VERIFY_TLS_CARRY,
       path: '基准路径前缀（空串 = 站点根；如 `api` 或 `v1/api`，两侧斜杠会被归一）。用于在 `/api/` 这类子路径下枚举，而不是只打根路径',
       entry_range:
-        '**字典分段**（`A-B`，1 基双闭区间，如 `1-2000`；空串 = 整本字典）。大字典在单条命令的墙钟内跑不完（`common_dirs` 4723 条按 5 req/s 需 ~945s，上限 295s）——用 `1-2000` / `2001-4000` … 多次调用拼完。**每次返回都自证**：`coverage: wordlist_entries=… entry_range=… requested_entries=… attempted=… truncated=… position=… remaining=…`，并在超可调度量时直接写"需要分 N 段"（这是数学，不是判断）',
+        '**字典分段**（`A-B`，1 基双闭区间，如 `1-2000`；空串 = 整本字典）。大字典在单条命令的墙钟内跑不完（`common_dirs` 4723 条按声明的节奏需 ≈945s，而单条命令的墙钟上限**不在文案里写死**——以模板 `timeoutMs` 与容器侧 `state=`/`coverage` 自证为准）——用 `1-2000` / `2001-4000` … 多次调用拼完。**每次返回都自证**：`coverage: wordlist_entries=… entries_total=… entry_range=A-B requested=… entries_attempted=… entries_truncated=… entries_remaining=… position=… reason=completed|host_timeout`（另有一行 `coverage_hit_span: position_max_hit=… hits=…`），并在超可调度量时直接写"需要分 N 段"（这是数学，不是判断）',
     },
     commandTemplate:
       'content_discover target={target} port={port} scheme={scheme} wordlist={wordlist} extensions={extensions} rate={rate} verify_tls={verify_tls} path={path} entry_range={entry_range}',

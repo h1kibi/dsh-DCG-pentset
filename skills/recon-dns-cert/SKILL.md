@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-CRYP-01, RFC 5280, RFC 9309, MITRE ATT&CK T1590.002/T1596.003]
-  smoked: "沙箱实测@eeaf87926df5：10 块原文照跑（2026-10-09）。①选定解析器：/etc/resolv.conf=nameserver 127.0.0.11，dig A fx-tls→172.29.0.3(exit=0)；②A/AAAA：A=172.29.0.3、AAAA 空(exit=0)；③记录类型循环：CNAME/NS/TXT/SOA 均 `communications error to 127.0.0.11#53: timed out`+`no servers could be reached`，仅 MX 空——非 A/PTR 类型在内嵌 DNS 下超时/无应答属环境行为；④PTR：-x 172.29.0.3→fx-tls.pentest-lab-internal.；⑤证书：subject/issuer=CN=smoke.local、notBefore=Oct 8 23:36:11 2026 GMT、notAfter=Oct 9 23:36:11 2026 GMT、SAN DNS:smoke.local；⑥链校验：原文 `2>&1 >/dev/null | grep` 只留 stderr，拿到 `verify error:num=18:self-signed certificate`，但期望的 `Verify return code:` 在 stdout 被吞——本轮最小修正为 `2>&1 | grep`（去掉 >/dev/null），实测同时拿到 `verify error:num=18:self-signed certificate` 与 `Verify return code: 18 (self-signed certificate)`；⑦退化探测：可达解析器 exit=0、不可达 172.29.0.99 exit=124（timeout，本轮非旧记的 9）；⑧AXFR：lab-zone.test @172.29.0.5 完整传送（XFR size 12 records，含只应内网的 internal-only A 10.42.0.9），硬化的 hardened.test @同一服务器得 `; Transfer failed.`——成功/被拒两分支都拿到；`dig +short NS lab-zone.test` 经内嵌 DNS 返回空，内网 zone 的权威地址须由范围给出；⑨whois：whois example.com 取到 Registrar/Creation/Registry Expiry/NS，whois 1.1.1.1 取到 inetnum 1.1.1.0-1.1.1.255 / netname APNIC-LABS，whois 8.8.8.8 本轮超时(exit=124，该 whois 服务器间歇)；⑩子域枚举：subfinder -d example.com→dev/products/support/m/www.example.com，dnsx 解析 example.com→2 条 A（172.66.147.243/104.20.23.154）。结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）本轮不在范围。"
+  smoked: "沙箱实测@3401b215a4ab：10 块原文照跑（2026-10-09）。①选定解析器：/etc/resolv.conf=nameserver 127.0.0.11，dig A fx-tls→172.29.0.3(exit=0)；②A/AAAA：A=172.29.0.3、AAAA 空(exit=0)；③记录类型循环：CNAME/NS/TXT/SOA 均 `communications error to 127.0.0.11#53: timed out`+`no servers could be reached`，仅 MX 空——非 A/PTR 类型在内嵌 DNS 下超时/无应答属环境行为；④PTR：-x 172.29.0.3→fx-tls.pentest-lab-internal.；⑤证书：subject/issuer=CN=smoke.local、notBefore=Oct 8 23:36:11 2026 GMT、notAfter=Oct 9 23:36:11 2026 GMT、SAN DNS:smoke.local；⑥链校验：原文 `2>&1 >/dev/null | grep` 只留 stderr，拿到 `verify error:num=18:self-signed certificate`，但期望的 `Verify return code:` 在 stdout 被吞——本轮最小修正为 `2>&1 | grep`（去掉 >/dev/null），实测同时拿到 `verify error:num=18:self-signed certificate` 与 `Verify return code: 18 (self-signed certificate)`；⑦退化探测：可达解析器 exit=0、不可达 172.29.0.99 exit=124（timeout，本轮非旧记的 9）；⑧AXFR：lab-zone.test @172.29.0.5 完整传送（XFR size 12 records，含只应内网的 internal-only A 10.42.0.9），硬化的 hardened.test @同一服务器得 `; Transfer failed.`——成功/被拒两分支都拿到；`dig +short NS lab-zone.test` 经内嵌 DNS 返回空，内网 zone 的权威地址须由范围给出；⑨whois：whois example.com 取到 Registrar/Creation/Registry Expiry/NS，whois 1.1.1.1 取到 inetnum 1.1.1.0-1.1.1.255 / netname APNIC-LABS，whois 8.8.8.8 本轮超时(exit=124，该 whois 服务器间歇)；⑩子域枚举：subfinder -d example.com→dev/products/support/m/www.example.com，dnsx 解析 example.com→2 条 A（172.66.147.243/104.20.23.154）。结构化 DNS 通道（dns_enum/dns_brute/dns_axfr）本轮不在范围。"
 ---
 
 # DNS 与证书面清点（recon-dns-cert）
@@ -43,7 +43,7 @@ metadata:
 | 4 反向解析 PTR | ——（不覆盖） | 手写 `dig -x <地址>` |
 | 5 TLS 证书字段 | `tls_inspect` | `port=443`、`sni=none`（用目标名）或指定主机名 |
 | 6 协议/弱套件 | `tls_inspect` | `enumerate_protocols=on` |
-| 附加：子域枚举 | `ct_subdomains` / `dns_brute` | `include_wildcards=false`；`concurrency=10`、`wildcard_check=on` |
+| 附加：子域枚举 | `ct_subdomains`（参数 `include_wildcards`）/ `dns_brute`（参数 `concurrency`、`wildcard_check`） | `include_wildcards=false`；`concurrency=10`、`wildcard_check=on`。**两套参数不通用**：`concurrency`/`wildcard_check` 只属 `dns_brute`，`include_wildcards` 只属 `ct_subdomains` |
 
 ### 1. 选定解析器（先决条件）
 ```bash
@@ -153,7 +153,7 @@ whois <IP>         # 网段（inetnum/netname）与所属机构
 ```
 **期望**：域名的注册商与名称服务器；IP 的网段与机构名。
 **判据**：把「域名 → 注册商/NS」「IP → 网段/机构」写进资产；**到期时间与最近变更**是时间线素材。
-优先用**结构化通道**（免审批、字段已解析）：`whois_query target=<域名或 IP> kind=domain|ip`
+优先用**结构化通道**（免审批、字段已解析）：`pentest_recon` 的 technique `whois`，参数 `targetSelector=<域名或 IP>`、`kind="domain"|"ip"`
 （实测返回 `whois_registrar` / `whois_name_server` / `whois_inetnum` / `whois_netname` 这类字段）。
 外部查询会**间歇**失败（§6.5.9）：失败时把形态原样记下并走离线分支（记忆/人类提供），
 **不要重试到超预算**。

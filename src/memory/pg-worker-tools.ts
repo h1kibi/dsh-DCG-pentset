@@ -139,8 +139,20 @@ export class PgWorkerToolRefusal extends Error {
   }
 }
 
-function refuse(code: ErrorCode, message: string, nextAction: string): PgWorkerToolRefusal {
-  return new PgWorkerToolRefusal({ status: 'blocked', code, message, next_action: nextAction });
+function refuse(
+  code: ErrorCode,
+  message: string,
+  nextAction: string,
+  /** 参数类拒绝的**合法取值**（规范 §6）：模型据此一次改对，而不是猜。 */
+  expectedValues?: readonly string[],
+): PgWorkerToolRefusal {
+  return new PgWorkerToolRefusal({
+    status: 'blocked',
+    code,
+    message,
+    next_action: nextAction,
+    ...(expectedValues === undefined ? {} : { expected_values: expectedValues }),
+  });
 }
 
 // ───────────────────────────── 构造依赖 ─────────────────────────────
@@ -829,10 +841,14 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
     const kinds = input.kinds ?? [];
     for (const kind of kinds) {
       if (!isChunkKind(kind)) {
+        // `expected_values`（规范 §6）：合法取值必须以**结构化字段**到模型手里，不能只写在
+        // `next_action` 的句子里——2026-10-11 实测：阶段档案教的 `kinds` 词表全是虚构值，
+        // 模型被拒后只能猜 14 个合法值（工具层那时连 next_action 都没渲染给模型）。
         throw refuse(
           'classification_rejected',
           `kinds 含无法归类的记忆类型 ${kind}`,
-          `改用 ${CHUNK_KINDS.join(' / ')} 之一`,
+          `改用合法记忆类型（见 expected_values）`,
+          CHUNK_KINDS,
         );
       }
     }
@@ -842,7 +858,8 @@ export class PgWorkerTools implements Omit<WorkerToolDeps, 'execute' | 'bootstra
         throw refuse(
           'classification_rejected',
           `trust_levels 含无法归类的来源可信度 ${level}`,
-          `改用 ${TRUST_LEVELS.join(' / ')} 之一`,
+          `改用合法来源可信度（见 expected_values）——注意它是**来源**语义，不是"有多可信"`,
+          TRUST_LEVELS,
         );
       }
     }

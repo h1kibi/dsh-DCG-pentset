@@ -543,7 +543,8 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     const verbStart = DISPATCHER.indexOf('def content_discover(');
     assert.ok(verbStart > 0);
     const verbBody = DISPATCHER.slice(verbStart, DISPATCHER.indexOf('\ndef ', verbStart + 1));
-    assert.match(verbBody, /params\.get\("path"\)/, '容器侧未读取 path 参数');
+    // 规范 §1：参数读取统一走 `param_*` 助手（2026-10-11）；这条锁认助手名，不认 `params.get`。
+    assert.match(verbBody, /param_optional\(params, "path"/, '容器侧未读取 path 参数（应经 param_optional）');
   });
 
   it("http_probe 的 collect 枚举：模板 / technique / 容器三处一致（endpoints 是 2026-10-10 补的）", () => {
@@ -551,8 +552,8 @@ describe('字典档位：宿主参数面与容器分发器逐字对拍', () => {
     // 空 stdout 看起来就是"页面里没有路径"）⇒ 给一条服务端固定形态的通道。三处枚举必须同源。
     const start = DISPATCHER.indexOf('def http_probe(');
     const verbBody = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef ', start + 1));
-    const m = /parse_enum\(params, "collect", \(([^)]*)\)\)/.exec(verbBody);
-    assert.ok(m !== null, '容器侧找不到 collect 的 parse_enum');
+    const m = /param_enum\(params, "collect", \(([^)]*)\)\)/.exec(verbBody);
+    assert.ok(m !== null, '容器侧找不到 collect 的 param_enum（规范 §1 的统一助手）');
     const fromContainer = [...(m[1] ?? '').matchAll(/"([a-z_]+)"/g)].map((x) => x[1] ?? '');
     assert.ok(fromContainer.includes('endpoints'), '容器侧必须有 endpoints 抽取');
     const spec = registry.get('recon_http_probe');
@@ -813,7 +814,7 @@ describe('批量路径复核与字典分段：模板 / technique / 容器三处�
   it('content_discover 的容器实现：分段切片 + 覆盖度自报 + 可调度性提示（数学不是判断）', () => {
     const start = DISPATCHER.indexOf('def content_discover(');
     const body = DISPATCHER.slice(start, DISPATCHER.indexOf('\ndef web_crawl(', start));
-    assert.match(body, /params\.get\("entry_range"\)/, '容器侧必须读 entry_range');
+    assert.match(body, /param_optional\(params, "entry_range"/, '容器侧必须读 entry_range（经 param_optional）');
     assert.ok(
       DISPATCHER.includes('ENTRY_RANGE_RE = re.compile(r"^(\\d{1,6})-(\\d{1,6})$")'),
       'entry_range 的形状常量必须与模板模式同口径',

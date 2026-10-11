@@ -1122,6 +1122,19 @@ export const ERROR_CODES = [
    * 或 `classification_rejected` 表示它，会让模型与 UI 以为是范围问题而去改目标。
    */
   'authorization_expired',
+  /**
+   * **容器报告的用法错误**（规范 §4：分发器 exit 2）。
+   *
+   * 单列一个码是因为处置最具体：**改参数重发**即可（消息里带合法取值/范围），
+   * 与"目标不可达"（`tool_failed`）和"范围不允许"（`scope_violation`）完全不同。
+   * 2026-10-11 之前这类退出码被记成 `completed`——"参数拼错"在账本里长成"成功执行"。
+   */
+  'usage_error',
+  /**
+   * **工具自身失败**（规范 §4：分发器 exit 1）：工具崩了、依赖缺失、目标不可达等。
+   * 与 `usage_error` 的区别是"参数没错，是这次执行没成功"；不得据它下目标侧的结论。
+   */
+  'tool_failed',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 

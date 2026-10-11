@@ -764,13 +764,63 @@ export function mapOutcome(
 
   const out = truncate(outcome.stdout, maxOutputBytes);
   const err = truncate(outcome.stderr, maxOutputBytes);
-  return {
-    status: 'completed',
+  const common = {
     exitCode: outcome.code,
     stdout: out.text,
     stderr: err.text,
     ...(out.truncated || err.truncated ? { truncated: true } : {}),
   };
+  // ── 退出码三档（规范 §4，2026-10-11）──
+  //
+  // 分发器声明 `0 成功 / 1 运行时失败 / 2 用法错误`（pentest-tool 文件头）。此前这里**任意非 null 码
+  // 都记 completed**，于是"参数拼错"在账本里长成"成功执行"，模型照抄错参数再烧一轮（质检 §2.1 第 3 条）。
+  // 三档的处置完全不同：2 ⇒ 改参数重发；1 ⇒ 看 stderr 判断工具失败还是目标不可达；0 ⇒ 才是结论。
+  if (outcome.code === 2) {
+    return {
+      ...common,
+      status: 'runtime_error',
+      error: {
+        status: 'blocked',
+        code: 'usage_error',
+        message: firstDiagnosticLine(err.text) ?? '容器报告用法错误（参数或取值不合法）',
+        next_action: '按消息里的合法取值/范围改参数后重发——这是**参数用法**问题，不是目标的结论',
+      },
+    };
+  }
+  // exit 3（规范 §4 第三档，2026-10-11 与容器侧约定）：**动词本身成功、但容器字节预算被截断**。
+  // 它不是失败：容器侧的 `state=`/summary 已说明截了什么；宿主只需把"内容不完整"这一事实
+  // 传播到结果与账本（`truncated: true`），别让它看起来像完整结论。
+  if (outcome.code === 3) {
+    return { ...common, status: 'completed', truncated: true };
+  }
+  if (outcome.code === 1) {
+    return {
+      ...common,
+      status: 'runtime_error',
+      error: {
+        status: 'blocked',
+        code: 'tool_failed',
+        message: firstDiagnosticLine(err.text) ?? '容器内的工具执行失败',
+        next_action: '读 stderr 判断是工具自身失败还是目标不可达；**不要**据此下"目标没有该暴露面"的结论',
+      },
+    };
+  }
+  return { ...common, status: 'completed' };
+}
+
+/**
+ * 从容器 stderr 里取"最有用的一行"给模型（规范 §4：消息要能直接照做）。
+ *
+ * 分发器把用法错误写成 `usage_error: <键> …（合法：…）`；取第一行非空且长度合理者，
+ * 过长时截断——消息字段是给模型读的，不是把 stderr 整段搬进来（整段仍在 `stderr` 里）。
+ */
+function firstDiagnosticLine(stderr: string): string | null {
+  for (const raw of stderr.split(/\r?\n/u)) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('Traceback')) continue;
+    return line.length > 400 ? `${line.slice(0, 400)}…` : line;
+  }
+  return null;
 }
 
 /** 按字节上限截断，并在尾部标注被截断。 */

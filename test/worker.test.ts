@@ -404,7 +404,15 @@ test('artifact_read：合法参数到达服务并原样返回证据记录', asyn
   const tools = createWorkerTools(fake.deps);
 
   const record = await tools.artifactRead.execute({ artifact_id: 'a-1' }, EXEC);
-  assert.deepEqual(record, ARTIFACT);
+  // 规范 §7：模型可见字段一律 snake_case（内部 `ArtifactRecord` 仍是 camelCase，见 result-view.ts）。
+  assert.deepEqual(record, {
+    artifact_id: 'a-1',
+    media_type: 'text/plain',
+    byte_size: 12,
+    content_hash: 'hash-a',
+    truncated: false,
+    metadata: { source: 'probe' },
+  });
   assert.deepEqual(only(fake.readArtifactCalls), { workerSessionId: 'ws-1', artifactId: 'a-1' });
 });
 
@@ -467,7 +475,24 @@ test('memory_search：合法参数到达服务并返回其结果；limit 缺省�
   const tools = createWorkerTools(fake.deps);
 
   const result = await tools.memorySearch.execute({ query: '目标开放端口', limit: 3 }, EXEC);
-  assert.deepEqual(result, SEARCH_RESULT, '工具必须原样转发服务结果');
+  // 规范 §7：工具返回**规范化后的视图**（snake_case + 明确字段），不再是内部类型的原样转发。
+  assert.deepEqual(result, {
+    hits: SEARCH_RESULT.hits.map((hit) => ({
+      memory_id: hit.memoryId,
+      excerpt: hit.excerpt,
+      score: hit.score,
+      source: {
+        event_id: hit.source.eventId,
+        worker_session_id: hit.source.workerSessionId,
+        phase: hit.source.phase,
+        occurred_at: hit.source.occurredAt,
+      },
+      trust: hit.trust,
+      citation: hit.citation,
+    })),
+    index_watermark: SEARCH_RESULT.indexWatermark,
+    ...(SEARCH_RESULT.note === undefined ? {} : { note: SEARCH_RESULT.note }),
+  });
 
   const call = only(fake.searchCalls);
   assert.equal(call.workerSessionId, 'ws-1', '会话标识必须来自执行身份，而不是模型参数');
@@ -484,7 +509,20 @@ test('memory_read：合法参数返回服务结果；refs 超 20 条返回 block
   const tools = createWorkerTools(fake.deps);
 
   const records = await tools.memoryRead.execute({ refs: ['memory:m-1'] }, EXEC);
-  assert.deepEqual(records, RECORDS);
+  assert.deepEqual(
+    records,
+    RECORDS.map((record) => ({
+      memory_id: record.memoryId,
+      content: record.content,
+      content_hash: record.contentHash,
+      occurred_at: record.occurredAt,
+      origin_worker_session_id: record.originWorkerSessionId,
+      trust: record.trust,
+      classification: record.classification,
+      provisional: record.provisional,
+      related_event_ids: record.relatedEventIds,
+    })),
+  );
   assert.deepEqual(only(fake.readCalls).refs, ['memory:m-1']);
 
   const refs = Array.from({ length: 21 }, (_, i) => `memory:m-${i}`);
@@ -1020,4 +1058,68 @@ test('报告：mode 与 status_note=null 的透传（追加模式整条特性靠
     EXEC,
   );
   assert.equal(Object.hasOwn(fake.submitReportCalls[2]!.report, 'statusNote'), false);
+});
+
+// ─────────────── 规范 §6：拒绝必须作为载荷到模型（含 next_action/expected_values） ───────────────
+
+test('拒绝载荷：服务层异常统一转成 blocked 载荷；非拒绝异常照旧抛出', async () => {
+  const fake = makeDeps();
+
+  // ① 带 payload 的（PgWorkerToolRefusal 的形状）：原样透传——2026-10-11 之前它以异常穿过工具边界，
+  //    模型只看到 `code: message`，看不到 next_action，更看不到合法取值（那正是"猜 14 个 kind"的现场）。
+  const refusing: WorkerToolDeps = {
+    ...fake.deps,
+    async search() {
+      const error = new Error('classification_rejected: kinds 含无法归类的记忆类型 asset');
+      Object.assign(error, {
+        code: 'classification_rejected',
+        payload: {
+          status: 'blocked',
+          code: 'classification_rejected',
+          message: 'kinds 含无法归类的记忆类型 asset',
+          next_action: '改用合法记忆类型（见 expected_values）',
+          expected_values: ['fact', 'finding'],
+        },
+      });
+      throw error;
+    },
+  };
+  const blocked = (await createWorkerTools(refusing).memorySearch.execute(
+    { query: 'x', kinds: ['asset'] },
+    EXEC,
+  )) as Record<string, unknown>;
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.code, 'classification_rejected');
+  assert.match(String(blocked.next_action), /合法记忆类型/);
+  assert.deepEqual(blocked.expected_values, ['fact', 'finding'], '合法取值要到模型手里');
+
+  // ② 只有 code+message 的（WorkflowRejection 的形状）：补一句诚实的下一步（状态机类重发无效）
+  const workflow: WorkerToolDeps = {
+    ...fake.deps,
+    async search() {
+      const error = new Error('状态已被推进，本次报告基于旧版本');
+      Object.assign(error, { code: 'stale_state_version' });
+      throw error;
+    },
+  };
+  const mapped = (await createWorkerTools(workflow).memorySearch.execute({ query: 'x' }, EXEC)) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(mapped.status, 'blocked');
+  assert.equal(mapped.code, 'stale_state_version');
+  assert.match(String(mapped.next_action), /不要原样重发/, '状态类拒绝必须说清"重发无效"');
+
+  // ③ 非拒绝类异常（真 bug）照旧抛出——不得伪装成"被拒绝"
+  const broken: WorkerToolDeps = {
+    ...fake.deps,
+    async search() {
+      throw new TypeError('deps.search is not a function');
+    },
+  };
+  await assert.rejects(
+    () => createWorkerTools(broken).memorySearch.execute({ query: 'x' }, EXEC),
+    /not a function/,
+    'bug 不能被包装成载荷（否则永远查不出来）',
+  );
 });
