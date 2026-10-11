@@ -599,7 +599,7 @@ export function DegradedRunCard(props: {
     <Card title="阶段推进（降级视图：会话绑定缺失）">
       <p>
         按本会话的 dsh 会话 id **反查不到 Worker 会话绑定**——上栏的「待你判断」徽标走的是作业列表，
-        与绑定不同源。下面的阶段与推进按钮取自作业列表上的这个作业；
+        与绑定不同源。这个作业是从作业列表认领的，下面的阶段与推进按钮取自**它的当前运行快照**；
         点之前请确认作业名是你要推进的那一个。
       </p>
       {props.editor}
@@ -688,6 +688,35 @@ export function degradedRunOf(snapshot: {
   if (state === null || state.engagementId !== candidate) return null;
   const summary = snapshot.engagements.find((item) => item.id === candidate);
   return { engagementId: candidate, engagementName: summary?.name ?? null };
+}
+
+/** 运行快照的输入形状（`runningSnapshotFor` 的返回）——`runningAfterRefresh` 与 `runViewOf` 共用。 */
+export type RunningSnapshotLike = Parameters<typeof runViewOf>[0];
+/** 运行卡片的视图形状。 */
+export type RunView = ReturnType<typeof runViewOf>;
+
+/**
+ * 刷新一趟之后 `running` 该是什么（**单一写点**；2026-10-11 质检 blocker 的修法）。
+ *
+ * 为什么要这个纯函数：绑定缺失的**降级分支**与**健康分支**在同一个效应里，而健康分支结尾原是
+ * 无条件 `setRunning(snapshot === null ? null : runViewOf(snapshot))`——`next === null` 时
+ * `snapshot` 恒为 `null`，于是它把降级分支**刚写进去的那份覆盖成 null**；降级卡的渲染门是
+ * `derived !== null && running !== null` ⇒ **降级卡永远画不出来**（D1 的修复在真实路径上等于死代码，
+ * 而当时的锁只渲染了卡片组件本身，没跑效应）。
+ *
+ * 规则只有一条：**有 facts 时由健康分支说话；没有 facts 时保留降级那一份**。把"谁说话"收成
+ * 一条规则之后，顺序错位在结构上不可能，而且可以被穷举断言。
+ */
+export function runningAfterRefresh(input: {
+  /** 本趟拿到 facts 了吗（`intakePromptFacts(status) !== null`，即绑定可用）。 */
+  readonly hasFacts: boolean;
+  /** 降级分支这一趟取到的运行快照（没降级 / 取不到 ⇒ null）。 */
+  readonly degraded: RunningSnapshotLike | null;
+  /** 健康分支这一趟取到的运行快照（有放行待办 / 拿不到 ⇒ null）。 */
+  readonly healthy: RunningSnapshotLike | null;
+}): RunView | null {
+  const chosen = input.hasFacts ? input.healthy : input.degraded;
+  return chosen === null ? null : runViewOf(chosen);
 }
 
 /**
@@ -815,6 +844,9 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
           // 绑定缺失 ⇒ **降级取数**（外部反馈 D1）：从控制台快照里认领"人类正在看的那个作业"
           // （作业列表那条腿，不依赖绑定），拿它的运行快照渲染阶段条与推进按钮。
           // 认领不到（多个作业且未选中 / 快照里没有它的状态）才退回说明卡。
+          // 降级分支这一趟取到的运行快照：**只在这里收集，`running` 到效应末尾统一写一次**
+          // （`runningAfterRefresh`）——分支各写各的会互相覆盖（2026-10-11 质检 blocker）。
+          let degradedRun: RunningSnapshotLike | null = null;
           if (status === null || status.engagementId !== null) {
             setDerived(null);
           } else {
@@ -824,9 +856,9 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             } else {
               const degraded = await controller.runningSnapshotFor(target.engagementId).catch(() => null);
               if (cancelled) return;
+              degradedRun = degraded;
               // 版本与运行快照**同一趟**取回（`getState` 里就有）；取不到就整体不降级（宁可画说明卡）。
               setDerived(degraded === null ? null : { ...target, stateVersion: degraded.stateVersion });
-              setRunning(degraded === null ? null : runViewOf(degraded));
               if (degraded !== null && degraded.active !== null
                   && (degraded.mainStatus === 'handoff_drafting' || degraded.mainStatus === 'transition_confirmation')) {
                 const draft = await controller.currentHandoffDraft(degraded.active.id).catch(() => null);
@@ -843,7 +875,9 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             ? null
             : await controller.runningSnapshotFor(next.engagementId).catch(() => null);
           if (cancelled) return;
-          setRunning(snapshot === null ? null : runViewOf(snapshot));
+          // **`running` 的唯一写点**：有 facts 时健康分支说话，没有 facts 时保留降级那一份
+          // （见 `runningAfterRefresh` 的说明——两处各写各的曾让降级卡永远画不出来）。
+          setRunning(runningAfterRefresh({ hasFacts: next !== null, degraded: degradedRun, healthy: snapshot }));
           // 交接草稿从**服务端**取回（§7.2）。草稿不能只活在「请求它的那次调用」的返回值里：
           // 草稿那一轮的新消息会让本组件重新挂载，局部状态随之丢失——人类看得见草稿正文，
           // 却找不到确认按钮、也改不了字段（2026-10-05 人类报障）。服务端是唯一事实来源。
@@ -933,9 +967,16 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
       );
       return;
     }
+    // **起稿也要显式带版本**（2026-10-11 质检 major）：不传的话控制器会退到"快照里的版本"或 0，
+    // 而绑定缺失时快照那份可能过期 ⇒ 服务端回 `stale_state_version`，人点了没反应。
+    const expectedStateVersion = derived?.stateVersion ?? facts?.stateVersion ?? null;
+    if (expectedStateVersion === null) {
+      setAdvanceError('读不到状态版本（绑定缺失且作业快照不可用）：稍后重试，或先在控制台选中本作业');
+      return;
+    }
     setAdvanceBusy(true);
     setAdvanceError(null);
-    void requestAdvanceDraft({ controller, activeSession, suggestedToPhase })
+    void requestAdvanceDraft({ controller, activeSession, suggestedToPhase, expectedStateVersion })
       .then((outcome) => {
         if (!outcome.ok) {
           setAdvanceError(outcome.message);

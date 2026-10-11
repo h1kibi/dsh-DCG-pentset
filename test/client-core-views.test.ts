@@ -21,7 +21,7 @@ import { PhaseTrack } from '../src/client/views/PhaseTrack.tsx';
 import { intakeFallbackOf } from '../src/client/views/IntakePrompt.tsx';
 import { SessionTimeline } from '../src/client/views/SessionTimeline.tsx';
 import { RunHeader } from '../src/client/views/RunHeader.tsx';
-import type { Phase, SessionStatus, WorkerSessionSummary } from '../src/contracts.ts';
+import type { MainStatus, Phase, SessionStatus, WorkerSessionSummary } from '../src/contracts.ts';
 
 /** 造一个会话摘要，只覆盖测试关心的字段。 */
 function session(over: Partial<WorkerSessionSummary> & { readonly id: string }): WorkerSessionSummary {
@@ -513,4 +513,23 @@ test('DegradedRunCard：绑定缺失时**推进按钮确实渲染**（D1 的堵�
     }),
   );
   assert.doesNotMatch(running, /进入下一阶段/, '非等待人工判断时不得给推进按钮');
+});
+
+test('runningAfterRefresh：没有 facts 时**保留降级那一份**（质检 blocker 的回归锁）', async () => {
+  const { runningAfterRefresh } = await import('../src/client/views/IntakePrompt.tsx');
+  const snap = (mainStatus: MainStatus, phase: Phase) => ({ mainStatus, currentPhase: phase, active: null, stateVersion: 3 });
+  // 现场（2026-10-11 质检 blocker）：效应里两个分支各写各的 `running`，健康分支结尾无条件
+  // `setRunning(snapshot === null ? null : …)`，而绑定缺失时 `snapshot` 恒为 null ⇒ 它把降级分支
+  // 刚写进去的那份覆盖成 null ⇒ 降级卡（渲染门 `derived !== null && running !== null`）永远画不出来。
+  assert.deepEqual(
+    runningAfterRefresh({ hasFacts: true, degraded: snap('worker_running', 'threat-modeling'), healthy: snap('waiting_human_review', 'intelligence-gathering') }),
+    { mainStatus: 'waiting_human_review', currentPhase: 'intelligence-gathering', active: null },
+    '有 facts 时由健康分支说话',
+  );
+  assert.deepEqual(
+    runningAfterRefresh({ hasFacts: false, degraded: snap('waiting_human_review', 'intelligence-gathering'), healthy: null }),
+    { mainStatus: 'waiting_human_review', currentPhase: 'intelligence-gathering', active: null },
+    '**没有 facts 时降级那一份必须活下来**（被覆盖成 null 就是那个 blocker）',
+  );
+  assert.equal(runningAfterRefresh({ hasFacts: false, degraded: null, healthy: null }), null, '没有 facts 也没降级 ⇒ 说明卡');
 });

@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, Nmap 官方文档, WSTG-INFO-01]
-  smoked: "沙箱实测@19cd12b3b93c：6 块原文配方逐条实跑（靶标 fx-web 172.29.0.2:8080）——①`-sS -Pn -p 8080 -oN /tmp/alive.txt` → `Host is up` + `8080/tcp open`（0.17s，rc=0）；占位符换整份声明目标 `172.29.0.2-7 -p 8080,8443,9000` 时 6/6 up、`.2:8080/.3:8443/.4:9000` open（0.18s）；②`-sT -Pn --top-ports 200 -oN` → 8080 open、199 closed（0.05s）；③`-sV --version-light -p 8080` → `SimpleHTTPServer 0.6 (Python 3.10.21)`；④`--script=banner,http-title,http-headers` 有输出但**无** `banner:` 段（http-title=fixture、Server: SimpleHTTP/0.6 Python/3.10.21）；⑤`arp-scan -I eth0 172.29.0.0/16` → 12 台含 MAC（263s，248 主机/秒）、`fping -a -q` 打印 6 台存活但 rc=1（列表含 1 台不可达，非失败）、`nbtscan -r 172.29.0.0/24` → `172.29.0.7 DC1 <server>`、`traceroute -n -m 5 172.30.0.2` 第 1 跳即网关 172.29.0.1 后全 `*`（跨网段须经跳板）、`mtr -n -r -c 5 172.29.0.2` 单跳 0% 丢包；⑥`tshark -i eth0 -a duration:5 -w /tmp/cap.pcap` 抓包 + 同一条命令内读回 → 24 包含 `GET /index.html HTTP/1.1` 与 `HTTP/1.0 200 OK`（cap/read rc=0；仅有 `cap_set_proc()` 告警）。历史：沙箱实测@19cd12b3b93c：5 块照跑通过（8080 open、网段 6 台存活、top-200、--version-light、NSE 三脚本）；/24 扫 top-200 达 900s 属耗时非语法错。2026-10-06 补第 5/6 步：arp-scan /24 得 9 台、fping 2 台、traceroute 1 跳、masscan 命中 .2、nbtscan 无名字、tshark 34 包；**2026-10-11 第 3b 步实跑（夹具 docker/lab-spa 172.29.0.2，真开放 8080）**：①比例自检 `nmap -sT -Pn -p 8080,9998,9999` ⇒ `ports_scanned=3 open_ports=1 ratio=0.33 verdict=ok`；全开形态（只扫那一个真开端口）`-p 8080` ⇒ `ports_scanned=1 open_ports=1 ratio=1.00 verdict=SUSPECT`；②载荷复核 ⇒ 真开端口 `http=200 size=121`（协议级应答），关闭端口 `http=000`（curl 的 000＝连不上）、`rmcp=none(ConnectionRefusedError)`、SSH 分支 `ssh=none`（静默与拒绝都算 none）。工具侧同源告警：`port_scan` 的 `summary` 现带 `port_state_trust=ok|suspect` 与 `open_without_version=N`，上例实测 `port_state_trust=ok open_without_version=1`（nmap 只给 `name=http-proxy`、无版本 ⇒ 标 `version_info=none`）；**2026-10-11 质检后复跑第 3b 步（新配方，自足版）**：`T=172.29.0.2; P=8080,8443,9000,3000` ⇒ `ports_scanned=4 open_ports=1 ratio=0.25 verdict=ok`；载荷复核四支全给明确结论（`ssh=none`、`http=000`、`tls=000 verify=0`、`rmcp=none(ConnectionRefusedError)`；早前对真开端口测得 `http=200 size=121`）。工具侧同口径：`port_scan`（不带 -sV）⇒ `port_state_trust=unknown`（样本 4<8 不判）`open_without_version=n/a` 且**不再**误报"拿不到版本信息"；9/10 全开夹具 ⇒ `port_state_trust=suspect` + 告警 + `next_action`"
+  smoked: "沙箱实测@19cd12b3b93c：6 块原文配方逐条实跑（靶标 fx-web 172.29.0.2:8080）——①`-sS -Pn -p 8080 -oN /tmp/alive.txt` → `Host is up` + `8080/tcp open`（0.17s，rc=0）；占位符换整份声明目标 `172.29.0.2-7 -p 8080,8443,9000` 时 6/6 up、`.2:8080/.3:8443/.4:9000` open（0.18s）；②`-sT -Pn --top-ports 200 -oN` → 8080 open、199 closed（0.05s）；③`-sV --version-light -p 8080` → `SimpleHTTPServer 0.6 (Python 3.10.21)`；④`--script=banner,http-title,http-headers` 有输出但**无** `banner:` 段（http-title=fixture、Server: SimpleHTTP/0.6 Python/3.10.21）；⑤`arp-scan -I eth0 172.29.0.0/16` → 12 台含 MAC（263s，248 主机/秒）、`fping -a -q` 打印 6 台存活但 rc=1（列表含 1 台不可达，非失败）、`nbtscan -r 172.29.0.0/24` → `172.29.0.7 DC1 <server>`、`traceroute -n -m 5 172.30.0.2` 第 1 跳即网关 172.29.0.1 后全 `*`（跨网段须经跳板）、`mtr -n -r -c 5 172.29.0.2` 单跳 0% 丢包；⑥`tshark -i eth0 -a duration:5 -w /tmp/cap.pcap` 抓包 + 同一条命令内读回 → 24 包含 `GET /index.html HTTP/1.1` 与 `HTTP/1.0 200 OK`（cap/read rc=0；仅有 `cap_set_proc()` 告警）。历史：沙箱实测@19cd12b3b93c：5 块照跑通过（8080 open、网段 6 台存活、top-200、--version-light、NSE 三脚本）；/24 扫 top-200 达 900s 属耗时非语法错。2026-10-06 补第 5/6 步：arp-scan /24 得 9 台、fping 2 台、traceroute 1 跳、masscan 命中 .2、nbtscan 无名字、tshark 34 包；**2026-10-11 第 3b 步实跑（夹具 docker/lab-spa 172.29.0.2，真开放 8080）**：①比例自检 `nmap -sT -Pn -p 8080,9998,9999` ⇒ `ports_scanned=3 open_ports=1 ratio=0.33 verdict=ok`；全开形态（只扫那一个真开端口）`-p 8080` ⇒ `ports_scanned=1 open_ports=1 ratio=1.00 verdict=SUSPECT`；②载荷复核 ⇒ 真开端口 `http=200 size=121`（协议级应答），关闭端口 `http=000`（curl 的 000＝连不上）、`rmcp=none(ConnectionRefusedError)`、SSH 分支 `ssh=none`（静默与拒绝都算 none）。工具侧同源告警：`port_scan` 的 `summary` 现带 `port_state_trust=ok|suspect` 与 `open_without_version=N`，上例实测 `port_state_trust=ok open_without_version=1`（nmap 只给 `name=http-proxy`、无版本 ⇒ 标 `version_info=none`）；**2026-10-11 质检后复跑第 3b 步（新配方，自足版）**：`T=172.29.0.2; P=8080,8443,9000,3000` ⇒ `ports_scanned=4 open_ports=1 ratio=0.25 verdict=ok`；载荷复核四支全给明确结论（`ssh=none`、`http=000`、`tls=000 verify=0`、`rmcp=none(ConnectionRefusedError)`；早前对真开端口测得 `http=200 size=121`）。工具侧同口径：`port_scan`（不带 -sV）⇒ `port_state_trust=unknown`（样本 4<8 不判）`open_without_version=n/a` 且**不再**误报"拿不到版本信息"；9/10 全开夹具 ⇒ `port_state_trust=suspect` + 告警 + `next_action`；**2026-10-11 质检追补（PromptAudit2 的五条）**：配方改为自足 + `|| echo 0` + `except ValueError` 后两形态复跑——正常形态 `ports_scanned=4 open_ports=1 ratio=0.25`（判读口径指向 `port_state_trust`，不再手抄阈值），逐端口结论 `port=8080 http=200 size=121` / `port=8443 http=000` / `port=9000|3000 无内置协议探针`；缺文件形态（nmap 不产出）`ports_scanned=0 verdict=unknown`——**不崩、不静默判 ok**（修前是 `int('')` 抛错）"
 ---
 
 # 网络面清点（recon-network-surface）
@@ -92,24 +92,30 @@ nmap -sV --version-light -Pn -p <已 open 的端口列表> <目标> -oN /tmp/ver
 # ① 比例自检（自足：扫完就统计；读不到结果时**拒绝给结论**）
 T=<目标>; P=8080,8443,9000,3000
 nmap -sT -Pn -p "$P" "$T" -oN /tmp/ports.txt >/dev/null
-scanned=$(grep -cE '^[0-9]+/tcp' /tmp/ports.txt 2>/dev/null || true)
-opened=$(grep -cE '^[0-9]+/tcp +open' /tmp/ports.txt 2>/dev/null || true)
+# `|| echo 0`（不是 `|| true`）：grep 读不到文件时给的是**空串**，喂给 int() 会崩，
+# 而崩在 `set -e` 下会把后面所有步骤一起截掉（实测：`ValueError: invalid literal for int()`）。
+scanned=$(grep -cE '^[0-9]+/tcp' /tmp/ports.txt 2>/dev/null || echo 0)
+opened=$(grep -cE '^[0-9]+/tcp +open' /tmp/ports.txt 2>/dev/null || echo 0)
 python3 - "$scanned" "$opened" <<'PY'
 import sys
-scanned, opened = (int(x) for x in sys.argv[1:3])
+try:
+    scanned, opened = (int(x) for x in sys.argv[1:3])
+except ValueError:
+    print("ports_scanned=unknown verdict=unknown（统计没拿到数字：先确认扫描与统计在同一条命令里）")
+    raise SystemExit(0)
 if scanned == 0:
-    print("ports_scanned=0 verdict=unknown（没读到扫描结果：确认扫描与统计在同一条命令里）")
+    print("ports_scanned=0 verdict=unknown（没读到扫描结果：确认 nmap 与统计在同一条命令里）")
 else:
     ratio = opened / scanned
-    print(f"ports_scanned={scanned} open_ports={opened} ratio={ratio:.2f} verdict={'SUSPECT' if ratio >= 0.8 else 'ok'}")
+    print(f"ports_scanned={scanned} open_ports={opened} ratio={ratio:.2f} "
+          "verdict=按 port_state_trust 同口径判（阈值与样本下限由容器常量给出，本文不复述数字）")
 PY
-# ② 载荷复核（只读）：对"看起来开着"的端口发**协议载荷**，只看有没有协议级应答
-for p in 22 80 443 623; do
+# ② 载荷复核（只读）：对**① 扫过的那批端口**发协议载荷，只看有没有协议级应答
+for p in ${P//,/ }; do
   printf 'port=%s ' "$p"
   case "$p" in
     22)  out=$(printf 'SSH-2.0-probe\r\n' | timeout 6 nc -w 3 "$T" "$p" 2>/dev/null | head -c 120); echo "ssh=${out:-none}" ;;
-    80)  curl -sS -m 6 -o /dev/null -w 'http=%{http_code} size=%{size_download}' "http://$T:$p/" ;;
-    443) curl -sSk -m 6 -o /dev/null -w 'tls=%{http_code} verify=%{ssl_verify_result}' "https://$T:$p/" ;;
+    80|443|8080|8443|8000|8888) curl -sSk -m 6 -o /dev/null -w "http=%{http_code} size=%{size_download}" "$( [ "$p" = 443 ] || [ "$p" = 8443 ] && echo https || echo http )://$T:$p/" ;;
     623) python3 -c "
 import socket
 s=socket.socket(); s.settimeout(4)
@@ -118,18 +124,21 @@ try:
     print('rmcp=' + s.recv(32).hex())
 except OSError as exc:
     print('rmcp=none(' + type(exc).__name__ + ')')" ;;
+    *)   echo "无内置协议探针（换 service_probe / http_probe / tcp_connect 复核）" ;;
   esac
   echo
 done
 ```
-期望：①给出 `verdict=ok|SUSPECT|unknown` 三态之一（`unknown` 明确说「没读到扫描结果」）；②每个端口要么给出**协议级应答**
-（SSH banner / HTTP 状态行 / TLS 握手 / RMCP 回包），要么明确 `none`——**静默与拒绝都算 `none`**
-（实测：真开端口 `http=200 size=121`；关闭端口 `http=000`（curl 的 000＝连不上）、`rmcp=none(ConnectionRefusedError)`、SSH 分支 `ssh=none`）。
+期望：①给出 `ports_scanned=/open_ports=/ratio=` 与一句判读口径（`verdict=unknown` 表示**没读到扫描结果**，
+不许当成"比例正常"）；②**① 里扫过的每个端口**都要有明确结论：协议级应答（SSH banner / HTTP 状态行 / TLS 握手 / RMCP 回包）、
+`none`（**静默与拒绝都算 `none`**），或"无内置协议探针，换结构化动词复核"（实测：真开 HTTP 端口给 `http=200 size=121`；
+关闭端口给 `http=000`（curl 的 000＝连不上）、`rmcp=none(ConnectionRefusedError)`、SSH 分支 `ssh=none`）。
 判据（**这条是结论性的**）：
-- `verdict=SUSPECT` **或** 工具侧 `port_state_trust=suspect`（比例接近全开、样本足够）⇒
+- **优先用工具给的判据**：`port_scan` 的 `port_state_trust=suspect`（或手写自查的比例接近全开、且样本足够）⇒
   **端口状态这一维度整体作废**：禁止按 `open` 入账，改以「**有协议级应答**」为真实服务面的判据，
-  并在报告里写明「端口状态不可信 + 判据换成了什么」；
-- 样本很小（只扫了授权集里的两三个端口）时**不按比例判**（工具侧会显示 `unknown`）——那种情况下逐个做载荷复核即可；
+  并在报告里写明「端口状态不可信 + 判据换成了什么」；阈值与样本下限**由容器常量给出**（`PORT_STATE_TRUST_*`），
+  本文不复述数字——两边漂移时以容器为准；
+- 样本很小（只扫了授权集里的两三个端口）时**不按比例判**（工具侧显示 `unknown`）——那种情况下逐个做载荷复核即可；
 - 单端口「握手成功但对载荷静默」⇒ 记 **`silent`（未证实）**，不是服务；不要用 `-sV` 的 `tcpwrapped` 当服务名写进资产；
 - 对照：**先取一次环境基线**（见上文「动手前先跑一次基线探针」的伪影端口一条）——环境级伪影与目标级静默是两种成因，
   处置不同（前者从资产面扣掉，后者标未证实）。
@@ -172,8 +181,8 @@ date -u +%FT%TZ && tshark -i eth0 -a duration:5 -w /tmp/cap.pcap && tshark -r /t
 > 注意：`/tmp/cap.pcap` 只在那一条命令内存在——**抓与读必须写在同一条命令里**（上面就是合并写法）。
 
 ## 判读与去噪
-- **端口状态不是目标属性**，是「环境 + 目标」的联合产物：近全开（≥0.8）或「握手成功但对载荷静默」时，
-  端口维度整体作废——以**协议级应答**为真实服务面的判据（第 3b 步），并写明「换判据」这件事本身。
+- **端口状态不是目标属性**，是「环境 + 目标」的联合产物：近全开（判据见第 3b 步与 `port_scan` 的 `port_state_trust`）
+  或「握手成功但对载荷静默」时，端口维度整体作废——改以**协议级应答**为真实服务面的判据，并写明「换判据」这件事本身。
 - 同一次作业里两次扫描对**同一端口**给出相反结论（`open` vs 没有结果行）时，**两条都记**并标注
   「端口维度不可信」；不要只引用对自己结论有利的那一条。
 - `open|filtered` 不等于打开：UDP 与部分被过滤的端口会这样显示，记为「待确认」。
@@ -186,7 +195,7 @@ date -u +%FT%TZ && tshark -i eth0 -a duration:5 -w /tmp/cap.pcap && tshark -r /t
 | 全部超时、`0 hosts up` | 目标没接进 `internalNetwork`（沙箱只能到达同网成员） | 报告「目标不可达」，请人类确认目标已接入；**不要**改用外网地址 |
 | `-sS` 报 requires root | 容器没跑在 root（部署回退过） | 报告环境问题，改用 `-sT` 继续，别硬试 |
 | 结果比目标真实开放面少很多 | 范围只声明了部分端口 | 把「覆盖缺口」写进报告，请人类决定是否扩范围 |
-| **开放端口数接近扫描总数（≥0.8）或全开**（实测 1000/1000、200/200） | 目标对**任意端口**都完成握手：端口状态这一维度整体失真（不是「真的全开」） | 按第 3b 步走：先算比例，再做**载荷复核**，以「有协议级应答」为真实服务面；把「端口状态不可信」写进报告，**不要**把近全开写成资产清单 |
+| **开放端口数接近扫描总数或全开**（实测 1000/1000、200/200；判据＝`port_state_trust=suspect`） | 目标对**任意端口**都完成握手：端口状态这一维度整体失真（不是「真的全开」） | 按第 3b 步走：先算比例，再做**载荷复核**，以「有协议级应答」为真实服务面；把「端口状态不可信」写进报告，**不要**把近全开写成资产清单 |
 | 同一端口两次扫描结论相反（`open` vs 无结果行） | 目标自身行为特殊（握手层伪应答）＋单次工具输出可信度有限 | 两条都记并标「端口维度不可信」；复核时优先用能给出**协议级应答**的那条证据 |
 | `nmap -sV` 显示 `open` 却没有任何版本行 / `tcpwrapper`/`tcpwrapped` | 握手成功但服务不对探针应答（或中间盒代答） | 记 `silent`（未证实），**不要**把 `tcpwrapped` 当服务名写进资产；换结构化动词（`service_probe`/`http_probe`）或缺席说明原因 |
 | **`open_ports=0` 而同端口单扫是 open** | `ping=syn` 是「先做主机发现（`-PS` 探 80）」：目标**丢弃探针**就被判 down ⇒ **一个端口都没扫**。输出形态与"扫了但全关"同形 | 换 `ping=skip`（`-Pn`）重扫。**读输出时先看 `host: … state=down` 与 `summary` 的 `ports_scanned`**：`state=down` 时 `open_ports=0` 是漏报形态，不是结论 |

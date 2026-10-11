@@ -12,6 +12,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { readFileSync } from 'node:fs';
+
 import { ConsoleController } from '../src/client/controller.ts';
 import type { HostRpcResult } from '../src/console/rpc.ts';
 import { requestAdvanceDraft } from '../src/client/advance-phase.ts';
@@ -166,4 +168,14 @@ test('会话卡片必须显式给状态版本：不传就恒定发 0——那正
   const bare = harness({});
   await requestAdvanceDraft({ controller: bare.controller, activeSession: { workerSessionId: 'ws-1' } });
   assert.equal(bare.sent[0]?.expectedStateVersion, 0, '不传就是 0：所以卡片**必须**传，否则服务端必拒');
+});
+
+test('会话卡片的起稿请求必须显式带 expectedStateVersion（质检 major 的防回归）', async () => {
+  // 现场（2026-10-11 质检 major）：`advance()` 调 `requestAdvanceDraft` 时**不带**版本，
+  // 于是控制器退到「快照里的版本」或 0——绑定缺失时快照那份可能过期 ⇒ 服务端回
+  // `stale_state_version`，人点了没反应（本条锁的是"调用点真的传了"，纯行为测试要跑效应才测得到）。
+  const source = readFileSync(new URL('../src/client/views/IntakePrompt.tsx', import.meta.url), 'utf8');
+  const call = /requestAdvanceDraft\(\{[\s\S]{0,240}?\}\)/u.exec(source);
+  assert.ok(call !== null, '找不到 requestAdvanceDraft 的调用点');
+  assert.match(call[0], /expectedStateVersion/, '起稿请求必须显式带 expectedStateVersion（否则可能落到快照的版本或 0）');
 });

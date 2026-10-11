@@ -581,7 +581,7 @@ node scripts/resync-smoke-stamps.mjs 512b7fa7a1e1   # 26 份 / 28 处
 **轮换依据**：外部（GitHub 发布版）真作业反馈核实后的修复——`port_scan` 的 summary 加
 `port_state_trust=ok|suspect|unknown` 与 `open_without_version=N`（近全开 / 无版本信息各给一条告警）；
 宿主侧同时改了控制台（绑定缺失时的**降级视图**）、`pentest_prepare_handoff` 的拒绝文案分支、
-`insertWorkerSession` 的**创建后绑定自检**（迁移 016 的函数）；技能 `recon-network-surface` 加第 3b 步。
+`insertWorkerSession` 的**创建后自检**（同一事务连接上回读 `dsh_session_id`，**不用** `worker_session_binding_by_dsh()`）；技能 `recon-network-surface` 加第 3b 步。
 
 ```bash
 docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools

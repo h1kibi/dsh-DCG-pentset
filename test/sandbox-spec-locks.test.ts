@@ -379,13 +379,18 @@ test('端口可信度：技能配方里的阈值与样本下限必须与容器�
   assert.match(dispatcher, /ratio >= 0\.8/, '容器侧的阈值必须仍是 0.8（改了就要同步技能与文档）');
 
   const skill = readFileSync(new URL('../skills/recon-network-surface/SKILL.md', import.meta.url), 'utf8');
-  assert.match(skill, /ratio >= 0\.8/, '技能的配方必须与容器同阈值（0.8）——两者是同一个判据的两种写法');
-  assert.match(
-    skill,
-    /样本/,
-    '技能必须写明"样本很小时不按比例判"（否则 1/1 会被当成近全开，正常作业天天响假警报）',
+  // **技能不复述阈值**（本仓库纪律：技能只引用来源名字）：它必须指向容器的字段/常量名，而不是再抄一份字面量。
+  assert.match(skill, /port_state_trust/, '技能必须以工具字段 `port_state_trust` 为判据');
+  assert.match(skill, /PORT_STATE_TRUST_\*/, '技能必须指向容器常量名（阈值与样本下限不复述）');
+  assert.ok(
+    !/ratio >= 0\.8/.test(skill),
+    '技能里不得再出现手抄的阈值（改了就漂移；判据以容器为准）',
   );
+  assert.match(skill, /样本很小[\s\S]{0,40}不按比例判/, '技能必须写明"样本很小时不按比例判"（否则 1/1 会被当成近全开）');
   // 手写配方**必须自足**：扫描与统计在同一条命令里（容器一次性），且读不到结果时**拒绝给结论**。
   assert.match(skill, /nmap -sT -Pn -p "\$P" "\$T" -oN \/tmp\/ports\.txt/, '配方必须自己跑扫描（不能引用上一条命令的 /tmp 产物）');
   assert.match(skill, /verdict=unknown/, '读不到扫描结果时必须给 unknown，不许静默判 ok');
+  // 缺文件时 `grep -c` 给的是**空串**：`|| true` 会让 `int('')` 崩（`set -e` 下还会截掉后面所有步骤）。
+  assert.match(skill, /\|\| echo 0/, '统计取不到数字时必须给 0（不许留空串喂 int()）');
+  assert.match(skill, /except ValueError/, 'python 侧必须兜住非数字入参（否则缺文件时直接崩）');
 });
