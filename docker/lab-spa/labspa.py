@@ -5,7 +5,7 @@
 
 - `http_probe page=` 逐路由抽 chunk：**每条路由自带多条 chunk**，chunk 里才是 `/api/*`；
 - `paths=` 查询串：`/api/submissions?mine=1` 与不带是**两条不同的响应**；
-- **分命名空间软 404 基准**：页面 404 是 `text/html`（8596B），API 404 是 `application/json`（22B），
+- **分命名空间软 404 基准**：页面 404 是 `text/html`（**本夹具 8522B**；运营者的真实目标实测 8596B），API 404 是 `application/json`（22B），
   而 `/lists/*` 有自己的 200 兜底页 —— 只有按命名空间取基准才判得出 `/lists/xyz` 是兜底；
 - 未鉴权方法表：`GET /api/run` 回 405 + `Allow: POST`，`OPTIONS /api/submissions` 回 405 + 完整方法表。
 
@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -29,6 +30,7 @@ LISTS_FALLBACK = (
 )
 LISTS_REAL = LISTS_FALLBACK[:-200]  # 真端点：长度与兜底不同（200 字节差）
 ROUTES = {"admin": 10, "run": 10, "lists": 10}
+SOFT404_MARK = "__dsh-soft404-"
 
 
 def chunk_body(route: str, index: int) -> bytes:
@@ -77,6 +79,11 @@ class Handler(BaseHTTPRequestHandler):
             ).encode()
             return self._send(200, body, "text/html")
 
+        # 全局断连模式（`LABSPA_REFUSE_SOFT404=1`）：**所有**随机软 404 路径都被拦 ⇒ 一个基准都采不到，
+        # 用来验"不可判定"（`note=no_baseline` + `paths_warning`）那条路径。
+        if SOFT404_MARK in path and os.environ.get("LABSPA_REFUSE_SOFT404") == "1":
+            self.close_connection = True
+            return
         if path == "/api/submissions":
             if query.get("mine") == ["1"]:
                 return self._send(200, b'{"mine":1}', "application/json")
@@ -95,6 +102,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, LISTS_REAL, "text/html")
         if path.startswith("/lists/"):
             return self._send(200, LISTS_FALLBACK, "text/html")
+        # `/waf/` 命名空间：模拟"该命名空间的随机路径被 WAF 拦掉"（2026-10-11 第八轮质检的现场）。
+        # 随机路径直接断连 ⇒ 该命名空间采不到软 404 基准；其它路径与**根兜底同形**（404/8522），
+        # 于是"祖先回退到根基准" ⇒ soft404，"退化成没基准就比较" ⇒ 会被误写成 ok。
+        if path.startswith("/waf/"):
+            if SOFT404_MARK in path:
+                self.close_connection = True
+                return
+            return self._send(404, ROOT_404, "text/html")
         if path == "/":
             return self._send(
                 200,

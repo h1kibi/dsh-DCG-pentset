@@ -2115,3 +2115,33 @@ describe('RLS 组合诊断（真实 PostgreSQL）', { skip: DATABASE_URL === und
     assert.deepEqual(classifyRlsCombination({ superuser: true, rlsContextConfigured: true }).refusals, []);
   });
 });
+
+  test('可写挂载根经装配后排除只读锚点，且不是 Promise（第八轮质检：写只读根会吞掉证据兜底）', async () => {
+    // 现场（2026-10-11 第八轮质检）：`pentest_exec` 的"命令自己写了挂载根⇒不重复落盘"判据
+    // 拿到的是**全部**挂载（含只读锚点 `/mnt/engagement`）。写只读根在容器里必然失败
+    // （实测 `rc=1 Read-only file system`）⇒ 该判据会把**没写成的命令**当成已落盘 ⇒ 兜底被跳掉。
+    // 这条必须走 compose：工具层单测直接喂依赖对象，绕过了装配（与上面那条同源）。
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-compose-writable-'));
+    const anchor = mkdtempSync(join(tmpdir(), 'dsh-compose-anchor-'));
+    const mounted = compose({
+      database: { url: DATABASE_URL! },
+      ledgerSecret: 'test-secret-not-from-env-32-bytes-min',
+      sandbox: {
+        ...SANDBOX,
+        mounts: [
+          { hostPath: dir, containerPath: '/work' },
+          { hostPath: anchor, containerPath: '/mnt/engagement', readOnly: true },
+        ],
+      },
+    });
+    try {
+      const resolver = (mounted.hostServices.workerTools as { writableMountPathsFor?: unknown })
+        .writableMountPathsFor as ((workerSessionId: string) => unknown) | undefined;
+      assert.equal(typeof resolver, 'function', 'workerTools 必须暴露 writableMountPathsFor');
+      const resolved = resolver?.('sess-not-registered');
+      assert.ok(Array.isArray(resolved), '解析器必须直接返回数组（变成 Promise 就是"证据静默不落盘"那类故障）');
+      assert.deepEqual(resolved, ['/work'], '只读锚点 /mnt/engagement 不得出现在可写根里');
+    } finally {
+      await mounted.dispose();
+    }
+  });

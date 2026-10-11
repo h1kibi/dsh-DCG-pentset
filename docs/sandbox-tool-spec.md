@@ -152,6 +152,9 @@
   条数上限 `SOFT404_MAX_BASELINES = 6`；未采样的命名空间退回**最长匹配的已采样前缀**（最终退到根）。
 - 输出：每个采样命名空间一条 `paths_soft404_baseline: ns=<前缀> status=… size=… content_type=… path=<随机路径>`；
   逐条表格多一列 `baseline_ns`（该条用的是哪条基准），汇总加 `baselines=<条数>`。
+  **汇总字段的含义**（避免读错）：`responded=`＝**拿到响应**的条数（含随后被判 `soft404`/`size>=cap` 的行）、
+  `candidates=`＝判成候选的条数（＝ `note` 为 `ok`/`size>=cap` 的行）、`no_response=`＝没打通的条数、
+  `no_baseline=`＝**不可判定**的条数（连祖先基准都没采到，见 §9.3.1）；`method_tables=`＝拿到 `Allow` 的条数。
 
 ### 9.4 未鉴权方法表：`allow` 列与 `probe_options=true`
 - **405 与 OPTIONS 的 `Allow` 头在未鉴权下就给出完整方法表**（实测：零写请求拿到 20 条写端点）。

@@ -127,6 +127,26 @@ test('四个视图同源：容器 argv 的 -v ↔ workdir 读写根 ↔ 证据�
     );
   }
 
+  // ⑤ 可写挂载根：**只读锚点必须排除**（2026-10-11 第八轮质检的真缺陷——写只读根必然失败，
+  // 把它算作"命令已落盘"会吞掉宿主侧的证据兜底）。
+  for (const workerSessionId of ['sess-with-cwd', 'sess-without-cwd']) {
+    const writable = views.writableMountContainerPathsFor(workerSessionId);
+    assert.equal(
+      writable.includes('/mnt/engagement'),
+      false,
+      `只读锚点不得进"可写根"集合（${workerSessionId}）`,
+    );
+    assert.deepEqual(
+      writable,
+      views
+        .mountsForWorker(workerSessionId)
+        .filter((mount) => mount.readOnly !== true)
+        .map((mount) => mount.containerPath ?? '/work'),
+      `可写根 = 挂载列表去掉只读项（${workerSessionId}）`,
+    );
+    assert.ok(writable.length > 0, '至少有一个可写根（否则证据只能进账本）');
+  }
+
   // ④ 有 cwd 的会话：三处都落在会话目录；无 cwd 的会话：三处都回退到配置目录
   assert.equal(views.evidenceRootFor('sess-with-cwd'), sessionDir);
   assert.equal(views.evidenceRootFor('sess-without-cwd'), 'C:/pentest/project');

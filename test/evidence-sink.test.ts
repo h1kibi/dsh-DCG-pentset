@@ -69,7 +69,7 @@ test('命令自己写挂载根时不重复落盘：只看**最后一段**简单�
     "printf 'x' > '/work/evidence/a.txt'",
     'curl -s http://x/ >/work/evidence/a.txt',
   ]) {
-    assert.equal(writesIntoMount(command, mount), true, `应判为"命令自己写了挂载根"：${command}`);
+    assert.equal(writesIntoMount(command, mount), "/work", `应判为"命令自己写了挂载根"：${command}`);
   }
   for (const command of [
     // 中间步骤写临时台账、最后一段才是产物 ⇒ **不能**抑制（安全网正是"忘了写"的场景）
@@ -83,9 +83,35 @@ test('命令自己写挂载根时不重复落盘：只看**最后一段**简单�
     'cat < /work/evidence/a.txt',
     'curl -s http://x/ > /tmp/a.txt',
   ]) {
-    assert.equal(writesIntoMount(command, mount), false, `不得判为"命令自己写了挂载根"：${command}`);
+    assert.equal(writesIntoMount(command, mount), undefined, `不得判为"命令自己写了挂载根"：${command}`);
   }
-  // 会话挂载可能不是 `/work`（cwd 覆盖），判据跟着挂载走。
-  assert.equal(writesIntoMount('curl -s http://x/ > /srv/eng/a.txt', ['/srv/eng']), true);
-  assert.equal(writesIntoMount('curl -s http://x/ > /srv/eng/a.txt', ['/work']), false);
+  // 会话挂载可能不是 `/work`（cwd 覆盖），判据跟着挂载走；命中时**返回命中的那个根**。
+  assert.equal(writesIntoMount('curl -s http://x/ > /srv/eng/a.txt', ['/srv/eng']), '/srv/eng');
+  assert.equal(writesIntoMount('curl -s http://x/ > /srv/eng/a.txt', ['/work']), undefined);
+  assert.equal(writesIntoMount('grep x /tmp/o | tee /work/a.txt', ['/work', '/srv/eng']), '/work');
+});
+
+test('抑制判据只认"能证明 stdout 落盘"的形态（第八轮质检：误判会吞掉唯一副本）', () => {
+  // 误判的代价是**证据永久消失**（容器一次性）；漏判只是多一份派生文件。所以四个**误判**形态
+  // （stderr 重定向、引号内字面量、tee 当普通参数、`1>`）必须判 false/undefined，
+  // 三个**漏判**形态（heredoc 写者、`>|`、`sudo tee -a`）本轮补上识别。
+  const mount = ['/work'];
+  for (const command of [
+    'curl -sv http://t/api 2>/work/trace.txt', // 只重定向 stderr：stdout 没有落点
+    'curl -s http://t/api -d \'{"a":"> /work/x"}\'', // 引号里的字面量不是重定向
+    'grep -n tee /work/notes.txt', // tee 是 grep 的模式串，不是命令词
+    'curl -s http://t/api 1>/work/x.txt', // `1>` 无法确证（保守：不抑制）
+    'curl -s http://t/api &>/work/x.txt', // `&>` 同理
+    'curl -s -o /work/evidence/api.json http://t/api', // `-o` 不在判据覆盖面内
+  ]) {
+    assert.equal(writesIntoMount(command, mount), undefined, `不得判为"命令自己写了挂载根"：${command}`);
+  }
+  for (const command of [
+    "cat > /work/evidence/a.txt <<'EOF'\nbody\nEOF", // heredoc 写者：重定向在带 << 的那一段
+    'curl -s http://t/ >| /work/a.txt', // 覆写算符
+    'grep x /tmp/o | sudo tee -a /work/a.txt', // sudo tee -a
+    'grep x /tmp/o | command tee /work/a.txt',
+  ]) {
+    assert.equal(writesIntoMount(command, mount), '/work', `应判为"命令自己写了挂载根"：${command}`);
+  }
 });

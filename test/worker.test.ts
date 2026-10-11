@@ -1132,3 +1132,37 @@ test('拒绝载荷：服务层异常统一转成 blocked 载荷；非拒绝异�
     'bug 不能被包装成载荷（否则永远查不出来）',
   );
 });
+
+test('证据落盘：只读挂载**不得**触发"命令自己写了"的抑制（否则吞掉唯一兜底）', async () => {
+  // 2026-10-11 第八轮质检发现的真缺陷：装配层曾把**全部**挂载（含只读锚点 `/mnt/engagement`）
+  // 传给抑制判据。写只读挂载在容器里必然失败（实测 `rc=1 Read-only file system`），于是
+  // "命令自己写了"这个判断会把**根本没写成的命令**也当成已落盘 ⇒ 宿主侧的兜底被跳掉 ⇒ 证据消失。
+  // 契约修正：该端口只给**可写**根；这条锁钉住"只读路径不抑制、可写路径才抑制"。
+  const root = mkdtempSync(join(tmpdir(), 'evidence-ro-'));
+  const stdout = 'readonly-mount-not-writable\n';
+  const make = (): WorkerToolDeps => ({
+    ...makeDeps().deps,
+    evidenceRoot: root,
+    writableMountPathsFor: () => ['/work'], // 只读锚点不在集合里（这就是契约）
+    async execute() {
+      return { kind: 'executed' as const, plan: PLAN, result: { ok: true, status: 'completed', stdout, stderr: '' } };
+    },
+  });
+  const call = async (command: string): Promise<Record<string, unknown>> =>
+    (await createWorkerTools(make()).pentestExec.execute(
+      { command, port: 3002, target_selector: 'http://10.0.0.5/', purpose: '挂载写入判定', save_stdout_as_evidence: true },
+      EXEC,
+    )) as Record<string, unknown>;
+
+  const readonly = await call('curl -s http://10.0.0.5:3002/ > /mnt/engagement/notes/x.txt');
+  assert.equal(readonly.evidence_skipped, undefined, '写只读挂载**不**算已落盘：不得抑制');
+  assert.equal(
+    readFileSync(String(readonly.evidence_host_path), 'utf8'),
+    stdout,
+    '这条命令写不成（Read-only file system）⇒ 兜底必须照常落盘，那正是安全网的场景',
+  );
+
+  const writable = await call('curl -s http://10.0.0.5:3002/ | tee /work/notes/x.txt');
+  assert.equal(writable.evidence_skipped, 'command_wrote_mount', '写可写根 ⇒ 不重复落盘，并显式说出来');
+  assert.equal(writable.evidence_host_path, undefined, '抑制时不得造出一个不存在的路径字段');
+});

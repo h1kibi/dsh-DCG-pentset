@@ -189,3 +189,32 @@ test('阶段档案不得教 `memory_search` 做跨作业检索（参数面没有
     );
   }
 });
+
+test('参数级对拍：technique 表里声明的**每个参数**都必须在参数指南里有条目（2026-10-11 第八轮质检）', () => {
+  // 为什么要有这条：既有的锁只对拍到 **technique 名字**一级——本轮新增 `page`/`probe_options` 时，
+  // 参数指南（**常驻提示词面**）没有任何条目也照样全绿，而模型只能从工具参数说明反推默认值。
+  // 更糟的是同一次漂移里指南还留着旧文案（`paths` 的 6 列、单条软 404 基准、chunk ≤8 条）——
+  // 那比"缺条目"更贵：它会让模型照旧形态读输出。
+  const guide = renderTechniqueParamsGuide({ recon: true, vuln: true });
+  const families: readonly (readonly [string, Readonly<Record<string, { readonly defaults: Record<string, unknown>; readonly required: readonly string[] }>>])[] = [
+    ['recon', STRUCTURED_TECHNIQUES.recon],
+    ['vuln', STRUCTURED_TECHNIQUES.vuln],
+  ];
+  const offenders: string[] = [];
+  for (const [, table] of families) {
+    for (const [technique, spec] of Object.entries(table)) {
+      const start = guide.indexOf(`**${technique}**：`);
+      if (start < 0) continue; // technique 级的缺失由既有锁负责
+      const next = guide.indexOf('\n**', start + 1);
+      const section = next < 0 ? guide.slice(start) : guide.slice(start, next);
+      const declared = [...Object.keys(spec.defaults), ...spec.required].filter(
+        // `port`/`target_selector` 这类由工具层固定注入或另有专门说明，不强制逐条出现在表格里。
+        (name) => !['target_selector', 'purpose'].includes(name),
+      );
+      for (const name of declared) {
+        if (!section.includes(`| \`${name}\` |`)) offenders.push(`${technique}: 参数 ${name} 在参数指南里没有条目`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], '参数指南必须覆盖 technique 表声明的每个参数（缺失 = 模型靠猜默认值）');
+});

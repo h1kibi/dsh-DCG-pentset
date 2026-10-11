@@ -182,12 +182,14 @@ export interface WorkerToolDeps {
    */
   readonly evidenceRootFor?: (workerSessionId: string) => string | undefined;
   /**
-   * 该会话生效的**容器侧挂载根**（`/work`、被 cwd 覆盖时的其他路径……）。
+   * 该会话**可写**的挂载根（`/work`、被 cwd 覆盖时的其他路径……）。**必须是可写根**——
+   * 只读锚点写进去必然失败（实测 `rc=1 Read-only file system`），把它当成"命令已落盘"
+   * 会**吞掉唯一的证据兜底**（2026-10-11 第八轮质检：装配层当时传的是全部挂载）。
    *
-   * 用途只有一个：`pentest_exec` 判断"命令是否自己把产物写进了挂载根"（2026-10-11 操作者实测 #5：
+   * 用途只有一处：`pentest_exec` 判断"命令是否自己把产物写进了挂载根"（运营者实测 #5：
    * 命令写了 `/work/…`、宿主侧又落一份 ⇒ 两份近重复文件）。省略 = 只按 `/work` 判。
    */
-  readonly mountContainerPathsFor?: (workerSessionId: string) => readonly string[];
+  readonly writableMountPathsFor?: (workerSessionId: string) => readonly string[];
   /** dsh 会话标识 → worker 会话标识。 */
   resolveWorkerSessionId(dshSessionId: string): Promise<string | null>;
   /** 原子解析当前 worker 会话及调用开始时的生效租约世代。 */
@@ -1057,7 +1059,10 @@ const requestScopeConfirmation = defineWorkerTool({
           '（`artifact:<uuid>`）；登记失败会带 `evidence_failed`/`evidence_artifact_error` **说出来**，' +
           '不会静默少一条证据链。' +
           '**命令自己写进 /work 时不重复落盘**：若命令的最后一段里已有 `> /work/…`、`>> /work/…` 或 `tee /work/…`，' +
-          '本项回 `evidence: skipped_by_command`（不写第二份近重复文件）——要那份自动副本就去掉命令里的重定向',
+          '本项回 `evidence_skipped: command_wrote_mount`（不写第二份近重复文件，**也不登记 artifact**——'
+          + '那条命令的产物由它自己的重定向负责）——要那份自动副本就去掉命令里的重定向。'
+          + '判据只认能证明 stdout 落进挂载根的三种写法：`>`/`>>`/`>|`（**不认** `2>`/`&>`/`1>`）、'
+          + '命令词位置的 `tee`（含 `sudo tee -a`）、heredoc 写者（`cat > /work/f <<EOF`）；引号里的字面量不算',
       },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
@@ -1139,21 +1144,23 @@ const requestScopeConfirmation = defineWorkerTool({
         // 优先**按会话**解析（与容器 argv/简报/工具同源）；无该钩子时回退静态配置。
         const root = deps.evidenceRootFor?.(workerSessionId) ?? deps.evidenceRoot;
         const stdout = resultView?.stdout;
-        const containerMounts = deps.mountContainerPathsFor?.(workerSessionId) ?? [DEFAULT_MOUNT_CONTAINER_PATH];
+        const containerMounts = deps.writableMountPathsFor?.(workerSessionId) ?? [DEFAULT_MOUNT_CONTAINER_PATH];
+        // 命中时返回**命中的那个挂载根**（说明文案要指名道姓，而不是笼统写 /work）。
+        const writtenRoot = writesIntoMount(args.command, containerMounts);
         if (root === undefined) {
           evidence = {
             ok: false,
             detail: '未挂载工作目录（见 pentest_workdir 的 no_roots）：本次输出只在返回值与 tool_run 记录里',
           };
-        } else if (writesIntoMount(args.command, containerMounts)) {
+        } else if (writtenRoot !== undefined) {
           // 命令**自己**写进了挂载根（台账/报告）：不再落一份近重复文件（2026-10-11 操作者实测 #5：
           // 两份文件名相邻、内容近似，派生那份是用途 slug 的截断，读起来更差）。此行**说出来**，
           // 不静默：要那份自动副本就把命令里的重定向去掉（安全网的场景正是"模型忘了写"）。
           evidence = {
             ok: true,
             detail:
-              `命令自己写进了挂载根（${containerMounts.join('、')}/…）⇒ 未重复落盘；` +
-              '需要宿主侧自动副本时，把命令里的 `/work` 重定向/tee 去掉再跑',
+              `命令自己写进了挂载根（${writtenRoot}/…）⇒ 未重复落盘，**也不登记 artifact**` +
+              '（这条命令的产物由它自己的重定向/tee 负责）；要宿主侧自动副本就把重定向去掉再跑',
             skippedByCommand: true,
           };
         } else if (typeof stdout === 'string' && stdout.length > 0) {
@@ -1303,7 +1310,7 @@ const requestScopeConfirmation = defineWorkerTool({
         type: 'string',
         enum: ['true', 'false'],
         description:
-          'http_probe 的 **endpoints 专用**开关（默认 true）：是否**跟随同主机的 .js 引用**（`/_next/static/chunks/*` 这类）再抽一遍路径。**对 Next.js/Vite 这类 SPA，路由往往只在 chunk 里**（实测：首页抽到 20 条，chunk 另有 11 条 `/api/*`——含核心发现，而字典枚举全都没命中）。只跟同主机、上限 8 条 / 每条 256KiB；命中标出 `@<chunk 路径>` 供复核',
+          'http_probe 的 **endpoints 专用**开关（默认 true）：是否**跟随同主机的 .js 引用**（`/_next/static/chunks/*` 这类）再抽一遍路径。**对 Next.js/Vite 这类 SPA，路由往往只在 chunk 里**（实测：首页抽到 20 条，chunk 另有 11 条 `/api/*`——含核心发现，而字典枚举全都没命中）。只跟同主机、上限 **24 条** / 每条 256KiB / 合计 1MiB（条数在 2026-10-11 从 8 抬到 24：Next.js 每条路由自带 8–11 个 chunk，8 条会静默截断）；命中标出 `@<chunk 路径>` 供复核，**被跳过的 chunk 路径也会列出来**',
       },
       collect: {
         type: 'string',

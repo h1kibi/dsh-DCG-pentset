@@ -319,7 +319,10 @@ test('查询串字符集：宿主模板与容器正则逐字符同集，且不�
     return [...new Set(out)].sort();
   };
 
-  const host = expand((hostMatch[1] ?? '').replace(/\\\\/gu, '\\'));
+  // 宿主捕获里含**字符类定界符** `[`/`]`，容器捕获不含——先剥掉定界符再展开，否则
+  // 定界符本身会冒充集合成员，"宿主删掉 `\[`/`\]`" 这类漂移就判不出来（第八轮质检）。
+  const hostBody = (hostMatch[1] ?? '').replace(/^\[/u, '').replace(/\]$/u, '');
+  const host = expand(hostBody.replace(/\\\\/gu, '\\'));
   const container = expand(containerMatch[1] ?? '');
   assert.deepEqual(
     host,
@@ -331,4 +334,36 @@ test('查询串字符集：宿主模板与容器正则逐字符同集，且不�
     assert.equal(host.includes(dangerous), false, `查询串字符集不得含 ${JSON.stringify(dangerous)}`);
   }
   assert.equal(host.includes('&'), true, '`&` 必须放行（否则多参数查询串没有结构化通道）');
+});
+
+/** chunk 跟随上限的**数字单一来源**锁（2026-10-11 第八轮质检）。 */
+test('chunk 上限：容器常量 ↔ 常驻提示词/文档里的数字必须同值（手抄即漂移）', () => {
+  // 为什么要有它：本轮把 `CHUNK_FETCH_LIMIT` 从 8 抬到 24 时，`worker.ts` 的工具描述与 `RUNBOOK`
+  // 里各留了一份"上限 8 条"的手抄——两处都是模型/人类直接读的文本（前者常驻提示词面）。
+  // §7 的纪律是"数字从唯一来源渲染"，这条锁把它落到可机器判定：**数字本身由容器常量推出来**。
+  const dispatcher = readFileSync(new URL('../docker/tools/pentest-tool', import.meta.url), 'utf8');
+  const limit = /CHUNK_FETCH_LIMIT = (\d+)/u.exec(dispatcher)?.[1];
+  const bytes = /CHUNK_BYTES_LIMIT = (\d+) \* 1024/u.exec(dispatcher)?.[1];
+  const total = /CHUNK_TOTAL_BYTES_LIMIT = (\d+) \* 1024/u.exec(dispatcher)?.[1];
+  assert.ok(limit !== undefined && bytes !== undefined && total !== undefined, '容器侧的 chunk 上限常量必须可解析');
+
+  const quoted = [
+    new URL('../src/tools/worker.ts', import.meta.url),
+    new URL('../src/execution/templates.ts', import.meta.url),
+    new URL('../src/agents/technique-params-guide.ts', import.meta.url),
+    new URL('../RUNBOOK.md', import.meta.url),
+  ] as const;
+  const countToken = `${limit} 条`;
+  const perChunkToken = `${bytes}KiB`;
+  const totalToken = `${Number(total) / 1024}MiB`;
+  const offenders: string[] = [];
+  for (const url of quoted) {
+    const text = readFileSync(url, 'utf8');
+    const name = url.pathname.split('/').slice(-1)[0] ?? '';
+    if (!text.includes(countToken)) offenders.push(`${name} 缺 "${countToken}"（chunk 条数上限没跟容器常量）`);
+    if (!text.includes(perChunkToken)) offenders.push(`${name} 缺 "${perChunkToken}"（每条字节上限）`);
+    if (!text.includes(totalToken)) offenders.push(`${name} 缺 "${totalToken}"（合计字节上限）`);
+    if (text.includes('上限 8 条')) offenders.push(`${name} 仍有"上限 8 条"这种手抄旧值`);
+  }
+  assert.deepEqual(offenders, [], 'chunk 上限的数字必须与容器常量同源');
 });

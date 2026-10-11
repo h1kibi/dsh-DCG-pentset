@@ -211,7 +211,7 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         description:
           '**endpoints 专用**：是否跟随同主机的 `.js` 引用（`/_next/static/chunks/*`）再抽一遍。SPA 的路由**常常只在 chunk 里**，建议保持默认 true',
         options: [
-          { value: 'true', note: '跟随（默认）：只跟同主机，≤8 条 / 每条 256KiB；命中标出 `@<chunk 路径>`' },
+          { value: 'true', note: '跟随（默认）：只跟同主机，≤24 条 / 每条 256KiB / 合计 1MiB；命中标出 `@<chunk 路径>`，被跳过的路径也会列出来（截断要看得见）' },
           { value: 'false', note: '只看本页字节（页面很重或只想看首屏时用）' },
         ],
       },
@@ -235,13 +235,34 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         ],
       },
       {
+        name: 'page',
+        type: 'string',
+        required: false,
+        default: '（空串＝站点根 /）',
+        description:
+          '**只取哪一页**：抽取（`collect=endpoints`）与 chunk 跟随都以这一页为对象。SPA/Next.js 上**路由自己的 chunk** 才含 API 调用（每条路由自带 8–11 个 chunk），所以逐路由调 `page=/admin`、`page=/run`… 是本轮最有效的发现路径——不必自己写 `for p in …; do curl; grep; done`（手写 grep 抽路由的失败是静默的）。可带查询串（`/x?k=v`）。`paths=` 批量模式下不生效',
+        example: 'page="/admin"',
+      },
+      {
+        name: 'probe_options',
+        type: 'enum',
+        required: false,
+        default: 'false',
+        description:
+          '**方法表清点**：true ⇒ 对同一条路径（`page` 或 `paths` 里的每一条）**额外**发一次只读 `OPTIONS` 并读 `Allow` 头。405/OPTIONS 的 `Allow` 在**未鉴权**下常给出完整方法表（实测：一个写请求都没发就拿到 20 条写端点的 POST/PUT/DELETE）——这是清点，不是利用；**别**为了"确认"去发 PUT/DELETE。`paths=` 模式下 `Allow` 也作为第 7 列返回（GET 的 405 响应常带它，零额外请求）',
+        options: [
+          { value: 'true', note: '逐条额外发 OPTIONS（请求数翻倍：预算按 `条数×(2|1)+基准数` 摊）' },
+          { value: 'false', note: '不发 OPTIONS（默认；仍返回 GET 响应里自带的 `Allow`）' },
+        ],
+      },
+      {
         name: 'paths',
         type: 'string',
         required: false,
         default: '（空串＝关闭）',
         description:
-          '**批量路径状态复核**（操作者诉求 #3）：逗号分隔的**绝对路径**，≤60 条，每条形如 `/api/users`。给了它只对每条发 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note` ＋ 汇总 `paths=N ok=M no_response=K`；并先用一条**随机路径**取软 404 基准，同状态码同长度即标 `soft404`（兜底路由，不是端点）。**拒绝**含 scheme/主机/空格的串（把路径当目标用会让范围记账失效）。**发现**用 `collect=endpoints`，**复核**才用它',
-        example: 'paths="/api/users,/api/orders,/admin/config"',
+          '**批量路径状态复核**：逗号分隔的**绝对路径**，≤60 条，每条形如 `/api/users`，**可带查询串**（`/api/submissions?mine=1`，字符集只含字母数字与 `. _ ~ % = & : @ / + [ ] -`）。给了它只对每条发 **GET**（`probe_options=true` 时再发一次 OPTIONS），逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note<TAB>baseline_ns<TAB>allow` ＋ 汇总 `paths=N ok=M no_response=K method_tables=J baselines=B`；软 404 基准**按命名空间各取一条**（页面 404 与 API 404 常不同形），同命名空间内同状态码同长度即标 `soft404`（兜底路由，不是端点）。**拒绝**含 scheme/主机/空格的串（把路径当目标用会让范围记账失效），也拒绝片段 `#` 与路径里的 `..` 段。**发现**用 `collect=endpoints`，**复核**才用它',
+        example: 'paths="/api/users,/api/submissions?mine=1,/admin/config"',
       },
     ],
     example: 'pentest_recon(technique="http_probe", targetSelector="192.168.1.10", port=443, scheme="https", collect="tech", purpose="...")',
@@ -304,7 +325,8 @@ const RECON_GUIDES: readonly TechniqueGuide[] = [
         type: 'integer',
         required: false,
         default: 5,
-        description: '请求速率（次/秒），会被宿主行为预设的上限约束',
+        description:
+          '请求速率（次/秒），会被宿主行为预设的上限约束。**声明值 = 实测值**：容器按 `delay = threads/rate` 下发（ffuf 的 `-p` 是**每线程**间隔），并在报告里逐轮对账 `rate_check: declared_rps=… observed_rps=… verdict=ok|over`——看到 `verdict=over` 就按实测值重排预算',
       },
       {
         name: 'verify_tls',

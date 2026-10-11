@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES Pre-engagement, PTES Reporting, NIST SP 800-115 记录纪律]
-  smoked: "沙箱实测@2727852f6c59：第 1–6 步的**沙箱侧原文配方**在夹具档案上实跑（`docker/lab-archive` 只读挂到 /mnt/engagement、`/work` 可写、`--network none`，命令带 `set -e` 一次跑完）：①`ls -la` 概览 4 份文件；②`find -printf %TY-%Tm-%Td %TH:%TM %s %p | sort -r` 取最近 3 份（handoff-2.md 1115B 证书、报告等）；③四段关键词 `grep -rn -E 结论|线索|排除|…` 命中 8 行（含 `handoff-2.md:7:## 线索（未证实）`、`notes/证书.md:3: 已轮换…不可复用`、`范围版本：v2`）；④`grep -n -A 4 "^#{1,3} *(结论|排除)"` 抽出结论/排除段；⑤`openssl x509 -noout -subject -dates` 读出 `CN=lab.local notAfter=Oct 18 03:07:17 2026 GMT`（旧 PEM 已轮换）；⑥`cat >> /work/notes/archive-read.md` 落盘四段台账。**宿主侧通道 `pentest_workdir`（op=list/read/search/append）本轮未实跑**（需要活会话）；文中每一步都给了沙箱侧等价命令。"
+  smoked: "沙箱实测@a18f239589fd：第 1–6 步的**沙箱侧原文配方**在夹具档案上实跑（`docker/lab-archive` 只读挂到 /mnt/engagement、`/work` 可写、`--network none`，命令带 `set -e` 一次跑完）：①`ls -la` 概览（根目录 3 项＝1 文件 + 2 目录；递归共 4 份文件）；②`find -printf %TY-%Tm-%Td %TH:%TM %s %p | sort -r` 取最近 3 份（handoff-2.md 1115B 证书、报告等）；③四段关键词 `grep -rn -E '结论|线索|排除|时效|…'` 命中 **8 行**（含 `handoff-2.md:11:## 时效`；第八轮质检核过：去掉 `|时效` 是 7 行）（含 `handoff-2.md:7:## 线索（未证实）`、`notes/证书.md:3: 已轮换…不可复用`、`范围版本：v2`）；④`grep -n -A 4 "^#{1,3} *(结论|排除)"` 抽出结论/排除段；⑤`openssl x509 -noout -subject -dates` 读出 `CN=lab.local notAfter=Oct 18 03:07:17 2026 GMT`（旧 PEM 已轮换）；⑥`cat >> /work/notes/archive-read.md` 落盘四段台账。**宿主侧通道 `pentest_workdir`（op=list/read/search/append）本轮未实跑**（需要活会话）；文中每一步都给了沙箱侧等价命令。"
 ---
 
 # 既有作业档案的消费（engagement-archive）
@@ -46,7 +46,7 @@ find /mnt/engagement -type f -printf '%TY-%Tm-%Td %TH:%TM  %s  %p\n' 2>/dev/null
 
 ### 3. 结构化检索四段关键词（省上下文的关键一步）
 ```bash
-grep -rn -E '结论|线索|排除|未决|遗留|已轮换|已过期|范围版本' /mnt/engagement 2>/dev/null | head -60
+grep -rn -E '结论|线索|排除|时效|未决|遗留|已轮换|已过期|范围版本' /mnt/engagement 2>/dev/null | head -60
 ```
 期望：命中行形如 `handoff-2.md:14: 结论：…`、`notes/证书.md:3: 已轮换…`。
 判据：**命中文件按出现频次排优先级**（`pentest_workdir op=search` 还会直接给出 `files` 列表：路径 + 修改时间 + 命中行数，新的在前）。一条都没命中 ⇒ 档案可能只是日志/原始输出，按第 2 步的时间序读最近那份的**开头与结尾**（开头写目标、结尾写结论）。

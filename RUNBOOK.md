@@ -417,33 +417,6 @@ node scripts/resync-smoke-stamps.mjs 3401b215a4ab
 > ⚠ **⑧ 产生的 `3401b215a4ab…` 已被 ⑨ 取代**（同日的独立复查在容器侧又抓到两处，见 §6.5.13.8
 > 末尾的"复查后的两处修正"）。⑧ 这一段保留，是因为它记录的轮换过程本身仍然成立。
 
-#### ⑩ 本轮轮换记录（2026-10-11，第八轮）：操作者实测的五条（工具面）
-
-**轮换依据**：`docker/tools/pentest-tool` 改了（`http_probe` 新增 `page=` / `probe_options=` / 查询串、
-软 404 基准改**按命名空间**各取一条、chunk 上限 8→24 且列出被跳过的；`content_discover` 修速率公式
-`delay = threads/rate` 并逐轮对账 `rate_check`；删除遗留别名 `entries_scanned=`）。
-宿主侧同步改了 `src/execution/templates.ts`（两个新参数 + 查询串形状 + `queryCapable` 的 `&` 放行）、
-`src/tools/worker.ts`（工具面描述 + 证据不重复落盘）、`src/tools/evidence-sink.ts`、`src/compose.ts`。
-
-```bash
-# ① 构建（只有 COPY pentest-tool 那一层实打实重建）
-docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
-docker push 127.0.0.1:5005/pentest-tools:0.1.0
-docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
-# ② 重钉**两处**（harness.dev.patch.yml 与 profile 的 cordis.patch.yml）
-#    d6de07ed3f5c → 2727852f6c59
-# ③ 内容核验：镜像内分发器与工作副本 sha256 相同（fba63eb8ff99…）
-# ④ 冒烟：夹具 docker/lab-spa（SPA 双命名空间）与 docker/lab-archive（档案消费）
-#    见 skills/recon-web-surface 与 skills/engagement-archive 的 smoked 戳（都记了原文输出）
-# ⑤ 戳轮换：node scripts/resync-smoke-stamps.mjs 2727852f6c59（25 份 / 27 处）
-```
-
-**本轮冒烟的关键读数**（原文见两份 skill 的戳）：
-`page=/admin` 跟满 11 条 chunk（`chunk=122, page=11`）；`paths=` 带查询串时 `?mine=1` 与不带
-**长度不同**（10 vs 2）；三条命名空间基准分别 `404/22 json`、`200/1241 html`、`404/8522 html`；
-`/lists/xyz` 用**自己的**基准判 soft404；`allow` 列与 `probe_options=true` 拿到 3 条方法表；
-`rate_check: declared_rps=5 observed_rps=5.0 verdict=ok`（旧配方同参数为 25 req/s）。
-
 #### ⑨ 本轮轮换记录（2026-10-11，复核轮）：`content_discover` 字段名对齐 + 两条静态锁
 
 **轮换依据**：独立复查（Main）在容器侧又抓到两处，改完必须再走一次 §2.1 全流程：
@@ -558,6 +531,50 @@ coverage_note: 本次从第 1 条跑到第 13 条（本段 60 条 / 60 次请求
 ---
 
 ## 4. 启动
+
+#### ⑩ 本轮轮换记录（2026-10-11，第八轮）：操作者实测的五条（工具面）
+
+**轮换依据**：`docker/tools/pentest-tool` 改了（`http_probe` 新增 `page=` / `probe_options=` / 查询串、
+软 404 基准改**按命名空间**各取一条、chunk 上限 8→24 且列出被跳过的；`content_discover` 修速率公式
+`delay = threads/rate` 并逐轮对账 `rate_check`；删除遗留别名 `entries_scanned=`）。
+宿主侧同步改了 `src/execution/templates.ts`（两个新参数 + 查询串形状 + `queryCapable` 的 `&` 放行）、
+`src/tools/worker.ts`（工具面描述 + 证据不重复落盘）、`src/tools/evidence-sink.ts`、`src/compose.ts`。
+
+```bash
+# ① 构建（只有 COPY pentest-tool 那一层实打实重建）
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+# ② 重钉**两处**（harness.dev.patch.yml 与 profile 的 cordis.patch.yml）
+#    d6de07ed3f5c → 2727852f6c59
+# ③ 内容核验：镜像内分发器与工作副本 sha256 相同（fba63eb8ff99…）
+# ④ 冒烟：夹具 docker/lab-spa（SPA 双命名空间）与 docker/lab-archive（档案消费）
+#    见 skills/recon-web-surface 与 skills/engagement-archive 的 smoked 戳（都记了原文输出）
+# ⑤ 戳轮换：node scripts/resync-smoke-stamps.mjs 2727852f6c59（25 份 / 27 处）
+```
+
+**本轮冒烟的关键读数**（原文见两份 skill 的戳）：
+`page=/admin` 跟满 11 条 chunk（`chunk=122, page=11`）；`paths=` 带查询串时 `?mine=1` 与不带
+**长度不同**（10 vs 2）；三条命名空间基准分别 `404/22 json`、`200/1241 html`、`404/8522 html`；
+`/lists/xyz` 用**自己的**基准判 soft404；`allow` 列与 `probe_options=true` 拿到 3 条方法表；
+`rate_check: declared_rps=5 observed_rps=5.0 verdict=ok`（旧配方同参数为 25 req/s）。
+
+#### ⑪ 本轮轮换记录（2026-10-11，质检轮）：证据抑制判据、基准回退、常驻提示词漂移
+
+**轮换依据**：三路只读质检（容器/宿主/提示词）后的修复——`writesIntoMount` 判据重写（引号感知 + 只认三类形态）、
+可写挂载根语义（`writableMountPathsFor`）、基准不可判定标 `no_baseline`（`pick_baseline_ns`）、批量模式预检不再用 `page`
+且计入预算、chunk 跳过清单补齐四类、参数指南与工具描述对齐、`entries_scanned` 别名已删。
+
+```bash
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+# 重钉两处：2727852f6c59 → 512b7fa7a1e1；内容核验 sha256 = 1e35a9f1354b…
+node scripts/resync-smoke-stamps.mjs 512b7fa7a1e1   # 26 份 / 28 处
+```
+
+**夹具新增两形态**（`docker/lab-spa/labspa.py`）：`/waf/` 命名空间的随机路径**断连**（验"基准回退"）、
+`LABSPA_REFUSE_SOFT404=1` 全局断连（验"不可判定 ⇒ `no_baseline`"）。报告：`docs/quality-review-round8-2026-10-11.md`。
 
 ### 4a. 你的个人环境（已配好）
 
@@ -1275,7 +1292,7 @@ npm run typecheck && npm run lint && npm test && npm run verify
 | 现象 | 根因 | 修复 |
 |---|---|---|
 | `tls_inspect` 之后调 `tls_weakness`（参数相同）被拒 `idempotent_replay`「幂等键命中已有运行但计划摘要不同」 | **幂等键不含 `templateId`**，而两个模板的 `commandTemplate` **逐字相同**（都下发 `tls_probe …`）⇒ 键相撞、摘要不同（摘要含模板）。操作者只能给 `sni` 塞个等价取值换个键 | 键纳入 `templateId`（键的语义是「同一个**受审动作**」，动作身份由（模板，参数）决定，不是命令文本）+ 撞键回归锁；四处重算键的测试夹具同步补 `templateId` |
-| `collect=endpoints` 只解析 HTML：首页 20 条，而**真正的路由只在 chunk 里**（自测：`/_next/static/chunks/*.js` 另有 11 条 `/api/*`，含核心发现；三份字典全都没命中） | 抽取器只读本次响应的字节，不跟随引用 | 新增 `include_chunks`（默认 **true**）：跟随**同主机**的 `.js` 引用再抽一遍（跨主机一律跳过，与重定向同一纪律），上限 8 条 / 每条 256KiB / 合计 1MiB；命中带来源 `kind=quoted@<chunk 路径>` 供复核；三处枚举加锁 |
+| `collect=endpoints` 只解析 HTML：首页 20 条，而**真正的路由只在 chunk 里**（自测：`/_next/static/chunks/*.js` 另有 11 条 `/api/*`，含核心发现；三份字典全都没命中） | 抽取器只读本次响应的字节，不跟随引用 | 新增 `include_chunks`（默认 **true**）：跟随**同主机**的 `.js` 引用再抽一遍（跨主机一律跳过，与重定向同一纪律），上限 **24 条** / 每条 256KiB / 合计 1MiB（第八轮从 8 抬到 24：Next.js 每条路由自带 8–11 个 chunk）；命中带来源 `kind=quoted@<chunk 路径>` 供复核，被跳过的路径也列出；三处枚举加锁 |
 | `restrict_to_scope` 的文档与人实际行为矛盾：参数表暗示"不给 true 就会被闸门拒"，而显式 `ports=` 本来就合法 | 文案把"**只想扫授权端口**"与"**要保留档位口径**"两种意图写成了一条 | 三处（schema / carries / 指南）改写成**三条路**：① 只给 `ports` ⇒ 就扫这几个端口（不需开关）；② 只给档位 ⇒ 授权不全时被拒；③ 开关 + `ports` ⇒ 扫交集 |
 | 空交集时 `summary` 与「扫了但全关」**同形**（`open_ports=0 hosts_up=0`） | 复用同一个字段名表达"没扫"与"扫了是 0" | 加**判别字段** `scanned=true/false`；空交集写 `scanned=false open_ports=not_scanned hosts_up=n/a`；全 down 写 `scanned=false open_ports=0`（并已有 `warn:`） |
 | `content_discover` 只回 `hits=N autocalibration=…`，分不清"跑完干净"与"跑一半报一堆错" | summary 不含覆盖依据 | summary 补齐 `entries_scanned / wordlist_lines / ext_multiplier / duration_ms / ffuf_exit / stderr_lines / stderr_errorish`；有错误迹象时显式 `warn:` + stderr 头部 |
@@ -1483,7 +1500,7 @@ docker exec dsh-pg-c psql -U postgres -d pentest -c \
 
 | 现象 | 根因 | 修复 |
 |---|---|---|
-| 60 条路径只能退回 `pentest_exec` 手写 `for p in …; do curl …; done` 逐条确认「哪些是真端点、哪些只是兜底路由」 | 结构化通道里**没有批量复核动作**：`http_probe` 一次只采一个面（`collect=`），`exposure_check` 的 `paths` 是**固定项名**（10 个配置面），都不能表达"我这份 60 条路径清单" | `http_probe paths=/a,/b,…`（≤60 条，逗号分隔）：只发 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note`，**先用一条随机路径取软 404 基准**（同状态码同长度 ⇒ `note=soft404`＝兜底路由，不是端点），汇总 `paths_summary: paths=N ok=M no_response=K`；含 scheme/主机/空白/`..`/查询串一律 **exit 2** 拒绝（那是把"路径"当"目标"用，会让范围记账失效）。模板 / technique / 分发器三处由 `test/action-templates.test.ts` 对拍 |
+| 60 条路径只能退回 `pentest_exec` 手写 `for p in …; do curl …; done` 逐条确认「哪些是真端点、哪些只是兜底路由」 | 结构化通道里**没有批量复核动作**：`http_probe` 一次只采一个面（`collect=`），`exposure_check` 的 `paths` 是**固定项名**（10 个配置面），都不能表达"我这份 60 条路径清单" | `http_probe paths=/a,/b,…`（≤60 条，逗号分隔）：只发 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note<TAB>baseline_ns<TAB>allow`，**软 404 基准按命名空间各取一条**（同状态码同长度 ⇒ `note=soft404`＝兜底路由，不是端点），汇总 `paths_summary: paths=N ok=M no_response=K method_tables=J baselines=B`；含 scheme/主机/空白/片段 `#`/路径里的 `..` 一律 **exit 2**（**可带查询串** `/api/x?mine=1`）， 拒绝（那是把"路径"当"目标"用，会让范围记账失效）。模板 / technique / 分发器三处由 `test/action-templates.test.ts` 对拍 |
 | `content_discover` 跑大字典"看起来跑完了"：`common_dirs` 4723 条按声明节奏 5 req/s 需 ~945s，而单条命令上限 5 分钟 ⇒ **数学上不可调度**，且旧 summary 里**看不见被截断**（上游 JSON 有 `maxtime:295`、命中停在 `position:4313`） | ①返回里没有任何覆盖度字段（`hits=N` 与"全跑完、干净"同形）；②`-s` 把 ffuf 的进度行整条吞掉，连"跑到第几条"都拿不到；③没有分段手段，模型只能自己截断字典（`head -n 2000`）——截了多少、剩多少全靠自觉 | ①新增 `entry_range=A-B`（1 基双闭区间；空=整本）：把本段字典落盘再喂 ffuf，多次调用可拼完并**每次自证"从第几条跑到第几条"**；②去掉 `-s`、解析 stderr 进度行 → `coverage: wordlist_entries=… entry_range=… requested=… attempted=… truncated=… position=… remaining=…`（外加 `position_max_hit=`，即旧版只能去 JSON 里翻的那个数）；③`truncated=true` 时给 `coverage_note:` 明说"被截断 + 下一次的 entry_range"；④条目数/声明速率超单条上限时**直接写出"需要分 N 段"与各段区间**（这是数学，不是判断） |
 
 **实测（真容器、实验室夹具，非推断）**：

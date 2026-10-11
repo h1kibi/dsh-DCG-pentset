@@ -57,6 +57,14 @@ export interface SessionMountViews {
    * 宿主侧证据落盘根（`/work` 对应的宿主路径；无挂载 ⇒ `undefined`，调用方据此给说明而非报错）。
    */
   readonly evidenceRootFor: (workerSessionId: string) => string | undefined;
+  /**
+   * 该会话**可写**的容器侧挂载根（只读锚点排除）。
+   *
+   * 用途只有一处：`pentest_exec` 判断"命令是否自己把产物写进了挂载根"（避免同一条命令产出两份
+   * 近重复证据）。**只读锚点必须排除**——写它必然失败（实测 `rc=1 Read-only file system`），
+   * 把它算作"已落盘"会吞掉宿主侧唯一的兜底（2026-10-11 第八轮质检发现的真缺陷）。
+   */
+  readonly writableMountContainerPathsFor: (workerSessionId: string) => readonly string[];
 }
 
 /**
@@ -89,5 +97,11 @@ export function sessionMountViews(input: {
     workdirRootsFor,
     evidenceRootFor: (workerSessionId) =>
       mountsForWorker(workerSessionId).find((mount) => isWorkMount(mount))?.hostPath,
+    // 只读锚点排除：写它必然失败（`rc=1 Read-only file system`），把它算作"命令已落盘"
+    // 会吞掉宿主侧的证据兜底。见接口上的说明。
+    writableMountContainerPathsFor: (workerSessionId) =>
+      mountsForWorker(workerSessionId)
+        .filter((mount) => mount.readOnly !== true)
+        .map((mount) => mount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH),
   };
 }

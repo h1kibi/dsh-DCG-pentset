@@ -60,7 +60,7 @@ import type { ActionTemplateSpec, ParamBag } from './execution/templates.ts';
 import { buildNormalizedCommand, createRegistry, scopePortsFor, validateParams } from './execution/templates.ts';
 import { normalizeCidr, rangeAddressesOf } from './policy/scope.ts';
 import { canonicalTargetString, derivePlanHash } from './execution/idempotency.ts';
-import { DockerSandbox, DEFAULT_MOUNT_CONTAINER_PATH } from './execution/docker-sandbox.ts';
+import { DockerSandbox } from './execution/docker-sandbox.ts';
 import type { DockerSandboxConfig, ProcessRunner, SandboxMount } from './execution/docker-sandbox.ts';
 import { sessionMountViews } from './execution/session-mounts.ts';
 import type { SessionMountViews } from './execution/session-mounts.ts';
@@ -1577,12 +1577,10 @@ function installWorkflow(input: {
           },
           // 证据落盘根：与上面同源（同一份视图）。
           evidenceRootFor: views.evidenceRootFor,
-          // 容器侧挂载根（默认 `/work`；会话 cwd 覆盖时可能是别的路径）：`pentest_exec` 用它判断
-          // "命令自己是否已把产物写进挂载根"（2026-10-11 操作者实测 #5：两份近重复证据文件）。
-          mountContainerPathsFor: (workerSessionId) =>
-            views
-              .mountsForWorker(workerSessionId)
-              .map((mount) => mount.containerPath ?? DEFAULT_MOUNT_CONTAINER_PATH),
+          // 可写的容器侧挂载根（只读锚点已由视图排除）：`pentest_exec` 用它判断"命令自己是否已把
+          // 产物写进挂载根"。写只读根**必然失败**（实测 `rc=1 Read-only file system`），若把它算作
+          // "已落盘"，抑制就会吞掉唯一的证据兜底（2026-10-11 第八轮质检发现的真缺陷）。
+          writableMountPathsFor: views.writableMountContainerPathsFor,
           // 证据登记（§9.2 artifacts；诉求 #5）：落盘成功后写一行 artifact，让报告的
           // `source_refs` 能用 `artifact:<uuid>`。此前 `pentest.artifacts` 全仓没有写入方。
           recordEvidenceArtifact: pgTools.recordEvidenceArtifact.bind(pgTools),

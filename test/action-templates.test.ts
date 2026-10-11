@@ -818,23 +818,44 @@ describe('批量路径复核与字典分段：模板 / technique / 容器三处�
     // 复核的主方法是 GET（形态由服务端固定）；`probe_options=true` 时**额外**发只读 OPTIONS。
     const probeOne = verbBody.slice(verbBody.indexOf('def probe_one('), verbBody.indexOf('paths_budget:'));
     assert.ok(probeOne.length > 0, '找不到 probe_one（批量复核的逐条实现）');
-    assert.match(probeOne, /conn\.request\(\s*\n?\s*method,/, '请求方法必须是参数（默认 GET）');
-    assert.match(probeOne, /method: str = "GET"/, 'probe_one 的默认方法必须是 GET');
+    assert.match(probeOne, /conn\.request\(\s*\n?\s*"GET",/, '复核主方法写死为 GET（不许再留一个没人用的 method 形参）');
+    assert.ok(!/method: str = "GET"/.test(probeOne), '死参数已删（第八轮质检：它形同虚设却让"只发 GET"这条锁变松）');
     assert.ok(!/"(HEAD|POST|PUT|DELETE|PATCH)"/.test(verbBody), '批量复核不得出现写方法或 HEAD');
+    // OPTIONS **只有一条**路径（`fetch_methods`）：probe_one 里不得再出现 OPTIONS。
+    assert.ok(!/conn\.request\(\s*"OPTIONS"/.test(probeOne), 'probe_one 不得**发** OPTIONS（两条路径做同一件事、锁只钉得住一条）');
+    assert.ok(!/fetch_methods\(/.test(probeOne), 'probe_one 不得调 fetch_methods（OPTIONS 只有一条路径）');
     assert.match(verbBody, /fetch_methods\(use_scheme, item_path/, 'probe_options=true 时必须逐条发 OPTIONS');
     assert.match(verbBody, /allow = \(resp\.getheader\("allow"\)/, 'GET 响应里的 Allow 也要收（405 响应常带方法表）');
     assert.match(verbBody, /method_table:/, '方法表要自己开口（未鉴权清点，不发写请求）');
     // 软 404 基准：**按命名空间各取一条**（页面 404 与 API 404 常不同形），同命名空间同形即判兜底。
     assert.match(verbBody, /SOFT404_PATH_PREFIX/, '必须用随机路径取软 404 基准');
-    assert.match(verbBody, /def namespace_of\(item_path: str\) -> str:/, '必须有"路径 → 命名空间"的纯函数');
+    assert.match(DISPATCHER, /def namespace_of_path\(item_path: str\) -> str:/, '必须有"路径 → 命名空间"的纯函数（模块级：要给行为对拍用）');
     assert.match(verbBody, /paths_soft404_baseline: ns=\{ns\}/, '基准要逐命名空间自己开口（含取不到的情形）');
-    assert.match(verbBody, /baseline_ns_for\(item_path\)/, '每条路径要**最长匹配**到自己的基准（不是共用根那一条）');
+    // 采样器是**有界**的纯函数（第八轮质检：旧写法能采到 7 条，而预算只按 6 算）。
+    assert.match(verbBody, /sample_baseline_namespaces\(probe_paths\)/, '基准命名空间必须走采样器（上限在它里面）');
+    const sampler = DISPATCHER.slice(
+      DISPATCHER.indexOf('def sample_baseline_namespaces('),
+      DISPATCHER.indexOf('def parse_entry_range('),
+    );
+    assert.match(sampler, /SOFT404_MAX_BASELINES - 1/, '其它命名空间必须按"上限 − 1"截断（根那条永远占一位）');
+    assert.match(sampler, /\+\s*\["\/"\]/, '根永远采一条（最终兜底尺子）');
     assert.match(DISPATCHER, /SOFT404_MAX_BASELINES = \d+/, '基准条数必须有常量上限（否则 60 条路径能打出 60 次基准请求）');
+    assert.match(
+      verbBody,
+      /request_budget = len\(probe_paths\) \* \(2 if probe_options else 1\) \+ SOFT404_MAX_BASELINES \+ 1/,
+      '预算 = 路径(×2) + 基准（同一上限）+ **预检那一次**（第八轮质检：报告写 N 而实际发 N+1）',
+    );
+    // 基准缺失**不许退化成 ok**（第八轮质检 major 回归：某命名空间采不到基准时，兜底路由会被当端点）。
+    assert.match(DISPATCHER, /def pick_baseline_ns\(item_path: str, recorded: list\[str\]\) -> str \| None:/, '回退只能在**真的采到基准**的前缀里选');
+    assert.match(verbBody, /pick_baseline_ns\(item_path, list\(baselines\)\)/, '逐条判定要用 pick_baseline_ns（吃的是已采到的基准）');
+    assert.match(verbBody, /note = "no_baseline"/, '没有可用基准时必须标 no_baseline（不可判定，不许写 ok）');
+    assert.match(verbBody, /paths_warning: \{no_baseline\} 条路径/, '不可判定的条数要显式告警');
+    assert.match(verbBody, /if note in \("ok", "size>=cap"\):/, 'candidate_endpoint 只许从"判过"的行里出（no_baseline 不是候选）');
     assert.match(verbBody, /note = "soft404"/, '与基准同形的命中要标 soft404');
     assert.match(verbBody, /candidate_endpoint:/, '非兜底命中要有可直接引用的短行');
     assert.match(
       verbBody,
-      /paths_summary: paths=\{len\(probe_paths\)\} ok=\{responded\} no_response=\{no_response\}/,
+      /paths_summary: paths=\{len\(probe_paths\)\} responded=\{responded\} no_response=\{no_response\}/,
       '汇总形态固定：paths=N ok=M no_response=K',
     );
     assert.ok(
@@ -856,7 +877,17 @@ describe('批量路径复核与字典分段：模板 / technique / 容器三处�
     assert.match(parser, /不得含片段/, '必须拒绝片段 `#`（不发给服务端）');
     assert.match(parser, /def parse_page_path\(/, 'page 必须走同一个校验器（形状即语义）');
     assert.match(verbBody, /page_path = parse_page_path\(params\)/, '容器侧必须读 page');
-    assert.match(verbBody, /result = fetch\(use_scheme, page_path\)/, '取页面必须用 page（此前硬编码 `/`）');
+    assert.match(verbBody, /result = fetch\(use_scheme, preflight_path, preflight_timeout\)/, '预检必须用 preflight_path/preflight_timeout（批量模式下不许用 page、不许吃整段预算）');
+    assert.match(
+      verbBody,
+      /preflight_path = "\/" if probe_paths else page_path/,
+      'paths= 批量模式**不取 page**（第八轮质检：文案说不生效，代码却用它做预检——多发一个请求且会拖垮整批）',
+    );
+    assert.match(
+      verbBody,
+      /preflight_timeout = max\(1\.0, min\(8\.0, timeout_s \/ max\(1, preflight_budget\)\)\)/,
+      '批量模式的预检要按逐条预算计时（否则一页挂住就把整批复核废掉）',
+    );
     assert.match(verbBody, /endpoints_page: \{page_path\}/, '抽取来源页要写出来（可复核：抽的是哪一页）');
   });
 

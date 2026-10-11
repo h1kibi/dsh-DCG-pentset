@@ -56,21 +56,77 @@ export interface EvidenceWriteResult {
 }
 
 /**
- * 命令是否**自己**把产物写进了挂载根（⇒ 宿主侧的自动落盘不必再写一份近重复文件）。
+ * 命令是否**自己**把 stdout 写进了挂载根：命中 ⇒ 返回**命中的那个挂载根**，否则 `undefined`。
  *
- * 2026-10-11 操作者实测 #5：命令里写了 `/work/...` 的台账/报告，`save_stdout_as_evidence`
- * 又落一份——两条命令产出两份近重复文件，而派生那份的名字是用途 slug 的截断，可读性更差。
- * 判据只看**最后一段简单命令**（按 `|`、`&&`、`||`、`;`、换行切分）：中间步骤写临时文件不算
- * 「产物已落盘」，否则会拿走那条命令**真正的** stdout 兜底（安全网的价值全在"模型忘了 tee"）。
- * 命中形态：`> /work/...`、`>> /work/...`、`tee /work/...`（含 `tee -a`、引号）。
+ * 判据的作用是**抑制**宿主侧的自动落盘（避免同一件事产出两份近重复文件），而抑制错了的代价是
+ * "证据永久消失"（容器一次性、`/tmp` 不跨命令）。所以：**宁可漏判（多落一份文件），不可误判**。
+ * 收紧后的形态是三类能证明 stdout 落进挂载根的写法（2026-10-11 第八轮质检）：
+ *   ① 真正的重定向算符 `>` / `>>` / `>|`——**不认** `2>`、`1>`、`&>`（那不是 stdout，或无法确证）；
+ *   ② `tee`（含 `sudo`/`command`/`env` 前缀与 `-a`）出现在**命令词位置**（段首或管道之后）；
+ *   ③ heredoc 写者：`cat > /work/f <<'EOF' …`——正文按换行切分后最后一段是终止符，
+ *      所以带 `<<` 的那一段也参与判定。
+ * 引号内的文本先剥掉：`-d '{"a":"> /work/x"}'` 里的 `>` 是**字面量**，不是重定向。
+ *
+ * **已知漏判**（方向安全：不抑制 ⇒ 只是多一份派生文件）：`curl -o`/`wget -O`、`1>`、`&>`、
+ * `$(…)` 或 heredoc 正文里的重定向、`xargs tee`。这些一律不认——**认错比认少贵**。
  */
-export function writesIntoMount(command: string, mountContainerPaths: readonly string[]): boolean {
-  const segments = command.split(/\|\||&&|[|;\n]/u).filter((segment) => segment.trim() !== '');
-  const last = segments.at(-1) ?? '';
-  return mountContainerPaths.some((mountPath) => {
+export function writesIntoMount(command: string, mountContainerPaths: readonly string[]): string | undefined {
+  // 引号**不能直接剥掉**：`> '/work/x'` 的带引号目标是合法写入，剥掉反而漏判。
+  // 正确做法是先把引号区间标出来，匹配到之后再判"这个匹配点是不是落在引号里"
+  // （`-d '{"a":"> /work/x"}'` 的 `>` 落在单引号里 ⇒ 那是字面量，不算重定向）。
+  const quoted: Array<readonly [number, number]> = [];
+  let openQuote: string | null = null;
+  let openAt = 0;
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i]!;
+    if (openQuote === null) {
+      if (ch === "'" || ch === '"') {
+        openQuote = ch;
+        openAt = i;
+      }
+    } else if (ch === openQuote) {
+      quoted.push([openAt, i]);
+      openQuote = null;
+    }
+  }
+  if (openQuote !== null) quoted.push([openAt, command.length]);
+  const insideQuotes = (index: number): boolean => quoted.some(([from, to]) => index >= from && index <= to);
+
+  // 分段：`||`、`&&`、`|`、`;`、换行都切——但 **`>|`（覆写算符）里的 `|` 不能切**
+  // （否则 `curl … >| /work/a.txt` 会被切成两段，最后一段看不见重定向 ⇒ 漏判）。
+  // 每段记下它在原串里的偏移，才能在"引号内/外"这件事上用原始下标判定。
+  const segments: Array<{ readonly text: string; readonly offset: number }> = [];
+  let cursor = 0;
+  for (const match of command.matchAll(/\|\||&&|(?<!>)\||[;\n]/gu)) {
+    segments.push({ text: command.slice(cursor, match.index), offset: cursor });
+    cursor = match.index + match[0].length;
+  }
+  segments.push({ text: command.slice(cursor), offset: cursor });
+  const nonEmpty = segments.filter((segment) => segment.text.trim() !== '');
+  // heredoc 写者的重定向在**带 `<<` 的那一段**（正文按换行切开后最后一段是终止符）。
+  const candidates = [
+    ...new Map(
+      [nonEmpty.at(-1), ...nonEmpty.filter((segment) => segment.text.includes('<<'))]
+        .filter((segment): segment is { text: string; offset: number } => segment !== undefined)
+        .map((segment) => [segment.offset, segment] as const),
+    ).values(),
+  ];
+
+  for (const mountPath of mountContainerPaths) {
     const root = escapeRegExp(mountPath.replace(/\/+$/u, ''));
-    return new RegExp(`(?:>>?\\s*['"]?${root}/)|(?:\\btee\\s+(?:-a\\s+)?['"]?${root}/)`, 'u').test(last);
-  });
+    const redirect = new RegExp(`(?:^|[^0-9&>])(?:>>|>\\|?)\\s*['"]?${root}/`, 'gu');
+    // `tee` 必须落在**命令词位置**：段首（允许前导空白）或 `sudo/command/env` 之后。
+    // 不这么收的话 `grep -n tee /work/x` 会被当成写入（那是**误判** ⇒ 吞掉唯一副本）。
+    const tee = new RegExp(`^\\s*(?:(?:sudo|command|env)\\s+)?tee\\s+(?:-a\\s+)?['"]?${root}/`, 'gu');
+    for (const segment of candidates) {
+      for (const pattern of [redirect, tee]) {
+        for (const match of segment.text.matchAll(pattern)) {
+          if (!insideQuotes(segment.offset + match.index)) return mountPath;
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 function escapeRegExp(text: string): string {
