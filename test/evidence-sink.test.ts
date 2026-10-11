@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { evidenceRelPath, slugForFileName, utcStamp, writeEvidence } from '../src/tools/evidence-sink.ts';
+import { evidenceRelPath, slugForFileName, utcStamp, writeEvidence, writesIntoMount } from '../src/tools/evidence-sink.ts';
 
 test('文件名片段只留白名单字符，中文等一律折叠（不出现路径分隔符与点号连排）', () => {
   assert.equal(slugForFileName('47.109.76.66'), '47.109.76.66');
@@ -55,4 +55,37 @@ test('写盘：建目录、落内容；越界路径被拒；写不进去只报�
   const failed = writeEvidence(notADir, 'evidence/x/y.txt', 'x');
   assert.equal(failed.ok, false);
   assert.equal(existsSync(join(notADir, 'evidence')), false);
+});
+
+test('命令自己写挂载根时不重复落盘：只看**最后一段**简单命令（2026-10-11 操作者实测 #5）', () => {
+  // 实况：命令里写了 `/work/evidence/...txt` 的台账，宿主侧又按 `save_stdout_as_evidence`
+  // 落一份 ⇒ 每条命令两份近重复文件，而派生那份是用途 slug 的截断（可读性更差）。
+  const mount = ['/work'];
+  for (const command of [
+    'curl -s http://x/ > /work/evidence/a.txt',
+    'curl -s http://x/ >> /work/evidence/a.txt',
+    'grep -o x /tmp/out | tee /work/evidence/a.txt',
+    'grep -o x /tmp/out | tee -a /work/evidence/a.txt',
+    "printf 'x' > '/work/evidence/a.txt'",
+    'curl -s http://x/ >/work/evidence/a.txt',
+  ]) {
+    assert.equal(writesIntoMount(command, mount), true, `应判为"命令自己写了挂载根"：${command}`);
+  }
+  for (const command of [
+    // 中间步骤写临时台账、最后一段才是产物 ⇒ **不能**抑制（安全网正是"忘了写"的场景）
+    'curl -s http://x/ > /work/tmp.txt | cat',
+    // 写入发生在最后一段**之前**：那份自动副本是命令的**最终 stdout**（与台账不是同一份内容）
+    // ⇒ 照旧落盘，不算重复。
+    'curl -s http://x/ > /work/evidence/a.txt && echo done',
+    'curl -s http://x/ | head -5',
+    'grep -o x /tmp/out | tee /tmp/a.txt',
+    'ls /work/evidence',
+    'cat < /work/evidence/a.txt',
+    'curl -s http://x/ > /tmp/a.txt',
+  ]) {
+    assert.equal(writesIntoMount(command, mount), false, `不得判为"命令自己写了挂载根"：${command}`);
+  }
+  // 会话挂载可能不是 `/work`（cwd 覆盖），判据跟着挂载走。
+  assert.equal(writesIntoMount('curl -s http://x/ > /srv/eng/a.txt', ['/srv/eng']), true);
+  assert.equal(writesIntoMount('curl -s http://x/ > /srv/eng/a.txt', ['/work']), false);
 });

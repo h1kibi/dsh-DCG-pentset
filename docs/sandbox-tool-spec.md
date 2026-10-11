@@ -101,9 +101,9 @@
 - **文本单一来源**：渲染给模型的任何"数字型事实"（超时/限额/速率/档位名/词表）与参数说明，
   必须从代码里的**唯一来源**渲染（注册表/契约常量）；手写第二份即视为缺陷。
 - 技能（`skills/**`）只能引用这些来源的**名字**，不得复述数字（避免下一次轮换时全库漂移）。
-- **遗留别名（有期限）**：`content_discover` 的 `entries_scanned=` 目前与 `entries_attempted=` **同值**
-  并存（2026-10-11 改名前它就存在，且当时被一条源码锁钉着）。它的存在违反"一个含义一个名字"，
-  因此：**下轮镜像变更时删除**；在那之前引用计数已降到 0（测试与提示词都改用 `entries_attempted=`）。
+- **遗留别名（已删除）**：`content_discover` 的 `entries_scanned=`（与 `entries_attempted=` 同值）
+  已于 2026-10-11 第八轮镜像变更**删除**——引用计数当时为 0（测试与提示词都改用 `entries_attempted=`）。
+  这条留着是给排障用的：旧报告里若出现它，说明那份报告出自更早的镜像。
 
 ## 8. 规范的可验证性（锁）
 
@@ -123,3 +123,55 @@
 
 本规范不改变设计文档里的**硬边界**（范围裁决、逐动作放行、一次性容器、证据链）；它约束的是
 **工具的接口面**（参数/输出/失败/命名）——即"人与其 Agent 之间那层可判定的契约"。
+
+## 9. 2026-10-11 操作者实测的五条（本轮新增的参数与字段）
+
+本轮反馈来自一次真作业（Next.js SPA 靶站）。五条都按"**改工具，不改口径**"处理：新增的东西只有下面这些，
+名字与语义一并登记在这里（`§7 单一来源`：字段名要能被检索到，不能只活在代码里）。
+
+### 9.1 `http_probe page=`（取哪一页）
+- 语义：抽取（`collect=endpoints`）与 chunk 跟随都以这一页为对象；空串 = 站点根 `/`。
+- **为什么需要**：SPA 上路由**自己的 chunk** 才含 API 调用（实测每条路由自带 8–11 个 chunk），
+  而抽取器只跟**被取页面**引用的 chunk ⇒ 不指定页面就永远只看得到 `/` 的（本会话只能退回 14 段手写 bash）。
+- 输出：`page: <路径>`（`paths=` 模式下写"本条不生效"）、`endpoints_page: <路径>`。
+- chunk 上限从 8 抬到 **24 条**（字节上限不动：每条 256KiB / 合计 1MiB），**被跳过的 chunk 路径列出来**
+  （`endpoints_chunks:` 行的尾部，最多 5 条）——截断必须看得见。
+
+### 9.2 `http_probe paths=` 接受查询串（`?k=v`）
+- 只读 GET 上 `?k=v` 是表达语义的唯一手段（`/api/submissions?mine=1` 与不带往往是一对判据）。
+- 形状（两侧**逐字符同集**，由 `test/sandbox-spec-locks.test.ts` 对拍）：
+  - 路径部分：字母数字与 `. _ ~ / ! @ % + = -`，≤300；
+  - 查询串部分：字母数字与 `. _ ~ % = & : @ / + [ ] -`，≤200；**不含** `#`、空白、`$`、引号、反斜杠、
+    `{ }`、`< >`、`|`、`;`。
+- **防载荷闸门的放行面只有一个字符 `&`**：`TemplateParam.queryCapable`（只授 `paths`/`page`）在跑
+  受限载荷检查前把 `&` 换成 `=`（边界符、非受限字符 ⇒ 不漏判也不误判）。它的安全前提是这条链路上
+  **没有 shell**：取值以 argv 单个 token 下发，容器侧 `split_probe_path` 自己拒绝全部真正的危险字面量。
+
+### 9.3 软 404 基准**按命名空间各取一条**
+- 命名空间 = 路径最后一个 `/` 之前的部分（`/admin` → `/`、`/api/submissions` → `/api/`），
+  条数上限 `SOFT404_MAX_BASELINES = 6`；未采样的命名空间退回**最长匹配的已采样前缀**（最终退到根）。
+- 输出：每个采样命名空间一条 `paths_soft404_baseline: ns=<前缀> status=… size=… content_type=… path=<随机路径>`；
+  逐条表格多一列 `baseline_ns`（该条用的是哪条基准），汇总加 `baselines=<条数>`。
+
+### 9.4 未鉴权方法表：`allow` 列与 `probe_options=true`
+- **405 与 OPTIONS 的 `Allow` 头在未鉴权下就给出完整方法表**（实测：零写请求拿到 20 条写端点）。
+- `paths=` 的第 7 列固定为 `allow`（GET 响应自带的 `Allow` / `Access-Control-Allow-Methods` 就收）；
+  `probe_options=true` 时对每条**额外**发一次只读 `OPTIONS` 并合并取值（两边不同则 `A|B`）。
+- 输出：`method_table: <路径> allow=…`（有 Allow 才算一条）+ 汇总 `method_tables=<条数>`；
+  单页模式给 `options_status:` / `options_allow:` / `options_note:`。
+- 纪律：**只记录，不发写方法**（`PUT`/`DELETE` 属利用类动作，要向人类逐条申请）。
+
+### 9.5 速率：声明值 = 实测值（`rate_check`）
+- 根因：ffuf 的 **`-p` 是每线程间隔**，旧公式 `delay = 1/rate` 配 `-t rate` 实际打出 `rate²`
+  （真容器对拍：`-t 5 -p 0.20` → 25 req/s；`-t 5 -p 1.00` → 5 req/s；`-t 1 -p 1.00` → 1 req/s）。
+  实测反馈即为"声明 5/s、自报 22/s"。
+- 修法：`threads = min(10, max(1, rate))`、`delay = threads / rate`（t 个线程各每 t/rate 秒发一次 ⇒ 合计 rate）。
+- 输出：`rate_check: declared_rps=<rate> observed_rps=<ffuf 自报> threads=<t> per_thread_delay_s=<d> verdict=ok|over`
+  （`observed > declared × 1.5` ⇒ `over` 并给一句"按声明排的预算偏乐观"）。
+
+### 9.6 证据落盘不重复（`evidence_skipped`）
+- 命令**最后一段简单命令**里已有 `> /work/…`、`>> /work/…` 或 `tee /work/…` ⇒ 宿主侧不再落第二份
+  （实测：同一件事产出两份近重复文件，派生那份名字是用途 slug 的截断，可读性更差）。
+- 输出：`evidence: <说明>` + `evidence_skipped: command_wrote_mount`（**不写路径字段**，避免造出不存在的路径）；
+  中间步骤写临时文件、最后一段不是写入 ⇒ 照旧落盘（安全网的场景正是"模型忘了写"）。
+- 文件名规则不变：`evidence/<目标>/<UTC时间>-<purpose slug>.txt` ⇒ **想让文件名好读就把 `purpose` 写成短语**。

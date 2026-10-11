@@ -278,3 +278,57 @@ test('内部 camelCase 类型不得直接进工具返回（规范 §7：转换�
     assert.equal(source.includes(view), true, `worker.ts 未使用视图：${view}`);
   }
 });
+
+/**
+ * 查询串字符集的**逐字符对拍**（2026-10-11 操作者实测 #2）。
+ *
+ * 放行 `&` 的前提是"两边同集、且集合里没有真正危险的 shell 字面量"：宿主模板只管形状，
+ * 容器侧才是权威校验器。两处若漂移，症状是"模板放行、容器 rc=2"（或反过来静默发送非法路径），
+ * 而这两种都很难从报告里看出来。
+ */
+test('查询串字符集：宿主模板与容器正则逐字符同集，且不含 shell 危险字面量', () => {
+  const templates = readFileSync(new URL('../src/execution/templates.ts', import.meta.url), 'utf8');
+  const dispatcher = readFileSync(new URL('../docker/tools/pentest-tool', import.meta.url), 'utf8');
+
+  const hostMatch = /const PROBE_QUERY_CHARS = "(.+)";/u.exec(templates);
+  assert.ok(hostMatch !== null, '找不到 PROBE_QUERY_CHARS（宿主侧查询串字符集）');
+  const containerMatch = /PROBE_QUERY_RE = re\.compile\(r"\^\[(.+)\]\{0,200\}\$"\)/u.exec(dispatcher);
+  assert.ok(containerMatch !== null, '找不到 PROBE_QUERY_RE（容器侧查询串字符集）');
+
+  /**
+   * 把字符类字面量展开成**排序去重的字符数组**（处理 `a-z` 区间与 `\x` 转义）。
+   * 宿主侧是 TS 字符串（要先解一层 `\\` 才是正则字面量），容器侧是 Python raw string（已是正则层）。
+   */
+  const expand = (body: string): readonly string[] => {
+    const out: string[] = [];
+    for (let i = 0; i < body.length; i += 1) {
+      if (body[i] === '\\') {
+        i += 1;
+        if (i < body.length) out.push(body[i]!);
+        continue;
+      }
+      if (body[i + 1] === '-' && i + 2 < body.length && body[i + 2] !== ']') {
+        for (let code = body.charCodeAt(i); code <= body.charCodeAt(i + 2); code += 1) {
+          out.push(String.fromCharCode(code));
+        }
+        i += 2;
+        continue;
+      }
+      out.push(body[i]!);
+    }
+    return [...new Set(out)].sort();
+  };
+
+  const host = expand((hostMatch[1] ?? '').replace(/\\\\/gu, '\\'));
+  const container = expand(containerMatch[1] ?? '');
+  assert.deepEqual(
+    host,
+    container,
+    '宿主与容器的查询串字符集必须逐字符相同（两边都改，且只改一处会红）',
+  );
+  // 放行面**只有 `&`**：真正危险的 shell 字面量一个都不许在集合里。
+  for (const dangerous of ['$', '`', '"', "'", '\\', '{', '}', '<', '>', '|', ';', ',', '#', ' ']) {
+    assert.equal(host.includes(dangerous), false, `查询串字符集不得含 ${JSON.stringify(dangerous)}`);
+  }
+  assert.equal(host.includes('&'), true, '`&` 必须放行（否则多参数查询串没有结构化通道）');
+});

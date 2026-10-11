@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: vulnerability-analysis
   sources: [PTES 漏洞分析, OWASP Risk Rating, CVSS v4 概念]
-  smoked: "沙箱实测@d6de07ed3f5c：5 块原文照跑通过（去重 6→5、dupes=1 记在保留条目上；F-03 无 evidence_ref 也无 signal 落退回列，只有 signal 的 F-05 不被误退；评级 F-01=17/F-05=15/F-02=14 可用、F-04/F-03 标缺依据；验证计划行 3 条；覆盖面 declared=5 covered=4）；观察：步骤 4 只按 evidence_ref != null 过滤——缺依据的 F-04 仍出现在计划行、signal-only 的 F-05 反而被漏掉，且跨来源同键合并后 source 只剩计数，交付前需按步骤 2/3 结论人工剔除"
+  smoked: "沙箱实测@2727852f6c59：5 块原文照跑通过（去重 6→5、dupes=1 记在保留条目上；F-03 无 evidence_ref 也无 signal 落退回列，只有 signal 的 F-05 不被误退；评级 F-01=17/F-05=15/F-02=14 可用、F-04/F-03 标缺依据；验证计划行 3 条；覆盖面 declared=5 covered=4）；观察：步骤 4 只按 evidence_ref != null 过滤——缺依据的 F-04 仍出现在计划行、signal-only 的 F-05 反而被漏掉，且跨来源同键合并后 source 只剩计数，交付前需按步骤 2/3 结论人工剔除（2026-10-11 增补的"档案先读"段未单独冒烟：它只复用宿主侧 `pentest_workdir` 的既有 op 与既有沙箱侧等价配方）"
 ---
 
 # 候选去重、评级与验证计划（vuln-triage）
@@ -19,6 +19,9 @@ metadata:
 - 本技能只在台账上做变换（jq / python3），不接触目标。
 - 台账来源：`/tmp/findings.json`（Agent 用 `memory_search` / `artifact_read` 取到内容后写入）。
 - **没有证据的候选不是候选**：只有「版本像」或「按经验可能存在」的条目可以留档，但必须标 `[INFERENCE]`，且**不得进入验证计划的执行序列**。
+- **去重前先读既有档案的「排除」段**（只读锚点，常见 `/mnt/engagement`；根以 `pentest_workdir op=list` 为准）：
+  「试过且否掉」的条目（含否掉方式）直接引用即可，**不要重复验证**；用 `pentest_workdir op=search pattern='排除|已否|不成立'` 先定位。
+  档案里的结论是**当时判断**：与它冲突时以本轮实测为准，并把差异写进判定表。
 - 验证动作会触及目标，因此计划里每条都要标**动作类别**（是否需要逐次放行）；计划本身不执行任何动作。
 
 ## 步骤

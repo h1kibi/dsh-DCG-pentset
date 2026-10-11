@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: post-exploitation
   sources: [PTES Post-Exploitation, 本插件状态机设计（回环与范围修订）, NIST SP 800-115]
-  smoked: "沙箱实测@d6de07ed3f5c：5 块原文照跑通过（jq -s 合并 boundary+cleanup、新未知区域候选列 in-scope 两条、判定信号计数 new_assets=1 unresolved=1、范围修订点骨架出 asset/source、交接清单四类键就位）；观察：步骤 2 取 verdict=in-scope 而回环信号 A 取 out-of-scope，口径相反——越界的 172.30.0.2:8080 反而不进步骤 2 输出；缺 verdict 的条目对 2/3 两块均不可见（需人读原始台账）"
+  smoked: "沙箱实测@2727852f6c59：5 块原文照跑通过（jq -s 合并 boundary+cleanup、新未知区域候选列 in-scope 两条、判定信号计数 new_assets=1 unresolved=1、范围修订点骨架出 asset/source、交接清单四类键就位）；观察：步骤 2 取 verdict=in-scope 而回环信号 A 取 out-of-scope，口径相反——越界的 172.30.0.2:8080 反而不进步骤 2 输出；缺 verdict 的条目对 2/3 两块均不可见（需人读原始台账）（2026-10-11 增补的"档案先读"段未单独冒烟：它只复用宿主侧 `pentest_workdir` 的既有 op 与既有沙箱侧等价配方）"
 ---
 
 # 回环与交接（post-loop-handoff）
@@ -21,6 +21,9 @@ metadata:
 - AI 只能生成**交接草稿**；人类审阅、编辑、确认后才成为交接包。不要假设建议会被原样采纳。
 - 判据以「证据 + 是否产生新未知区域」为准，不以「感觉还有东西可挖」为准。
 - 可出网（2026-10-05 起）：外部情报核对能自己做，但**外部资料不是目标证据**——标来源、未证实按假设；确需人类判断的仍写清楚要谁做什么。
+- **交接材料写成四段，下一轮才读得动**（下一轮会用 `pentest_workdir` 按关键词检索既有档案）：
+  **结论**（已确证，带证据引用）、**线索**（未证实，标等级）、**排除**（试过且否掉，含否掉方式）、**时效**（证书/凭据/范围版本是否已变）。
+  缺哪段就写「未提供」，别让读者把线索读成结论。
 
 ## 步骤
 

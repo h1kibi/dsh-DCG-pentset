@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP WSTG-INFO, MITRE ATT&CK T1016]
-  smoked: "沙箱实测@d6de07ed3f5c：5 块原文照跑（台账按正文结构先铺：缺 ref、悬空 to、ASSUMPTION 各造一例）：步骤 1 输出六节点 id/kind/ref，缺 ref 点名为 MISSING；步骤 2 入口 talks_to 把悬空 `svc:does-not-exist` 原样列出；步骤 3 跨边界边 from→to→auth（unauthenticated/unknown）；步骤 4 孤立节点只剩 asset:10.0.0.5、asset:www（悬空 to 不当节点），历史坏式 `$ids | index(.id)` 复现 Cannot index array with string \"id\"（exit 5）、现行 `.id as $i | ($ids | index($i))` exit 0；步骤 5 抓到并修掉配方缺陷——原文 `select(.ref==\"MISSING\")` 对缺失/null 的 ref 恒计 gaps=0（与步骤 1 的 MISSING 口径矛盾、会漏报），改 `select((.ref//\"MISSING\")==\"MISSING\")` 后同一台账 gaps=2，nodes=6/edges=3/assumptions=2 计数不变"
+  smoked: "沙箱实测@2727852f6c59：5 块原文照跑（台账按正文结构先铺：缺 ref、悬空 to、ASSUMPTION 各造一例）：步骤 1 输出六节点 id/kind/ref，缺 ref 点名为 MISSING；步骤 2 入口 talks_to 把悬空 `svc:does-not-exist` 原样列出；步骤 3 跨边界边 from→to→auth（unauthenticated/unknown）；步骤 4 孤立节点只剩 asset:10.0.0.5、asset:www（悬空 to 不当节点），历史坏式 `$ids | index(.id)` 复现 Cannot index array with string \"id\"（exit 5）、现行 `.id as $i | ($ids | index($i))` exit 0；步骤 5 抓到并修掉配方缺陷——原文 `select(.ref==\"MISSING\")` 对缺失/null 的 ref 恒计 gaps=0（与步骤 1 的 MISSING 口径矛盾、会漏报），改 `select((.ref//\"MISSING\")==\"MISSING\")` 后同一台账 gaps=2，nodes=6/edges=3/assumptions=2 计数不变（2026-10-11 增补的"档案先读"段未单独冒烟：它只复用宿主侧 `pentest_workdir` 的既有 op 与既有沙箱侧等价配方）"
 ---
 
 # 资产图与信任边界（asset-graph）
@@ -19,6 +19,10 @@ metadata:
 - 本阶段默认**不做目标动作**。需要的现场数据在情报阶段就该拿到；缺什么写成「缺口」，不要为了补图临时开扫。
 - 本技能全程在 `/tmp` 里的台账上做变换（jq/python3），不接触目标。
 - 台账来源：Agent 用 `memory_search` / `memory_read` / `artifact_read` 取到内容后写进 `/tmp`（写文件本身走沙箱命令）。**每条记录必须带 `ref`**（记忆 id 或证据 id）——没有 `ref` 的记录不要进图。
+- **开工先看既有作业档案**（人类挂的只读锚点，常见 `/mnt/engagement`；实际根以 `pentest_workdir op=list` 的 `roots` 为准）：
+  前几轮的资产/服务条目、信任边界与「排除」段都在里面，图的输入先取它，再补本轮的新观测。
+  `pentest_workdir op=search pattern='资产|服务|端口|边界'` 会直接给出**命中文件清单**（路径 + 修改时间 + 命中行数，新的在前）；
+  条目引用要带来源（文件 + 时间）；档案里的旧条目是「当时观测」，与本轮实测冲突时以本轮为准并记差异。
 
 ## 步骤
 

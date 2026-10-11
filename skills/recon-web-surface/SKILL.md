@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: intelligence-gathering
   sources: [PTES 情报收集, OWASP WSTG-INFO-01, WSTG-INFO-02, WSTG-INFO-03, WSTG-INFO-08, ffuf 官方文档]
-  smoked: "沙箱实测@d6de07ed3f5c：（2026-10-06 首轮）按 fx-web 172.29.0.2:8080 逐块跑正文 12 段原文配方（占位符换真值，第 6/7/7b 块因 /tmp 不跨容器合并进同一条 -c），12 段全部实测执行、无一因配方缺陷失败。①第1块可达性 curl 得 code=200 size=171 type=text/html redirect=（正文样例 size=484 是别的夹具，2xx 判据成立）；②第2块 GET -D 得 HTTP/1.0 200 OK、Server: SimpleHTTP/0.6 Python/3.10.21、Content-type: text/html、Content-Length: 171；③第2b块 OPTIONS 得 501 Unsupported method ('OPTIONS')、无 Allow 头——正合正文「SimpleHTTP 不支持 OPTIONS，501 不代表端点不存在」；④第3块取到 <title>fixture</title>，第3b块页面 sha256=05a7e484143388ea8dcb76aae72bc83030e937fab39b45e0585dbf51b4f48501；⑤第4块 robots.txt=200/34，sitemap.xml、sitemap_index.xml、.well-known/security.txt 均 404/469；第4b块 robots 正文 User-agent: */Disallow: /private/，而实测 /private/ =404/469，印证「Disallow 只是声明」；⑥第5块 4 条随机路径全为 404 469，软 404 签名成立、-fs 469 可用；⑦第6块 ffuf -w common.txt -t 5 -p 0.2 -fs 469 命中 /.git(301→/.git/)、/.git/HEAD(200/21)、/index.html(200/171)、/robots.txt(200/34)，合正文「形如 /.git/HEAD、/robots.txt、/index.html」，耗时约 203s；⑧第7块 jq 复核逐条输出 URL+code/size/redirect，第7b块标题富化把 index.html 认成 <title>fixture</title>、其余命中无标题；⑨第8块 http://example.invalid/ 解析失败 exit=6，退化判据成立。附带同镜像核实：ffuf 1.1.0、whatweb 0.5.5、httpx、dirb/katana/wfuzz/gospider/dirsearch 全部在；common.txt 4723 行、raft-small-directories.txt 20116 行；common.txt 实测不含 .env/page2.html/swagger.json，故第6块未命中这三条是字典覆盖使然而非靶标缺失；dirb 默认字典（4612 词）命中 /.git/HEAD、/index.html、/robots.txt（本轮未命中 .env 或 /.git，与正文 2026-10-06 记录的 dirb 命中列表不同）；katana -d 2 抓到 / 与 /page2.html；wfuzz 跑通（4723 请求、exit 0） ＋2026-10-10 补验（两条通道各一遍，夹具为容器内 python http.server 的 /api/{ads,auth,.config}；当日镜像轮换只改分发器，动词形态未变）：结构化 content_discover ①wordlist=api_endpoints、path= 空 → 2 命中（/api/ads、/api/auth 301）；②wordlist=common_dirs、path=api → 3 命中（新增 /api/.config 200）；③对照 path= 空同字典 → 仅根路径（/index.html），证明前缀真实生效；非法 path（../etc、a?b）与 wordlist=subdomains_5k 均被 usage_error 拒绝。第 6b 段的两条 ffuf 原文配方同镜像复跑：A（api-endpoints.txt 站点根）2 命中、B（common.txt 前 800 行截断 + /api/ 前缀）3 命中。2026-10-11 本轮新增的两条通道在**同一镜像（按 digest 引用）**上实测，夹具 172.29.0.2:8080（单文件 python 服务：未知路径一律 200 + 固定 64 字节＝软 404 形态，另有 /hang sleep 30s）：①`http_probe paths=/,/api/users,/api/orders,/does-not-exist,/admin/config,/hang` → 软 404 基准 `status=200 size=64`；`/`、`/api/users`、`/api/orders` 三条 `candidate_endpoint`（size 41/71/24，含一个 401），`/does-not-exist` 与 `/admin/config` 标 `soft404`（兜底路由），`/hang` 标 `no_response`，汇总 `paths=6 ok=5 no_response=1`；`paths` 里含 scheme / `//` 开头 / 空格 / 61 条均 `usage_error` exit 2。②`content_discover wordlist=api_endpoints rate=5` → `attempted=268 position=268 remaining=0 truncated=false`、hits=3（/api/auth 301、/api/graphql、/graphql）。③`wordlist=common_dirs entry_range=1-200` → `position=200 remaining=4523`，并直接写出 `schedulability: …需要分 4 段（1-1475 / 1476-2950 / 2951-4425 / 4426-4723）`。④`wordlist=common_dirs rate=2` 无分段 → 296s 后 `attempted=1179 truncated=true position=1179 remaining=3544`（**旧版这同一件事只回一行 `hits=1`**，看不出被截断）。⑤三段 `1-1600` / `1601-3200` / `3201-4723` 拼完整本字典（合计 4723 次请求＝字典条目数，命中并集 `/api`、`/robots.txt`），每段都自证 `position`/`remaining`。"
+  smoked: "沙箱实测@2727852f6c59：（2026-10-11 第八轮，对 SPA 夹具 docker/lab-spa 172.29.0.2:8080）①逐路由 chunk 抽取：`collect=endpoints page=/admin include_chunks=true` → `page: /admin`、`endpoints_page: /admin`、引用 11 条 chunk **全抓**（上限 24 条）、`endpoints_kind_counts: chunk=122, page=11`，命中带来源 `/api/admin/entry kind=quoted@/static/chunks/admin-1.js hits=2`；②批量复核（查询串 + 分命名空间基准 + 方法表）：`paths=/api/submissions,/api/submissions?mine=1,/api/run,/api/nope,/lists/xyz,/lists/mine,/nope probe_options=true` → 三条基准 `ns=/api/ status=404 size=22`、`ns=/lists/ status=200 size=1241`、`ns=/ status=404 size=8522`；`?mine=1` 判 ok/200/size=10 而**不带**是 size=2（结论性差异可见）；`/lists/xyz` 用**自己的**命名空间基准判 soft404（只用根基准会误判为 ok）；`/api/run` 从 GET 的 405 拿到 `allow=POST`、`/api/submissions` 从 OPTIONS 拿到 `allow=GET, POST, PUT, DELETE`，汇总 `method_tables=3 baselines=3 verbs_probed=7`；③速率对账：`content_discover rate=5 entry_range=1-60` → `rate_check: declared_rps=5 observed_rps=5.0 threads=5 per_thread_delay_s=1.00 verdict=ok`（60 请求 12.0s；旧配方同参数实测 25 req/s）。（2026-10-06 首轮对 fx-web 的 12 段配方实跑记录见 git 历史。）"
 ---
 
 # Web 面清点（recon-web-surface）
@@ -43,8 +43,10 @@ metadata:
 | 6b API 路由枚举 | `content_discover` | `wordlist=api_endpoints`（条目自带 `api/` 前缀，**站点根直接用**）；或通用字典 + `path=<你的前缀>`；`quickhits` 找高价值小文件 |
 | 7 命中复核与富化 | `http_probe` / `web_crawl` | `collect=tech`；`depth=2 max_pages=100` |
 | 7b 端点/路由抽取 | `http_probe` | **`collect=endpoints`**：固定三种形态（href/src/action、引号内绝对路径、fetch/axios 第一实参），短行带 hits；**默认 `include_chunks=true` 会跟随同主机的 `.js` 再抽一遍**——SPA（Next.js/Vite）的路由**常常只在 chunk 里**（实测：首页 20 条，chunk 另有 11 条 `/api/*`，字典枚举全部漏掉） |
+| 7c 批量路径状态复核（已知 60 条里哪些是真端点） | `http_probe` | **`paths=/a,/b,…`**（≤60 条逗号分隔，**可带查询串** `/api/x?mine=1`）；软 404 基准**按命名空间各取一条**，同形即标 `soft404`；`allow` 列给未鉴权方法表 |
+| **7d SPA/Next.js 逐路由收 API 路径（本会话最大摩擦的正解）** | `http_probe` | **`page=/那条路由` + `collect=endpoints`**：抽取与 chunk 跟随都换成这一页——路由自己的 chunk 才含 API 调用（实测每条路由自带 8–11 个 chunk）；逐路由调 14 次 ≫ 手写 14 段 `for p in …; do curl; grep; done` |
+| **2c 未鉴权方法表清点（零写请求、高产）** | `http_probe` / `http_check` | `probe_options=true`（对每条路径**额外**发只读 OPTIONS 读 `Allow`）或 `check=http_verbs`（根路径 OPTIONS+TRACE）；**405 响应的 `Allow` 头也算**——`paths=` 的第 7 列就能拿到 |
 | 6c 大字典分段（一次跑不完就分次拼） | `content_discover` | **`entry_range=1-2000`**（1 基双闭区间；空=整本）；返回的 `coverage:` 行自证 `entries_attempted/entries_truncated/position/entries_remaining` |
-| 7c 批量路径状态复核（已知 60 条里哪些是真端点） | `http_probe` | **`paths=/a,/b,…`**（≤60 条逗号分隔，只发 GET）；自带随机路径的软 404 基准，同形即标 `soft404` |
 | 8 配置面暴露核查 | `exposure_check` | `paths=git,env,swagger,openapi,actuator,server_status,phpinfo,web_config,dockerfile`（逗号分隔，≤10；**项名**不是路径） |
 | 9 基线核验（头/Cookie/CORS/方法/错误泄露） | `http_check` | `check=security_headers` / `cookies` / `cors_policy` / `http_verbs` / `error_disclosure` |
 
@@ -54,8 +56,8 @@ metadata:
 **两条新通道的分工（2026-10-11 操作者诉求 #3/#4，别把它们的用途搞反）**：
 
 - **发现 vs 复核**：`collect=endpoints` 与 `content_discover` 负责**发现**新路径；`http_probe paths=/a,/b,…` 负责**复核**你手里那份清单（"这 60 条里哪些是真端点、哪些只是兜底路由"）。**`paths=` 不能替代发现**——它的输入是你已有的路径集合，集合之外的东西它一条也看不见；反过来，拿字典枚举去确认 60 条已知路径既慢又（大字典时）跑不完。
-- **`paths=` 的判据**：每条只发一次 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note`；容器**先用一条随机路径**取软 404 基准，**状态码或长度任一与基准不同**才算候选端点（另有 `candidate_endpoint:` 短行可直接引用）。同状态码同长度 ⇒ `note=soft404`：该目标对不存在的路径也回同一份响应（SPA/兜底路由），**别读成「端点存在」**。汇总 `paths_summary: paths=N ok=M no_response=K` 里 `no_response` 是"请求没打通"（超时/被拒/连接重置），**不是"不存在"**，不得混进报告的"未开放"。
-- **`paths=` 的参数纪律**：逗号分隔的**绝对路径**、≤60 条、**不得含 scheme/主机/空格**（递了会被 exit 2 明确拒绝——那是把"路径"当"目标"用，范围裁决针对目标，混进来会让范围记账失效）；也不接受查询串/片段与 `..` 段。
+- **`paths=` 的判据**：每条只发一次 **GET**，逐条回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note<TAB>baseline_ns<TAB>allow`；容器**按命名空间各取一条随机路径**作软 404 基准（页面 404 与 API 404 常不同形：实测 `text/html` 8596B vs `application/json` 22B），**与同命名空间基准的状态码或长度任一不同**才算候选端点（另有 `candidate_endpoint:` 短行可直接引用）。同形 ⇒ `note=soft404`：该命名空间对不存在的路径也回同一份响应（SPA/兜底路由），**别读成「端点存在」**。汇总 `paths_summary: paths=N ok=M no_response=K method_tables=J baselines=B` 里 `no_response` 是"请求没打通"（超时/被拒/连接重置），**不是"不存在"**，不得混进报告的"未开放"。
+- **`paths=` 的参数纪律**：逗号分隔的**绝对路径**、≤60 条、**不得含 scheme/主机/空格**（递了会被 exit 2 明确拒绝——那是把"路径"当"目标"用，范围裁决针对目标，混进来会让范围记账失效）；也不接受片段 `#` 与路径里的 `..` 段。**可以带查询串**（`/api/submissions?mine=1`、`/api/x?a=1&b=2`）：查询串字符集只含字母数字与 `. _ ~ % = & : @ / + [ ] -`，`$`、引号、反斜杠、`{ }`、`< >`、`|`、`;` 一律不放行——**这是结论性验证的唯一结构化通道**（"`?mine=1` 与不带是不是两个结果"这类判据别再退回手写 curl）。
 - **`content_discover` 的覆盖度**：返回里 `coverage:` 一行自证 `wordlist_entries / entries_total / entry_range / requested / entries_attempted / entries_truncated / entries_remaining / position / reason`。**`entries_truncated=true` 时 hits 只能当下界读**（旧版摘要里看不出这一点，正是"跑了一半"被读成"全站干净"的成因）。大字典跑不完是**数学**不是故障：`common_dirs` 4723 条按 5 请求/秒需 ~945s，而单条命令的墙钟上限（`content_discover` 的模板超时，见能力快照/模板声明，不在这里手抄）远小于它 ⇒ 摘要会直接给出「**需要分 N 段**」与具体区间；照它用 `entry_range=` 依次调用即可拼完整本字典（每次返回都自证"从第几条跑到第几条"）。
 
 ### 1. 站点可达性与状态码
@@ -91,6 +93,20 @@ curl -sS -m 10 -X OPTIONS -D - -o /dev/null http://<目标>:<端口>/ | grep -i 
 期望：`Allow: GET, HEAD` 之类。
 判据：有 `Allow` 说明方法被显式声明；返回 501（如 `SimpleHTTP` 实测）**不代表端点不存在**，只是该实现不支持 OPTIONS。
 > `HEAD` 与 `GET` 头可能不同；某些服务不支持 HEAD（返回 405/501），此时一律回退到上面的 `GET -D -`。
+
+### 2c. 未鉴权方法表清点（**零写请求**，本会话最值钱的一步）
+```bash
+# 逐端点：对每条已知路径发只读 OPTIONS，读 Allow（结构化通道，输出进审计）
+#   pentest_recon technique=http_probe target_selector=… port=… probe_options=true \
+#     paths=/admin,/run,/lists,…
+# 单路径：只抽这一条的 Allow
+curl -sS -m 10 -X OPTIONS -D - -o /dev/null http://<目标>:<端口>/admin | grep -i '^allow:'
+```
+期望：`allow=GET, HEAD, POST, PUT, DELETE`（或 `method_table: /admin allow=POST,PUT,DELETE` 短行）。
+判据：**405 与 OPTIONS 的 `Allow` 头在未鉴权下就给出完整方法表**——实测用它一次拿到 20 条写端点的 `POST/PUT/DELETE`，**一个写请求都没发**。这是**清点**（"这个端点接受哪些方法"），不是利用：
+- 拿到方法表**只记事实**，写方法一律不发（PUT/DELETE 属利用类动作，要向人类逐条申请）；
+- `Allow` 缺失（`missing`）与 501 都不是"端点不存在"——只是该实现没声明；
+- `paths=` 的第 7 列 `allow` 顺带给出同一信息（GET 的 405 响应常带），**不必为清点再跑一轮**。
 
 ### 3. 标题与正文摘要
 ```bash
@@ -140,7 +156,9 @@ ffuf -u http://<目标>:<端口>/FUZZ \
 期望：命中行形如 `/.git/HEAD`、`/robots.txt`、`/index.html`（2026-10-06 在静态靶站上就是这么命中的）。
 判据：`-fs` 已滤掉软 404，剩下的每条都用第 7 步复核后才算资产。
 注意事项（都是实测得到的）：
-- **本版本 ffuf v1.1.0 没有 `-rate`**，写 `-rate 5` 会直接报 `flag provided but not defined: -rate`。限速只能用 `-t`（并发）与 `-p`（每请求延迟）。
+- **本版本 ffuf v1.1.0 没有 `-rate`**，写 `-rate 5` 会直接报 `flag provided but not defined: -rate`。限速只能用 `-t`（并发）与 `-p`（**每线程**请求间隔）。
+- **`-p` 是"每线程"间隔，不是"整体"间隔**（2026-10-11 实测，最容易算错的一条）：整体速率 ≈ `线程数 ÷ 延迟`。`-t 5 -p 0.2` 实测 **25 req/s**（不是 5），`-t 5 -p 1.0` 才是 5 req/s，`-t 1 -p 1.0` 是 1 req/s。想按声明速率（stealth 1/s、standard 5/s、fast 10/s）跑，用 `-t <r> -p 1.0` 或 `-t <r×0.5> -p 0.5` 这类**等价比**，别把 `-p` 理解成全局间隔。
+- 走结构化通道（`content_discover`）时这件事由服务端保证：它按 `delay = threads/rate` 下发，并在报告里逐轮对账 `rate_check: declared_rps=… observed_rps=… verdict=ok|over`。**看到 `verdict=over` 就按实测值重排预算**（"声明 5/s 而实际 22/s"曾让整段预算差 4 倍）。
 - `common.txt` 共 **4723** 行（含扩展名的文件与目录混合字典），`-t 5 -p 0.2` 实测几分钟内跑完。
 - **想跑大字典再换 `raft-small-directories.txt`（20116 行）——但它是纯目录字典，没有文件项**：2026-10-06 实测它一条文件命中都产生不了（只有空行匹配到 `/`）。要用它必须配 `-e .txt,.html,.php` 之类扩展名，或另接文件字典；跑完约 25–30 分钟，时间紧就 `head -n 2000` 截断并在覆盖说明里写明。
 - 备选：`-ac`（自动校准）也能去掉软 404，但显式 `-fs` 的判据更可解释、更方便复核，优先用它。
@@ -186,6 +204,34 @@ jq -r '.results[].url' /tmp/web-ffuf.json | while read -r u; do
 done
 ```
 
+### 7d. SPA/Next.js：**逐路由**收 API 路径（本会话最大的摩擦，也是唯一高产出路径）
+目标站是 Next.js/Vite 这类 SPA 时：**字典枚举近乎无效**（实测 268 条只命中 1 条），而每条路由**自己的 chunk**
+里成组写着 API 调用（实测 `/admin`、`/run`、`/lists` 各带 8–11 个 `/api/*`）。抽取器**只跟被取页面引用的 chunk**
+（上限 24 条 / 每条 256KiB / 合计 1MiB），所以关键是**一页一页地取**——`page=` 就是干这个的：
+
+```bash
+# 取一条路由的页面，并列出它引用的 chunk（真实形态：/_next/static/chunks/…）
+curl -sS -m 10 'http://<目标>:<端口>/admin' \
+  | grep -oE '(src|href)="[^"]*\.js[^"]*"' | cut -d'"' -f2 | sort -u
+# 再逐块抽 API 调用（注意：chunk 必须与页面在**同一条命令**里取——容器是一次性的）
+for c in $(curl -sS -m 10 'http://<目标>:<端口>/admin' \
+             | grep -oE '(src|href)="[^"]*\.js[^"]*"' | cut -d'"' -f2 | sort -u); do
+  echo "== $c"
+  curl -sS -m 10 "http://<目标>:<端口>$c" \
+    | grep -oE '"/api/[a-zA-Z0-9_/-]+"' | sort -u
+done
+```
+期望：页面的 chunk 列表（几条到十几条）+ 每块里 `"/api/..."` 的字面量（**成组出现**，这是 SPA 的正常形态）。
+判据：把这些 `/api/*` 去重后**逐条复核**（判据 = 各自的 HTTP 状态码：2xx/401/403/405 都算存在，与软 404 基准同形的不算）——实测一口气拿到 **38 条、38/38 全部存在**。
+**优先用结构化通道**（等价但自带 provenance 与逐条核账，且不用手写 grep——手写 grep 抽路由的失败是**静默**的，见「常见失败」）：
+```
+pentest_recon technique=http_probe target_selector=… port=… collect=endpoints include_chunks=true page=/admin
+pentest_recon technique=http_probe target_selector=… port=… collect=endpoints include_chunks=true page=/run
+…（每条路由一次；`endpoints_page:` 行自证抽的是哪一页，命中带 `kind=quoted@<chunk 路径>`）
+```
+**不要把 14 条路由写成 14 段 bash 循环**：结构化调用同样便宜、还能逐条核账。
+**`page=` 与 `paths=` 的分工**：`page=` 负责**发现**（抽取这一页的 chunk 里的路径），`paths=` 负责**复核**（把拿到的那批路径逐条判真伪）。顺序是先 7d 再 7c。
+
 ### 8. 需要外网时的退化
 以下在沙箱**不可达**，不要反复重试：在线指纹库/CDN 归属、CVE 站点、下载额外字典、外部 DNS。
 退化顺序：① 改用人类在控制台提供的材料（页面副本、指纹、字典）；② 只用镜像内已有字典；③ 用记忆中的公开信息作线索，但必须标注 `[INFERENCE]`，不得写成已验证事实。
@@ -222,8 +268,12 @@ timeout 5 curl -sS -o /dev/null -w '%{http_code}\n' http://example.invalid/ ; ec
 | `curl … | head -30` 输出里塞进几百行内容 | 响应体是**一整行**（RSC/JSON/压缩后文本）：`head` 按**行**截断，单行内容它一条都不切 | 按**字节**截：`cut -c1-400`、`fold -w 200`；或走结构化通道（`collect=endpoints` / `http_check`），它们的输出天然是短行 |
 | `grep -oE '[一-龥]+'` 报 `Invalid collation character`（**rc=2**，管道里像"没命中"） | **不是 locale**（容器已是 `C.UTF-8`）：GNU grep 3.8 拒绝**多字节字符区间** | 中文抽取别用区间：`grep -oP '\p{Han}+'`（实测可用），或 `python3 -c "import re,sys;print(' '.join(re.findall(r'[\u4e00-\u9fff]+', sys.stdin.read())))"`。`LC_ALL=C` 能让区间"过"，但那只是退化成字节匹配，别依赖 |
 | `content_discover` 的命中数看着"结论完整"，其实只跑了半本字典 | 单条命令被 ffuf 的 `-maxtime` 截断，而**旧摘要里看不见**（上游 JSON 有 `maxtime`/`position`，摘要里没有） | 看 `coverage:` 行的 `entries_truncated=` / `position=` / `entries_remaining=`；`entries_truncated=true` 时 hits 只当下界，按 `schedulability:` 给的区间用 `entry_range=` 续跑拼完 |
-| 60 条路径只能写 `for p in …; do curl …; done` 逐条确认，输出没法核账、也进不了审计 | 没有批量复核通道 | 用 `http_probe paths=/a,/b,…`：逐条 `path<TAB>status<TAB>size<TAB>content_type<TAB>note` + 随机路径的软 404 基准；`note=soft404` 是兜底路由，`no_response` 是没打通 |
-| 递进去的 `paths=` 报 `usage_error`（含 scheme/主机/空格） | 那是把"路径"当"目标"用，服务端**有意**拒绝（否则范围记账失效） | 只给绝对路径（`/api/users`）；要打另一个主机就换 `target_selector` 重新走范围裁决 |
+| 60 条路径只能写 `for p in …; do curl …; done` 逐条确认，输出没法核账、也进不了审计 | 没有批量复核通道 | 用 `http_probe paths=/a,/b,…`：逐条 `path<TAB>status<TAB>size<TAB>content_type<TAB>note<TAB>baseline_ns<TAB>allow` + **分命名空间**的软 404 基准；`note=soft404` 是兜底路由，`no_response` 是没打通 |
+| 递进去的 `paths=` 报 `usage_error`（含 scheme/主机/空格） | 那是把"路径"当"目标"用，服务端**有意**拒绝（否则范围记账失效） | 只给绝对路径（`/api/users`，**可带 `?k=v`**）；要打另一个主机就换 `target_selector` 重新走范围裁决 |
+| SPA 上字典枚举几乎全灭（268 条只中 1 条），而页面里明明有大量 `/api/` 调用 | 路由**只在 chunk 里**，而抽取器只跟**被取页面**引用的 chunk——默认取的是 `/` | 逐路由调 `http_probe collect=endpoints page=/admin`（第 7d 步）；一次调用一条路由，命中带 `@<chunk 路径>` |
+| 抽出来的路径成堆但不知道哪些是真的 | 抽取只是"页面上写了" | 用 `paths=` 批量复核（第 7c 步）：每条 GET + 分命名空间软 404 基准，`note=soft404` 的剔除 |
+| 按声明速率排的预算差好几倍（声明 5/s、实测 22/s） | ffuf 的 `-p` 是**每线程**间隔 ⇒ 实际 ≈ `线程数 ÷ 延迟`（旧公式 `1/rate` 配 `-t rate` 打出 `rate²`） | 走 `content_discover` 看 `rate_check: … verdict=`；手写 ffuf 用 `-t <r> -p 1.0`；`verdict=over` 时按实测值重排预算 |
+| 每条命令产出两份近重复证据文件（我写的台账 + 派生副本） | `save_stdout_as_evidence` 又落了一份 | 命令最后一段里若已有 `> /work/…` / `tee /work/…`，现在会回 `evidence_skipped: command_wrote_mount`（不重复落盘）；想让文件名好读就把 `purpose` 写成短语（文件名从它派生） |
 
 ## 不做的事
 - 不做登录爆破、不做参数 fuzz/注入探测（`ffuf -d` POST、sqlmap 等），那是漏洞分析/利用阶段。
@@ -233,7 +283,9 @@ timeout 5 curl -sS -o /dev/null -w '%{http_code}\n' http://example.invalid/ ; ec
 
 ## 产出（交给下一步）
 - Web 资产条目：`URL`、状态码、`Server`、标题、`Content-Type`、是否受限（401/403）。
-- 软 404 基准：`code` + `size`（或正文正则）签名，供后续阶段复用。
+- 软 404 基准：**每个命名空间一条** `code` + `size`（或正文正则）签名（页面与 API 常不同形，供后续阶段复用）。
+- **未鉴权方法表**：每条端点接受的方法（`Allow`）——**清点结果，不是利用结果**；写方法（PUT/DELETE/POST）列出来但**一个都不发**。
+- **逐路由 API 清单**（SPA）：路由页 → 它引用的 chunk → chunk 里的 `/api/…` 字面量（带来源文件），以及复核后的存在性判定。
 - 命中清单：路径、状态码、长度、重定向目标、证据（curl 原文一行）。
 - 覆盖说明：用了哪份字典（行数）、并发/延迟、跑了多久、哪些没跑（及原因）。**走结构化通道时直接引用 `coverage:` 行**（`wordlist_entries/entries_total/entry_range/entries_attempted/entries_truncated/entries_remaining`）——它自证"跑到哪儿、还剩多少"，别自己从 hits 数推覆盖。
 - 未决线索：可疑 vhost、受限端点、指纹冲突项。

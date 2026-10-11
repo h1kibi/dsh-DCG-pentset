@@ -2820,6 +2820,15 @@ export interface TemplateParam {
   readonly min?: number;
   readonly max?: number;
   readonly pattern?: string;
+  /**
+   * 该参数的取值是**URL 路径/查询串**（2026-10-11 操作者实测 #2）：`&` 是合法内容。
+   *
+   * 只对这类参数放行 `&`（防载荷闸门的 shell 元字符规则会把它当命令拼接）：它的取值以
+   * **argv 单个 token** 下发给容器（没有 shell 参与），容器的形状校验器**自己**拒绝 `$`、
+   * 引号、反斜杠、花括号、`<>|;` 这些真正危险的字面量——也就是说这里的放行面比闸门更窄。
+   * 其余受限字符（引号、`$`、`{}`、`<>`、`|`、`;`、反斜杠）**照旧一个不放**。
+   */
+  readonly queryCapable?: boolean;
 }
 
 export interface ActionIntent {

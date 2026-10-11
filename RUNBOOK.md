@@ -417,6 +417,33 @@ node scripts/resync-smoke-stamps.mjs 3401b215a4ab
 > ⚠ **⑧ 产生的 `3401b215a4ab…` 已被 ⑨ 取代**（同日的独立复查在容器侧又抓到两处，见 §6.5.13.8
 > 末尾的"复查后的两处修正"）。⑧ 这一段保留，是因为它记录的轮换过程本身仍然成立。
 
+#### ⑩ 本轮轮换记录（2026-10-11，第八轮）：操作者实测的五条（工具面）
+
+**轮换依据**：`docker/tools/pentest-tool` 改了（`http_probe` 新增 `page=` / `probe_options=` / 查询串、
+软 404 基准改**按命名空间**各取一条、chunk 上限 8→24 且列出被跳过的；`content_discover` 修速率公式
+`delay = threads/rate` 并逐轮对账 `rate_check`；删除遗留别名 `entries_scanned=`）。
+宿主侧同步改了 `src/execution/templates.ts`（两个新参数 + 查询串形状 + `queryCapable` 的 `&` 放行）、
+`src/tools/worker.ts`（工具面描述 + 证据不重复落盘）、`src/tools/evidence-sink.ts`、`src/compose.ts`。
+
+```bash
+# ① 构建（只有 COPY pentest-tool 那一层实打实重建）
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5005/pentest-tools:0.1.0
+# ② 重钉**两处**（harness.dev.patch.yml 与 profile 的 cordis.patch.yml）
+#    d6de07ed3f5c → 2727852f6c59
+# ③ 内容核验：镜像内分发器与工作副本 sha256 相同（fba63eb8ff99…）
+# ④ 冒烟：夹具 docker/lab-spa（SPA 双命名空间）与 docker/lab-archive（档案消费）
+#    见 skills/recon-web-surface 与 skills/engagement-archive 的 smoked 戳（都记了原文输出）
+# ⑤ 戳轮换：node scripts/resync-smoke-stamps.mjs 2727852f6c59（25 份 / 27 处）
+```
+
+**本轮冒烟的关键读数**（原文见两份 skill 的戳）：
+`page=/admin` 跟满 11 条 chunk（`chunk=122, page=11`）；`paths=` 带查询串时 `?mine=1` 与不带
+**长度不同**（10 vs 2）；三条命名空间基准分别 `404/22 json`、`200/1241 html`、`404/8522 html`；
+`/lists/xyz` 用**自己的**基准判 soft404；`allow` 列与 `probe_options=true` 拿到 3 条方法表；
+`rate_check: declared_rps=5 observed_rps=5.0 verdict=ok`（旧配方同参数为 25 req/s）。
+
 #### ⑨ 本轮轮换记录（2026-10-11，复核轮）：`content_discover` 字段名对齐 + 两条静态锁
 
 **轮换依据**：独立复查（Main）在容器侧又抓到两处，改完必须再走一次 §2.1 全流程：
@@ -424,8 +451,8 @@ node scripts/resync-smoke-stamps.mjs 3401b215a4ab
 1. `content_discover` 的 `summary:` 行用了**裸** `attempted=`/`truncated=`/`remaining=`，而同一动词的
    `coverage:` 行用的是 `entries_attempted=`/… ⇒ **一个动词两套名字**。现已逐字对齐（条目轴
    `entries_total`/`entries_requested`/`entries_attempted`/`entries_truncated`/`entries_remaining`、
-   请求轴 `requests_total`/`requests_attempted`，两行同值同名；`entries_scanned=` 是旧锁钉住的别名，
-   与 `entries_attempted=` 同值）。
+   请求轴 `requests_total`/`requests_attempted`，两行同值同名；旧别名 `entries_scanned=`
+   已于第八轮镜像删除）。
 2. 两条静态锁补进 `test/pentest-tool-static.test.ts`：**收尾可达性**（每个动词要么自己调
    `report.finish(`，要么经一层共享助手收尾——`service_probe` → `nmap_ports`）与**统计字段命名**
    （`report.finish(...)`/`report.line("summary: …")` 里的字符串字面量不许出现裸 `attempted=`/

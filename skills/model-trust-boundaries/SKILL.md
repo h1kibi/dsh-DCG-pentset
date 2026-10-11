@@ -6,7 +6,7 @@ metadata:
   version: 0.1.0
   phase: threat-modeling
   sources: [PTES 威胁建模, OWASP Threat Modeling, MITRE ATT&CK 战术]
-  smoked: "沙箱实测@d6de07ed3f5c：7 块原文照跑全通过（台账按正文结构先铺：2 条 0 引用、1 条缺 boundary、1 条 auth=unknown）：步骤 1 按 kind/ref/引用数计数并暴露 0 引用记录；步骤 2 入口/出口六列，缺列走 ?/unknown；步骤 3 列出 memory:1002/1003 待判定，只读核验原文 curl 打 fx-web 172.29.0.2:8080/index.html 得 HTTP/1.0 200 OK（exit 0），按判据 200 只证该路径匿名可达、不判入口免认证；步骤 4 数据流列出 boundary=?；步骤 5 点名 `svc:fx-api -> db:pg [boundary=?]`；步骤 6 自检 flows=2 with_evid=1（差额=1，与假设清单一致）；台账混入日志行复现 jq parse error（exit 4）"
+  smoked: "沙箱实测@2727852f6c59：7 块原文照跑全通过（台账按正文结构先铺：2 条 0 引用、1 条缺 boundary、1 条 auth=unknown）：步骤 1 按 kind/ref/引用数计数并暴露 0 引用记录；步骤 2 入口/出口六列，缺列走 ?/unknown；步骤 3 列出 memory:1002/1003 待判定，只读核验原文 curl 打 fx-web 172.29.0.2:8080/index.html 得 HTTP/1.0 200 OK（exit 0），按判据 200 只证该路径匿名可达、不判入口免认证；步骤 4 数据流列出 boundary=?；步骤 5 点名 `svc:fx-api -> db:pg [boundary=?]`；步骤 6 自检 flows=2 with_evid=1（差额=1，与假设清单一致）；台账混入日志行复现 jq parse error（exit 4）"
 ---
 
 # 信任边界与数据流（model-trust-boundaries）

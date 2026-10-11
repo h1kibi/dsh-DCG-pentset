@@ -56,6 +56,28 @@ export interface EvidenceWriteResult {
 }
 
 /**
+ * 命令是否**自己**把产物写进了挂载根（⇒ 宿主侧的自动落盘不必再写一份近重复文件）。
+ *
+ * 2026-10-11 操作者实测 #5：命令里写了 `/work/...` 的台账/报告，`save_stdout_as_evidence`
+ * 又落一份——两条命令产出两份近重复文件，而派生那份的名字是用途 slug 的截断，可读性更差。
+ * 判据只看**最后一段简单命令**（按 `|`、`&&`、`||`、`;`、换行切分）：中间步骤写临时文件不算
+ * 「产物已落盘」，否则会拿走那条命令**真正的** stdout 兜底（安全网的价值全在"模型忘了 tee"）。
+ * 命中形态：`> /work/...`、`>> /work/...`、`tee /work/...`（含 `tee -a`、引号）。
+ */
+export function writesIntoMount(command: string, mountContainerPaths: readonly string[]): boolean {
+  const segments = command.split(/\|\||&&|[|;\n]/u).filter((segment) => segment.trim() !== '');
+  const last = segments.at(-1) ?? '';
+  return mountContainerPaths.some((mountPath) => {
+    const root = escapeRegExp(mountPath.replace(/\/+$/u, ''));
+    return new RegExp(`(?:>>?\\s*['"]?${root}/)|(?:\\btee\\s+(?:-a\\s+)?['"]?${root}/)`, 'u').test(last);
+  });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+/**
  * 写盘。`root` 是宿主上的挂载根（沙箱里对应 `/work`）；`relPath` 只接受相对路径。
  *
  * **绝不抛**：它是执行后的附带动作，写不进去（目录不可写、磁盘满）不该把一次**已经执行完**

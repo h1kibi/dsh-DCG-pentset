@@ -58,13 +58,14 @@ export const RECON_TECHNIQUES: Readonly<Record<string, ReconTechniqueSpec>> = Ob
     enums: { enumerate_protocols: ['on', 'off'] },
   },
   http_probe: {
-    defaults: { port: 80, scheme: 'auto', follow_redirects: 0, collect: 'headers', verify_tls: 'true', include_chunks: 'true', paths: '' },
+    defaults: { port: 80, scheme: 'auto', follow_redirects: 0, collect: 'headers', verify_tls: 'true', include_chunks: 'true', paths: '', page: '', probe_options: 'false' },
     required: [],
     enums: {
       scheme: ['http', 'https', 'auto'],
       collect: ['headers', 'security_headers', 'robots', 'sitemap', 'tech', 'endpoints'],
       verify_tls: ['true', 'false'],
       include_chunks: ['true', 'false'],
+      probe_options: ['true', 'false'],
     },
   },
   content_discover: {

@@ -139,11 +139,25 @@ const VERIFY_TLS_CARRY =
  *   1. 含 scheme/主机（`https://host/x`、`host:80/x`）：不带前导 `/` 的串一律不匹配；
  *      `//host/x`（协议相对 URL）由 `(?!/)` 排除；
  *   2. 含空白：`k=v` 分词靠空格，路径里出现空白会把一条命令切成两个 token；
- *   3. `..` 段：正则表达不了"段"语义，用 `(?!.*\.\.)` 直接禁掉（与 `path` 的容器侧拒绝同口径）。
- * 字符集是 URL path 的安全子集（去掉 `,`：它是分隔符）。
+ *   3. `..` 段：正则表达不了"段"语义，用 `(?![^?]*\.\.)` 在**路径部分**直接禁掉
+ *      （与容器侧 `split_probe_path` 同口径：查询串里的 `..` 是取值内容，不在这里拦）。
+ * 字符集是 URL path/query 的安全子集（**去掉 `,`**：它是分隔符）。查询串部分是 2026-10-11
+ * 操作者实测 #2 补的：只读 GET 上 `?k=v` 是表达语义的唯一手段（`?mine=1` 与不带是一对判据），
+ * 此前被一刀拒掉 ⇒ 只能退回手写 curl（不进审计通道、逐条无法核账）。
  */
-const PROBE_PATHS_PATTERN =
-  "^(?!.*\\.\\.)(|/(?!/)[A-Za-z0-9._~/!@%+=-]{0,300}(,/(?!/)[A-Za-z0-9._~/!@%+=-]{0,300}){0,59})$";
+const PROBE_PATH_CHARS = "[A-Za-z0-9._~/!@%+=-]";
+/**
+ * URL 查询串的安全子集（与容器侧 `PROBE_QUERY_RE` **逐字符同集**，由测试对拍）。
+ *
+ * **刻意不含**真正危险的 shell 字面量（`$`、引号、反斜杠、`{` `}`、`<` `>`、`|`、`;`）——
+ * 它是"放行 `&`"这件事的安全前提：放行面只有 `&` 一个字符（见 `TemplateParam.queryCapable`）。
+ * 也不含 `,`（paths 的分隔符）。
+ */
+const PROBE_QUERY_CHARS = "[A-Za-z0-9._~%=&:@/+\\[\\]-]";
+const PROBE_PATH_ITEM = `/(?!/)(?![^?]*\\.\\.)${PROBE_PATH_CHARS}{0,300}(?:\\?${PROBE_QUERY_CHARS}{0,200})?`;
+const PROBE_PATHS_PATTERN = `^(|${PROBE_PATH_ITEM}(,${PROBE_PATH_ITEM}){0,59})$`;
+/** 单条页面路径（`page`）：同上，但只允许一条。 */
+const PROBE_PAGE_PATTERN = `^(|${PROBE_PATH_ITEM})$`;
 
 const FORBIDDEN_PAYLOAD_RULES: readonly ForbiddenPayloadRule[] = Object.freeze([
   {
@@ -335,7 +349,13 @@ export function validateParams(
         }
         // `allowFreeForm` 只由注册信息打开（见 `ActionTemplateSpec.allowFreeForm`）：
         // 自由命令模板的参数就是要携带任意文本，黑名单在这里没有意义。
-        const forbidden = options.allowFreeForm === true ? undefined : findForbiddenPayload(value);
+        //
+        // `queryCapable`（2026-10-11）：URL 路径/查询串里 `&` 是合法内容，而 shell 元字符规则
+        // 会把它当命令拼接。放行面**只到这一个字符**：检查前把 `&` 换成 `=`（它同时是那些规则的
+        // 边界符、又不在受限字符集里 ⇒ 边界不会因替换消失，也不会引入新的命中），其余受限字符
+        // （引号、`$`、`{}`、`<>`、`|`、`;`、反斜杠）照旧一个不放。
+        const checked = p.queryCapable === true ? value.replace(/&/gu, '=') : value;
+        const forbidden = options.allowFreeForm === true ? undefined : findForbiddenPayload(checked);
         if (forbidden !== undefined) {
           return paramError(
             template.id,
@@ -811,7 +831,14 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
         // 批量路径状态复核（2026-10-11 操作者诉求 #3）：此前只能退回手写 `pentest_exec` 的
         // bash for 循环 + curl 逐条确认「这 60 条路径是真实端点还是兜底路由」。
         // 空串 = 关闭；≤60 条（逐条一次 GET，输出与墙钟都按条数摊）。
-        { name: 'paths', kind: 'string', pattern: PROBE_PATHS_PATTERN },
+        { name: 'paths', kind: 'string', pattern: PROBE_PATHS_PATTERN, queryCapable: true },
+        // 取哪一个页面（2026-10-11 操作者实测 #1）：SPA/Next.js 上**路由自己的 chunk** 才含
+        // API 调用，而 `collect=endpoints` 只跟随**被取页面**引用的 chunk ⇒ 逐路由抽取必须能指定页面。
+        // 空串 = 站点根 `/`；paths= 批量模式不取页面，本参数在那条通道里不生效（报告里会写明）。
+        { name: 'page', kind: 'string', pattern: PROBE_PAGE_PATTERN, queryCapable: true },
+        // 方法表清点（2026-10-11 操作者实测）：405/OPTIONS 的 `Allow` 头在未鉴权下给出完整方法表。
+        // true ⇒ 对同一条路径（page 或 paths 里的每一条）**额外**发一次 OPTIONS（只读）并读 `Allow`。
+        { name: 'probe_options', kind: 'enum', values: ['true', 'false'] },
       ],
       targetPlaceholder: 'target',
       // 60 条 × 逐条一次 GET：60s 会把每条压到 1s（含连接建立），实测靶站上容易假 no_response。
@@ -826,12 +853,14 @@ const RECON_TEMPLATES: readonly ActionTemplateSpec[] = [
       port: 'HTTP(S) 端口',
       scheme: 'auto 先试 https 再试 http',
       follow_redirects: '跟随跳转的最大跳数；**跨主机跳转一律拒绝**（与宿主同一策略，需要重新裁决）',
-      paths: '**批量路径状态复核**（逗号分隔，≤60 条，每条形如 `/api/users`）。给了它：只对每条发 **GET**，回 `path<TAB>status<TAB>size<TAB>content_type` 逐条 + 汇总 `paths=N ok=M no_response=K`；并先用一条**随机路径**取软 404 基准（同状态码同长度 ⇒ 标 `soft404`，即兜底路由而非端点）。**拒绝**含 scheme/主机/空格的串（那是把"路径"当"目标"用，范围记账会失效）、拒绝 `..` 段。它是**复核**通道（确认已知路径的真伪）；**发现**新路径用 `collect=endpoints` 或 `content_discover`——别用它替代后者',
-      include_chunks: '**endpoints 专用**：是否跟随同主机的 `.js` 引用（`/_next/static/chunks/*` 这类）再抽一遍——路由常常**只在 chunk 里**。只跟同主机（跨主机一律跳过，与重定向同一纪律），上限 8 条 / 每条 256KiB / 合计 1MiB；命中会标出 `kind=quoted@<chunk 路径>` 供复核',
+      paths: '**批量路径状态复核**（逗号分隔，≤60 条，每条形如 `/api/users` 或 `/api/submissions?mine=1`）。给了它：只对每条发 **GET**，回 `path<TAB>status<TAB>size<TAB>content_type<TAB>note<TAB>baseline_ns<TAB>allow` 逐条 + 汇总 `paths=N ok=M no_response=K method_tables=J`；软 404 基准**按命名空间各取一条**（页面与 API 的兜底常常不同形：`text/html` 8.5KB vs `application/json` 22B），同命名空间内同状态码同长度的命中标 `soft404`。**拒绝**含 scheme/主机/空格的串（那是把"路径"当"目标"用，范围记账会失效）、拒绝片段 `#` 与路径里的 `..` 段。它是**复核**通道（确认已知路径的真伪）；**发现**新路径用 `collect=endpoints` 或 `content_discover`——别用它替代后者',
+      page: '**只取哪一页**（空串 = 站点根 `/`）：抽取与跟随 chunk 都以这一页为对象。SPA/Next.js 上**路由自己的 chunk** 才含 API 调用（实测：每条路由自带 8–11 个 chunk），所以逐路由调 `collect=endpoints page=/admin`、`page=/run` 是唯一高效路径——比自己写 `for p in …; do curl; grep; done` 更可信（每次调用自带来源标注 `kind=quoted@<chunk>`，而手写 grep 的失败是静默的）。可带查询串（`/x?k=v`）。`paths=` 批量模式下本参数不生效',
+      probe_options: '**方法表清点**：true ⇒ 对同一条路径（`page` 或 `paths` 里的每一条）**额外**发一次只读 `OPTIONS`，读出 `Allow` 头。405/OPTIONS 的 `Allow` 常在**未鉴权**下就给出完整方法表（实测：一个写请求都没发就拿到 20 条写端点的 POST/PUT/DELETE）——这是清点，不是利用；**别**为了"确认"去发 PUT/DELETE。`paths=` 模式下 `Allow` 同时作为第 7 列返回（GET 的 405 响应也常带它）',
+      include_chunks: '**endpoints 专用**：是否跟随同主机的 `.js` 引用（`/_next/static/chunks/*` 这类）再抽一遍——路由常常**只在 chunk 里**。只跟同主机（跨主机一律跳过，与重定向同一纪律），上限 **24 条** / 每条 256KiB / 合计 1MiB（条数在 2026-10-11 从 8 抬到 24：Next.js 每条路由自带 8–11 个 chunk，8 条会在那一步静默截断）；命中会标出 `kind=quoted@<chunk 路径>` 供复核，**被跳过的 chunk 路径会列出来**（截断要看得见）',
       collect: 'headers=关键响应头 / security_headers=六个安全头有无 / robots=robots.txt 规则 / sitemap=站点地图 URL / tech=技术栈推断（依据响应头与正文标记，不是确证）/ **endpoints=端点与路由抽取**（固定三种形态：属性 href/src/action、引号内的绝对路径、fetch/axios 调用第一实参；每条是短行、带 hits，空结果会明说「这不等于页面里没有端点」——手写 grep 抽这类东西时失败是静默的）。**给了 `paths` 时本条不执行**（批量复核自成一件事）',
       verify_tls: VERIFY_TLS_CARRY,
     },
-    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls} include_chunks={include_chunks} paths={paths}',
+    commandTemplate: 'http_probe target={target} port={port} scheme={scheme} follow_redirects={follow_redirects} collect={collect} verify_tls={verify_tls} include_chunks={include_chunks} paths={paths} page={page} probe_options={probe_options}',
   },
   {
     template: {

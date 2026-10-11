@@ -36,7 +36,7 @@ import type {
 } from '../contracts.ts';
 import { DEFAULTS, ERROR_CODES } from '../contracts.ts';
 import type { ErrorCode } from '../contracts.ts';
-import { evidenceRelPath, writeEvidence } from './evidence-sink.ts';
+import { evidenceRelPath, writeEvidence, writesIntoMount } from './evidence-sink.ts';
 import {
   approvalView,
   artifactView,
@@ -181,6 +181,13 @@ export interface WorkerToolDeps {
    * （容器内写）会分居两个目录（实测症状：工具里只看到 .txt，看似"证据不存在"）。
    */
   readonly evidenceRootFor?: (workerSessionId: string) => string | undefined;
+  /**
+   * 该会话生效的**容器侧挂载根**（`/work`、被 cwd 覆盖时的其他路径……）。
+   *
+   * 用途只有一个：`pentest_exec` 判断"命令是否自己把产物写进了挂载根"（2026-10-11 操作者实测 #5：
+   * 命令写了 `/work/…`、宿主侧又落一份 ⇒ 两份近重复文件）。省略 = 只按 `/work` 判。
+   */
+  readonly mountContainerPathsFor?: (workerSessionId: string) => readonly string[];
   /** dsh 会话标识 → worker 会话标识。 */
   resolveWorkerSessionId(dshSessionId: string): Promise<string | null>;
   /** 原子解析当前 worker 会话及调用开始时的生效租约世代。 */
@@ -1041,13 +1048,16 @@ const requestScopeConfirmation = defineWorkerTool({
         type: 'boolean',
         description:
           '设为 true 时，服务端把这条命令的 stdout **原文**写进会话工作目录（`/work/evidence/<目标>/<UTC时间>-<用途>.txt`），' +
-          '返回值里给出一行 `evidence: <相对路径>`。**建议凡是产出证据的命令都开**：容器是一次性的，' +
-          '不开就只能靠你自己在命令里 tee（忘一条那条原文就永久没了）。它只是**额外落盘**，不改命令本身。' +
-          '**超时/中止时也落盘**（写已捕获的部分），此时返回值带 `partial_output: true`——' +
+          '返回值里给出一行 `evidence: <相对路径>`。**文件名由 `purpose` 派生**（slug 化，≤48 字符）——' +
+          '想让文件名好读，就把 purpose 写成一句短语（`route chunk api 清单` 比 `js chunk api 268 1 API` 好读）。' +
+          '**建议凡是产出证据的命令都开**：容器是一次性的，不开就只能靠你自己在命令里 tee（忘一条那条原文就永久没了）。' +
+          '它只是**额外落盘**，不改命令本身。**超时/中止时也落盘**（写已捕获的部分），此时返回值带 `partial_output: true`——' +
           '那半截输出往往是唯一线索，别丢掉。' +
           '落盘成功后还会**登记成证据**：返回值带 `artifact_id`/`artifact_ref`，报告的 `source_refs` 直接引它' +
           '（`artifact:<uuid>`）；登记失败会带 `evidence_failed`/`evidence_artifact_error` **说出来**，' +
-          '不会静默少一条证据链。',
+          '不会静默少一条证据链。' +
+          '**命令自己写进 /work 时不重复落盘**：若命令的最后一段里已有 `> /work/…`、`>> /work/…` 或 `tee /work/…`，' +
+          '本项回 `evidence: skipped_by_command`（不写第二份近重复文件）——要那份自动副本就去掉命令里的重定向',
       },
     },
     output: { schema: { type: 'json' }, render: (_a, v) => renderJson(_a, v) },
@@ -1115,6 +1125,8 @@ const requestScopeConfirmation = defineWorkerTool({
             readonly artifactId?: string;
             /** 登记失败的原因（文件已落盘，但 artifact 行没写成）：**开口**而不是吞掉。 */
             readonly artifactError?: string;
+            /** 命令自己写进了挂载根 ⇒ 本行只是"没重复落盘"的说明（不是失败）。 */
+            readonly skippedByCommand?: boolean;
           }
         | null = null;
       // 先收窄再取 result：`blocked` 变体没有 `result` 字段（类型系统盯着这一点）。
@@ -1127,10 +1139,22 @@ const requestScopeConfirmation = defineWorkerTool({
         // 优先**按会话**解析（与容器 argv/简报/工具同源）；无该钩子时回退静态配置。
         const root = deps.evidenceRootFor?.(workerSessionId) ?? deps.evidenceRoot;
         const stdout = resultView?.stdout;
+        const containerMounts = deps.mountContainerPathsFor?.(workerSessionId) ?? [DEFAULT_MOUNT_CONTAINER_PATH];
         if (root === undefined) {
           evidence = {
             ok: false,
             detail: '未挂载工作目录（见 pentest_workdir 的 no_roots）：本次输出只在返回值与 tool_run 记录里',
+          };
+        } else if (writesIntoMount(args.command, containerMounts)) {
+          // 命令**自己**写进了挂载根（台账/报告）：不再落一份近重复文件（2026-10-11 操作者实测 #5：
+          // 两份文件名相邻、内容近似，派生那份是用途 slug 的截断，读起来更差）。此行**说出来**，
+          // 不静默：要那份自动副本就把命令里的重定向去掉（安全网的场景正是"模型忘了写"）。
+          evidence = {
+            ok: true,
+            detail:
+              `命令自己写进了挂载根（${containerMounts.join('、')}/…）⇒ 未重复落盘；` +
+              '需要宿主侧自动副本时，把命令里的 `/work` 重定向/tee 去掉再跑',
+            skippedByCommand: true,
           };
         } else if (typeof stdout === 'string' && stdout.length > 0) {
           const relPath = evidenceRelPath({ targetSelector, purpose: args.purpose, at: new Date() });
@@ -1185,19 +1209,21 @@ const requestScopeConfirmation = defineWorkerTool({
               ...(evidence === null
                 ? {}
                 : evidence.ok
-                  ? {
-                      evidence: evidence.detail,
-                      // 两种路径都给：容器路径是模型写命令时用的，宿主路径是人复核时用的。
-                      evidence_container_path: `${DEFAULT_MOUNT_CONTAINER_PATH}/${evidence.detail}`,
-                      ...(evidence.hostPath === undefined ? {} : { evidence_host_path: evidence.hostPath }),
-                      // 证据链：报告写 `source_refs: ["artifact:<id>"]` 用它（诉求 #5）。
-                      ...(evidence.artifactId === undefined
-                        ? {}
-                        : { artifact_id: evidence.artifactId, artifact_ref: `artifact:${evidence.artifactId}` }),
-                      ...(evidence.artifactError === undefined
-                        ? {}
-                        : { evidence_artifact_error: evidence.artifactError }),
-                    }
+                  ? evidence.skippedByCommand === true
+                    ? { evidence: evidence.detail, evidence_skipped: 'command_wrote_mount' }
+                    : {
+                        evidence: evidence.detail,
+                        // 两种路径都给：容器路径是模型写命令时用的，宿主路径是人复核时用的。
+                        evidence_container_path: `${DEFAULT_MOUNT_CONTAINER_PATH}/${evidence.detail}`,
+                        ...(evidence.hostPath === undefined ? {} : { evidence_host_path: evidence.hostPath }),
+                        // 证据链：报告写 `source_refs: ["artifact:<id>"]` 用它（诉求 #5）。
+                        ...(evidence.artifactId === undefined
+                          ? {}
+                          : { artifact_id: evidence.artifactId, artifact_ref: `artifact:${evidence.artifactId}` }),
+                        ...(evidence.artifactError === undefined
+                          ? {}
+                          : { evidence_artifact_error: evidence.artifactError }),
+                      }
                   : { evidence_failed: true, evidence: evidence.detail }),
               // 规范 §7：模型可见字段 snake_case（内部仍叫 `toolRunId`）。
               ...(outcome.toolRunId === undefined ? {} : { tool_run_id: outcome.toolRunId }),
@@ -1313,10 +1339,31 @@ const requestScopeConfirmation = defineWorkerTool({
       paths: {
         type: 'string',
         description:
-          'http_probe 的**批量路径状态复核**（≤60 条，逗号分隔，每条形如 `/x/y`；**拒绝**含 scheme/主机/空格的串——' +
-          '那是把"路径"当"目标"用，会让范围记账失效）。给了它只对每条发 GET，逐条返回 `path status size content_type` ' +
-          '+ 汇总 `paths=N ok=M no_response=K`，并用不可命中的随机路径取软 404 基准标注同形命中。' +
+          'http_probe 的**批量路径状态复核**（≤60 条，逗号分隔，每条形如 `/x/y`，**可以带查询串**如 `/api/submissions?mine=1`；' +
+          '**拒绝**含 scheme/主机/空白/片段 `#`/路径里 `..` 的串——那是把"路径"当"目标"用，会让范围记账失效）。' +
+          '给了它：只对每条发 GET（加 `probe_options=true` 时每条再发一次 OPTIONS），逐条返回 ' +
+          '`path status size content_type note baseline_ns allow`——**`allow` 列是未鉴权下的方法表**（405 响应常带 `Allow`），' +
+          '据此**不发写请求**就能清点写端点。软 404 基准**按命名空间各取一条**（页面 404 与 API 404 常不同形），' +
+          '同命名空间内同状态码同长度的命中标 `soft404`。' +
           '**发现**用 collect=endpoints，**复核**才用它（2026-10-11 操作者诉求：别再退回手写 bash for + curl）',
+      },
+      page: {
+        type: 'string',
+        description:
+          'http_probe 的**取哪一页**（省略或空串 = 站点根 `/`；可带查询串）。抽取端点与跟随 chunk 都以这一页为对象。' +
+          '**SPA/Next.js 的关键用法**：路由自己的 chunk 才含 API 调用（每条路由自带 8–11 个 chunk），' +
+          '所以逐路由调 `collect=endpoints page=/admin`、`page=/run`… 是本轮最有效的发现路径——' +
+          '不必自己写 `for p in …; do curl; grep; done`（手写 grep 抽路由的失败是静默的）。' +
+          '`paths=` 批量模式下本参数不生效',
+      },
+      probe_options: {
+        type: 'string',
+        enum: ['true', 'false'],
+        description:
+          'http_probe 的**方法表清点**（默认 false）：true ⇒ 对同一条路径（`page` 或 `paths` 里的每一条）' +
+          '**额外**发一次只读 `OPTIONS` 并读 `Allow` 头。405/OPTIONS 的 `Allow` 在未鉴权下常给出完整方法表' +
+          '（实测：一个写请求都没发就拿到 20 条写端点的 POST/PUT/DELETE）——这是清点，不是利用；' +
+          '**别**为了"确认"去发 PUT/DELETE',
       },
       entry_range: {
         type: 'string',
@@ -1361,6 +1408,8 @@ const requestScopeConfirmation = defineWorkerTool({
         ...(args.extensions === undefined ? {} : { extensions: args.extensions }),
         ...(args.path === undefined ? {} : { path: args.path }),
         ...(args.paths === undefined ? {} : { paths: args.paths }),
+        ...(args.page === undefined ? {} : { page: args.page }),
+        ...(args.probe_options === undefined ? {} : { probe_options: args.probe_options }),
         ...(args.entry_range === undefined ? {} : { entry_range: args.entry_range }),
         ...(args.depth === undefined ? {} : { depth: args.depth }),
         ...(args.max_pages === undefined ? {} : { maxPages: args.max_pages }),
