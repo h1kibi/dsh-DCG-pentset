@@ -1060,8 +1060,9 @@ export const DOMAIN_EVENT_TYPES = [
   'session.reconciled',
   'engagement.blocked_by_recovery',
   'workflow.delivery_failed',
-  // 悬空态结算（2026-10-11 外部缺陷报告）：主状态 worker_running + 没有活会话 ⇒ 回滚到最后一次
-  // 转移的 from_status 并清空活动会话指针。它是**转移之外**的状态推进，因此必须留下可检索的痕迹。
+  // 悬空态结算（2026-10-11 外部缺陷报告）：主状态 worker_running + 运行标记非终态 + 没有活会话 ⇒
+  // 回滚到**进入 worker_running 的那次转移**的 from_status 并清空活动会话指针。它是**转移之外**的
+  // 状态推进，因此必须留下可检索的痕迹。
   'workflow.dangling_running_settled',
   'workflow.close_session_failed',
   'tool.run.marked_unknown',

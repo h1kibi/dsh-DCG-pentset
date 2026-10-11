@@ -514,6 +514,12 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
    */
   async function seedDangling(input: {
     readonly liveSession?: boolean;
+    /** 运行标记，默认 `blocked`（报告现场的形态）。`aborted` 用来验"终止过的不结算"。 */
+    readonly runMarker?: string;
+    /** 不写"进入 worker_running"的那次转移（用来验"没有锚点就不结算"）。 */
+    readonly skipAnchor?: boolean;
+    /** 追加一条 `worker_running → worker_running` 的空转移（终止就是这么记的）。 */
+    readonly abortNoop?: boolean;
   }): Promise<{ engagementId: string; deadSessionId: string; stateVersion: number }> {
     const engagementId = await newEngagement();
     const deadSessionId = await newSession({
@@ -527,21 +533,34 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
        returning id`,
       [engagementId, deadSessionId],
     );
-    await pool.query(
-      `insert into pentest.state_transitions
-         (engagement_id, from_status, to_status, transition_type, session_reused, expected_version,
-          resulting_version, human_decision_id, reason)
-       values ($1::uuid, 'waiting_human_review', 'worker_running', 'retry', true, 15, 16, $2::uuid, '重做')`,
-      [engagementId, decision.rows[0]?.id],
-    );
+    if (input.skipAnchor !== true) {
+      await pool.query(
+        `insert into pentest.state_transitions
+           (engagement_id, from_status, to_status, transition_type, session_reused, expected_version,
+            resulting_version, human_decision_id, reason)
+         values ($1::uuid, 'waiting_human_review', 'worker_running', 'retry', true, 15, 16, $2::uuid, '重做')`,
+        [engagementId, decision.rows[0]?.id],
+      );
+    }
+    if (input.abortNoop === true) {
+      await pool.query(
+        `insert into pentest.state_transitions
+           (engagement_id, from_status, to_status, transition_type, session_reused, expected_version,
+            resulting_version, human_decision_id, reason)
+         values ($1::uuid, 'worker_running', 'worker_running', 'abort', false, 16, 17, $2::uuid, '终止')`,
+        [engagementId, decision.rows[0]?.id],
+      );
+    }
+    // 版本与最后一条转移的 resulting_version 对齐（夹具也要自洽：不然将来读它会误判）
+    const lastVersion = input.abortNoop === true ? 17 : 16;
     await pool.query(
       `update pentest.engagements
-          set current_status = 'worker_running', status = 'blocked',
-              state_version = 16, active_agent_session_id = $2::uuid
+          set current_status = 'worker_running', status = $3,
+              state_version = $4, active_agent_session_id = $2::uuid
         where id = $1::uuid`,
-      [engagementId, deadSessionId],
+      [engagementId, deadSessionId, input.runMarker ?? 'blocked', lastVersion],
     );
-    return { engagementId, deadSessionId, stateVersion: 16 };
+    return { engagementId, deadSessionId, stateVersion: lastVersion };
   }
 
   test('悬空态结算：主状态 worker_running + 没有活会话 ⇒ 回滚到最近一次转移的 from_status', async () => {
@@ -588,6 +607,72 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
     const row = after.rows[0] as { current_status: string; active_agent_session_id: string | null };
     assert.equal(row.current_status, 'worker_running', '正常在跑的作业不得被按回上一态');
     assert.notEqual(row.active_agent_session_id, null, '活动会话指针不得被清空');
+  });
+
+  test('悬空态结算不碰"终止过"的作业：运行标记 aborted ⇒ 不结算、不写事件', async () => {
+    // 真库现场（2026-10-11 自纠，个人库里 8 条）：最后一条转移是 `worker_running → worker_running`
+    //（type=abort，人类按了「终止」）——运行已经结束，出路是归档与清空，不是把主状态回滚。
+    // 第一版没看运行标记，于是这 8 条被"结算"成空操作：事件写了、版本进了、状态一动没动。
+    const { engagementId, deadSessionId, stateVersion } = await seedDangling({
+      runMarker: 'aborted',
+      abortNoop: true,
+    });
+
+    const report = await recovery().recoverEngagement(engagementId);
+
+    assert.deepEqual(report.danglingSettled, [], '终止过的作业不进结算');
+    const after = await pool.query(
+      `select current_status, state_version, active_agent_session_id
+         from pentest.engagements where id = $1::uuid`,
+      [engagementId],
+    );
+    const row = after.rows[0] as {
+      current_status: string;
+      state_version: string | number;
+      active_agent_session_id: string | null;
+    };
+    assert.equal(row.current_status, 'worker_running', '主状态不得被动（终止是人类的决定）');
+    assert.equal(Number(row.state_version), stateVersion, '版本不得推进');
+    assert.equal(row.active_agent_session_id, deadSessionId, '指针不得被清空');
+    const events = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.context_events
+        where engagement_id = $1::uuid and event_type = 'workflow.dangling_running_settled'`,
+      [engagementId],
+    );
+    assert.equal(Number(events.rows[0]?.n ?? -1), 0, '什么都不动 ⇒ 一个字都不许写进账本');
+  });
+
+  test('悬空态结算要有落点：没有"进入 worker_running"的转移 ⇒ 不结算、不写事件', async () => {
+    // 只有终止那种空转移（from_status = to_status）时，照它回滚就是原地踏步 ⇒ 正确行为是**不结算**：
+    // 结算 SQL 的 update 不命中 ⇒ 返回零行 ⇒ 调用方连事件都不写（运行标记这里给 blocked，
+    // 保证挡住它的只可能是"没有锚点"这一条）。
+    const { engagementId, deadSessionId, stateVersion } = await seedDangling({
+      skipAnchor: true,
+      abortNoop: true,
+    });
+
+    const report = await recovery().recoverEngagement(engagementId);
+
+    assert.deepEqual(report.danglingSettled, [], '没有可回滚的落点 ⇒ 不结算');
+    const after = await pool.query(
+      `select current_status, state_version, active_agent_session_id
+         from pentest.engagements where id = $1::uuid`,
+      [engagementId],
+    );
+    const row = after.rows[0] as {
+      current_status: string;
+      state_version: string | number;
+      active_agent_session_id: string | null;
+    };
+    assert.equal(row.current_status, 'worker_running', '主状态不得被动');
+    assert.equal(Number(row.state_version), stateVersion, '版本不得推进');
+    assert.equal(row.active_agent_session_id, deadSessionId, '指针不得被清空');
+    const events = await pool.query<{ n: number }>(
+      `select count(*)::int as n from pentest.context_events
+        where engagement_id = $1::uuid and event_type = 'workflow.dangling_running_settled'`,
+      [engagementId],
+    );
+    assert.equal(Number(events.rows[0]?.n ?? -1), 0, '没结算就不许写结算事件');
   });
 });
 

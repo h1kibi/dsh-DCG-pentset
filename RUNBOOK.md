@@ -1641,22 +1641,32 @@ docker run --rm --network $NET $ENV $IMG "<命令行>"
 
 **处置**（四条）：
 
-- **失败即结算**：两条失败路径都调 `WorkflowCore.settleDanglingRunning`——只在 `current_status='worker_running'`
-  且**确实没有活会话**时，回滚到**最后一次转移的 `from_status`**（不猜：重做失败回 `waiting_human_review`、
-  重开回 `report_ready`、切换回 `transition_confirmation`、启动回 `ready`），清空 `active_agent_session_id`，
-  推进一版并写事件 `workflow.dangling_running_settled`（SQL 单一来源在 `src/workflow/dangling.ts`）。
+- **失败即结算**：两条失败路径都调 `WorkflowCore.settleDanglingRunning`——只在 `current_status='worker_running'`、
+  **运行标记非终态**、且**确实没有活会话**时，回滚到**"进入 `worker_running` 的那次转移"的 `from_status`**
+  （不猜：重做失败回 `waiting_human_review`、重开回 `report_ready`、切换回 `transition_confirmation`、启动回 `ready`），
+  清空 `active_agent_session_id`，推进一版并写事件 `workflow.dangling_running_settled`（SQL 单一来源在 `src/workflow/dangling.ts`）。
+  **没有这个落点就不结算**（`update` 不命中 ⇒ 连事件都不写）。
 - **启动对账**按**作业**驱动补一次结算（`RecoveryReport.danglingSettled`）：这是"客户端拿老版本、服务器上新版本"时的自愈路径。
 - **可用性**加"活动会话存活"：不存活时「重做」禁用，**理由直接指路**（"先「结束技术测试」再「重开技术工作」"）。
 - **界面**：活动会话徽标标注会话状态（`（已失败）`）；自相矛盾态显式告警并给出路，并写明**不要点「终止」**。
 
+**第一版的两条缺陷（真库上 8 条作业现场抓到，已自纠）**：① 候选没看运行标记 ⇒ 把 `aborted`（人类按了「终止」）的
+8 条作业也"结算"了；② 锚点取了"最后一条转移的 `from_status`"，而「终止」记的是 `worker_running → worker_running`
+**同态空转移** ⇒ 回滚成了**原地踏步**（事件写了、状态没动）。两条都已堵：候选与结算 SQL 都排除 `aborted`/`failed`，
+锚点只认 `to_status='worker_running' and from_status<>'worker_running'`。那 8 条被误写的事件仍在账本里
+（`context_events` 只追加、且当前**没有**"取代一条错事件"的受支持通道 ⇒ 已记为产品缺口），
+复核口径：`payload_json->>'rolledBackTo'` 与作业当前主状态同值的就是它们。
+
 **由此产生的行为（不是 bug，但要知道）**：重做失败后作业**回到 `waiting_human_review`**（不是留在 `worker_running`），
 `state_version` 会 +1，界面上多一条「悬空态结算」的审计事件；需要落库核对时按
 `select event_type, payload_json->>'rolledBackTo' from pentest.context_events where event_type='workflow.dangling_running_settled'`。
+**终止过 / 运行已判死（`aborted`/`failed`）的作业不会进结算**——它们的出路是归档与清空（见上面「清理作业：归档（默认）与清空内容」）。
 
 **可复跑命令**（测试库，勿指向 `pentest_personal`）：
 
 ```bash
-# 真库行为锁：正例（结算发生）+ 反例（有活租约的会话 ⇒ 不动）+ 可用性矩阵 + 存活规则 + 组件渲染
+# 真库行为锁：正例（结算发生）+ 反例×3（活租约会话 ⇒ 不动 / aborted ⇒ 不结算不写事件 / 无锚点 ⇒ 不结算）
+#              + 可用性矩阵 + 存活规则 + 组件渲染
 PENTEST_DATABASE_URL='postgresql://postgres:check@127.0.0.1:55446/pentest' \
   node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=60000 \
   test/recovery.test.ts test/client-run-controls.test.ts test/state-ledger.test.ts

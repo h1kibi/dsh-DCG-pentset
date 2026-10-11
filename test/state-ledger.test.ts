@@ -210,15 +210,24 @@ describe('棘轮检测器自身的锁（评审用脚本实证的三种绕过）'
 describe('悬空态结算（2026-10-11 外部缺陷报告）：规则不变量与两条失败路径都接上', () => {
   const read = (rel: string): string => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
 
-  it('结算 SQL 的四条守卫逐条在源码里（改掉任何一条都会红）', () => {
+  it('结算 SQL 的五条守卫逐条在源码里（改掉任何一条都会红）', () => {
     const sql = read('src/workflow/dangling.ts');
+    // ⓪ 运行标记不是终态（aborted 是人类按了「终止」、failed 是运行已判死 ⇒ 走归档与清空，不回滚）
+    assert.match(sql, /and e\.status not in \('aborted', 'failed'\)/, '守卫⓪：运行标记终态不结算');
     // ① 只在主状态是 worker_running 时
     assert.match(sql, /e\.current_status = 'worker_running'/, '守卫①：主状态');
     // ② 只在真没有活会话时（否则会把正常在跑的作业按回上一态）
     assert.match(sql, /s\.status not in \('failed', 'closed', 'superseded'\)/, '守卫②：没有活会话');
-    // ③ 回滚目标取自**最后一次转移**的 from_status（路径无关，不猜）
-    assert.match(sql, /select from_status\s+from pentest\.state_transitions/, '守卫③：from_status 的来源');
-    assert.match(sql, /order by resulting_version desc/, '守卫③：取最近一次转移');
+    // ③ 回滚目标取自**进入 worker_running 的那次转移**的 from_status（路径无关，不猜）
+    assert.match(sql, /to_status = 'worker_running'/, '守卫③：锚点必须是"进入 worker_running"的那次转移');
+    assert.match(sql, /from_status <> 'worker_running'/, '守卫③：跳过 worker_running → worker_running 这类空转移');
+    assert.match(sql, /order by resulting_version desc/, '守卫③：取最近一次这种转移');
+    // ③′ 没有锚点就**不结算**：真库上 8 条"终止"过的作业就是这样被误结算的（2026-10-11 自纠）
+    assert.doesNotMatch(
+      sql,
+      /select from_status\s+from pentest\.state_transitions\s+where engagement_id = \$1::uuid\s+order by/,
+      '不许退回"最后一次转移的 from_status"——终止记的是 worker_running → worker_running，那是原地踏步',
+    );
     // ④ 清空活动会话指针（它还指着那个死会话）
     assert.match(sql, /active_agent_session_id = null/, '守卫④：清空活动会话指针');
     assert.match(sql, /state_version = e\.state_version \+ 1/, '版本推进一格');
@@ -238,8 +247,15 @@ describe('悬空态结算（2026-10-11 外部缺陷报告）：规则不变量�
     assert.match(recovery, /#findDanglingRunning\(/, '必须有作业侧的悬空扫描');
     assert.match(
       recovery,
-      /current_status = 'worker_running'[\s\S]{0,400}?not exists \(/u,
+      /current_status = 'worker_running'[\s\S]{0,600}?not exists \(/u,
       '扫描守卫与结算 SQL 同形（worker_running + 没有活会话）',
+    );
+    // 候选侧的两条守卫也必须在：否则会扫出"扫了也白扫"的候选（终止过的作业、没有锚点的作业）
+    assert.match(recovery, /e\.status not in \('aborted', 'failed'\)/, '候选要排除运行标记终态（终止过的作业）');
+    assert.match(
+      recovery,
+      /t\.to_status = 'worker_running'[\s\S]{0,200}?t\.from_status <> 'worker_running'/u,
+      '候选必须存在"进入 worker_running"的转移——没有锚点的作业不结算',
     );
     assert.match(recovery, /#settleDanglingCandidates\(/, '结算要逐个候选执行');
     // 报告的场景里那个会话是**终态**：按"无主会话"驱动会一条都不扫到——这条注释就是那个教训。

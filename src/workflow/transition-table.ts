@@ -204,8 +204,8 @@ export const NON_TRANSITION_VERSION_BUMPS = [
     id: 'dangling-running-settle',
     file: 'src/workflow/dangling.ts',
     reason:
-      '悬空态结算（2026-10-11 外部缺陷报告）：主状态 worker_running + 没有活会话时，把主状态回滚到' +
-      '**最后一次转移的 from_status** 并清空 active_agent_session_id。它发生在转移之外（失败处置的附带' +
+      '悬空态结算（2026-10-11 外部缺陷报告）：主状态 worker_running + 运行标记非终态 + 没有活会话时，把主状态回滚到' +
+      '**进入 worker_running 的那次转移的 from_status** 并清空 active_agent_session_id。它发生在转移之外（失败处置的附带' +
       '动作），因此版本推进必须在这里登记——否则「账本出现无法解释的版本跳跃」就没人看得见。',
   },
   {

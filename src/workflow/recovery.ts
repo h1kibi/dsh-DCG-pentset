@@ -109,8 +109,9 @@ interface RecoveryReport {
   readonly toolRunsMarkedUnknown: readonly string[];
   readonly engagementsBlocked: readonly string[];
   /**
-   * 本轮结算掉的**悬空态**（主状态 `worker_running` + 没有活会话 ⇒ 回滚到最后一次转移的
-   * `from_status`，2026-10-11 外部缺陷报告）。报告里必须看得见：它是「作业被按回上一态」，
+   * 本轮结算掉的**悬空态**（主状态 `worker_running` + 没有活会话 ⇒ 回滚到**进入 `worker_running` 的那次转移**的
+   * `from_status`；**不是**"最后一条转移"——终止记的是 `worker_running → worker_running` 的同态空转移，
+   * 照它回滚是原地踏步。2026-10-11 外部缺陷报告）。报告里必须看得见：它是「作业被按回上一态」，
    * 静默发生的话人类会以为状态是自己变的。
    */
   readonly danglingSettled: readonly { readonly engagementId: string; readonly rolledBackTo: string }[];
@@ -454,7 +455,7 @@ export class StartupRecovery {
     });
     if (rolledBackTo === null) return null;
     await this.#audit(engagementId, null, 'workflow.dangling_running_settled', {
-      detail: '启动对账发现主状态与活动会话矛盾（worker_running 而没有活会话）；已按最后一次转移的 from_status 结算',
+      detail: '启动对账发现主状态与活动会话矛盾（worker_running 而没有活会话）；已按进入 worker_running 的那次转移的 from_status 结算',
       rolledBackTo,
     });
     return rolledBackTo;
@@ -484,6 +485,18 @@ export class StartupRecovery {
       `select e.id
          from pentest.engagements e
         where e.current_status = 'worker_running'
+          -- 运行标记终态不是悬空态：aborted 是人类按了「终止」、failed 是运行已判死——
+          -- 它们的出路是归档与清空（见 dangling.ts 的规则 0）。
+          and e.status not in ('aborted', 'failed')
+          -- 结算要有落点：必须存在一次「真正把主状态推进到 worker_running」的转移。
+          -- 只有 worker_running → worker_running（终止）这类空转移的作业不结算——照它回滚是原地踏步。
+          and exists (
+            select 1
+              from pentest.state_transitions t
+             where t.engagement_id = e.id
+               and t.to_status = 'worker_running'
+               and t.from_status <> 'worker_running'
+          )
           and not exists (
             select 1
               from pentest.worker_sessions s
