@@ -562,6 +562,14 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
     readonly mainStatus: MainStatus;
     readonly currentPhase: Phase | null;
     readonly active: WorkerSessionSummary | null;
+    /**
+     * 该作业的 `state_version`——**同一趟 `getState` 里就带回来了**，别丢。
+     *
+     * 绑定缺失时的降级视图要用它做乐观锁（起稿与确认都带版本）；不在这里给，
+     * 调用方就得去读控制台快照里可能已经过期的那份 ⇒ 人类点"确认"会拿到
+     * `stale_state_version`（2026-10-11 质检）。
+     */
+    readonly stateVersion: number;
   } | null> {
     const state = await this.#fetch<WorkflowSnapshot>('getState', { engagementId });
     if (state === null) return null;
@@ -569,7 +577,7 @@ export class ConsoleController implements Readable<ConsoleSnapshot> {
     const active = !Array.isArray(sessions) || state.activeWorkerSessionId === null
       ? null
       : sessions.find((session) => session.id === state.activeWorkerSessionId) ?? null;
-    return { mainStatus: state.mainStatus, currentPhase: state.currentPhase, active };
+    return { mainStatus: state.mainStatus, currentPhase: state.currentPhase, active, stateVersion: state.stateVersion };
   }
 
   /** 彻底删除前的只读预览（要删多少行、有没有拦路的东西）。 */

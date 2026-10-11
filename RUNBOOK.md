@@ -593,6 +593,22 @@ node scripts/resync-smoke-stamps.mjs d6c21580e6f1   # 26 份 / 28 处
 **核实结论**（报告 `docs/verification-external-feedback-2026-10-11.md`）：D2/D3/D4/D5 在我们这里**不存在**
 （D3/D4 更早已修并有锁；D2 结构上不可能——判据与文案读同一个数组）；D1、D6/§2.3 本轮修掉。
 
+#### ⑬ 本轮轮换记录（2026-10-11，质检轮）：D1/D6 修复的自检修正
+
+**轮换依据**：对 `81f66bd` 的质检（三路只读 + 自复现）后修的四处——`nmap_ports` 加 `version_scan` 闸门
+（`port_scan` 不带 `-sV`，不该报"拿不到版本信息"）、比例判定加最小样本量 `PORT_STATE_TRUST_MIN_SAMPLE = 8`
+（避免小样本假警报）、技能 3b 配方改自足并拒绝在 `scanned=0` 时给结论、降级视图的 `stateVersion` 改从
+**同一趟 `getState`** 取（`runningSnapshotFor` 现在返回它）。
+
+```bash
+docker build -t 127.0.0.1:5005/pentest-tools:0.1.0 docker/tools
+docker push 127.0.0.1:5005/pentest-tools:0.1.0
+# 重钉两处：d6c21580e6f1 → 19cd12b3b93c
+node scripts/resync-smoke-stamps.mjs 19cd12b3b93c   # 26 份 / 28 处
+```
+
+**报告**：`docs/quality-review-round9-2026-10-11.md`（含复现命令与新增锁；三路只读质检的结果追补在该文件）。
+
 ### 4a. 你的个人环境（已配好）
 
 > ⚠️ **改完源码必须先 `npm run build`**：个人 profile 加载的是**构建产物**（`lib/`，经包名解析），

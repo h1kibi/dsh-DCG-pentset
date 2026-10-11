@@ -578,6 +578,49 @@ export function IntakeRunningCard(props: IntakeRunningCardProps): ReactNode {
   );
 }
 
+/**
+ * **降级运行卡**（外部反馈 D1）：绑定缺失、但用作业列表那条腿认领到了作业时渲染的东西。
+ *
+ * 抽成独立组件是为了**能测**：D1 的堵死形态是"按钮根本没有落点"，而这件事只有把卡片渲染出来
+ * 才能断言（`test/client-core-views.test.ts` 用 `renderToStaticMarkup` 就锁这个）。
+ * 编辑器由调用方塞进来（`editor`），因此本组件不依赖控制器——它只画事实与动作。
+ */
+export function DegradedRunCard(props: {
+  readonly engagementName: string | null;
+  readonly mainStatus: MainStatus;
+  readonly currentPhase: Phase | null;
+  readonly statusNote: string | null;
+  readonly advanceBusy?: boolean;
+  readonly advanceError?: string | null;
+  readonly onAdvancePhase?: () => void;
+  readonly editor?: ReactNode;
+}): ReactNode {
+  return (
+    <Card title="阶段推进（降级视图：会话绑定缺失）">
+      <p>
+        按本会话的 dsh 会话 id **反查不到 Worker 会话绑定**——上栏的「待你判断」徽标走的是作业列表，
+        与绑定不同源。下面的阶段与推进按钮取自作业列表上的这个作业；
+        点之前请确认作业名是你要推进的那一个。
+      </p>
+      {props.editor}
+      <PhaseStrip
+        engagementName={props.engagementName}
+        mainStatus={props.mainStatus}
+        currentPhase={props.currentPhase}
+        statusNote={props.statusNote}
+      >
+        <AdvanceAction
+          mainStatus={props.mainStatus}
+          currentPhase={props.currentPhase}
+          {...(props.onAdvancePhase === undefined ? {} : { onAdvancePhase: props.onAdvancePhase })}
+          {...(props.advanceBusy === undefined ? {} : { advanceBusy: props.advanceBusy })}
+          {...(props.advanceError === undefined ? {} : { advanceError: props.advanceError })}
+        />
+      </PhaseStrip>
+    </Card>
+  );
+}
+
 interface IntakePromptProps {
   readonly controller: ConsoleController;
   /** 当前 dsh 会话标识（会话级槽位的标准 props）。 */
@@ -628,14 +671,15 @@ export function intakeFallbackOf(
  *   1. 只在**恰好一个候选**时降级：人类显式选中的那个；只有一个作业时才自动认领；
  *      ⇒ 多个作业且没有选中项时返回 `null`（画错作业的推进按钮比不画更糟）；
  *   2. 快照里的 `state` 必须**属于**那个候选（`engagementId` 相等）——否则状态版本会张冠李戴；
- *   3. `stateVersion` 必须一起给出：会话卡片没有控制台的作业快照，不传就恒发 0 ⇒ 服务端回
- *      `stale_state_version`（起稿与确认都会失败，人点了没反应）。
+ *   3. **版本不在这里给**：`stateVersion` 必须来自与运行快照**同一趟**的 `getState`
+ *      （`runningSnapshotFor` 现成带回来）——读控制台快照里那份可能已经过期，人类点"确认"会拿到
+ *      `stale_state_version`（2026-10-11 质检）。
  */
 export function degradedRunOf(snapshot: {
   readonly engagements: readonly { readonly id: string; readonly name?: string | null }[];
   readonly selectedEngagementId: string | null;
-  readonly state: { readonly engagementId: string; readonly stateVersion: number } | null;
-}): { readonly engagementId: string; readonly engagementName: string | null; readonly stateVersion: number } | null {
+  readonly state: { readonly engagementId: string } | null;
+}): { readonly engagementId: string; readonly engagementName: string | null } | null {
   const candidate =
     snapshot.selectedEngagementId ??
     (snapshot.engagements.length === 1 ? (snapshot.engagements[0]?.id ?? null) : null);
@@ -643,11 +687,7 @@ export function degradedRunOf(snapshot: {
   const state = snapshot.state;
   if (state === null || state.engagementId !== candidate) return null;
   const summary = snapshot.engagements.find((item) => item.id === candidate);
-  return {
-    engagementId: candidate,
-    engagementName: summary?.name ?? null,
-    stateVersion: state.stateVersion,
-  };
+  return { engagementId: candidate, engagementName: summary?.name ?? null };
 }
 
 /**
@@ -784,7 +824,8 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
             } else {
               const degraded = await controller.runningSnapshotFor(target.engagementId).catch(() => null);
               if (cancelled) return;
-              setDerived(target);
+              // 版本与运行快照**同一趟**取回（`getState` 里就有）；取不到就整体不降级（宁可画说明卡）。
+              setDerived(degraded === null ? null : { ...target, stateVersion: degraded.stateVersion });
               setRunning(degraded === null ? null : runViewOf(degraded));
               if (degraded !== null && degraded.active !== null
                   && (degraded.mainStatus === 'handoff_drafting' || degraded.mainStatus === 'transition_confirmation')) {
@@ -963,39 +1004,31 @@ function IntakePromptBody(props: IntakePromptProps): ReactNode {
           // **降级视图**（外部反馈 D1）：绑定缺失，但作业列表那条腿认领到了作业 ⇒ 照常给阶段条与
           // 推进按钮。文案必须说清"这份数据来自哪条腿"，否则人类会以为绑定是好的。
           derived !== null && running !== null ? (
-            <Card title="阶段推进（降级视图：会话绑定缺失）">
-              <p>
-                按本会话的 dsh 会话 id **反查不到 Worker 会话绑定**——上栏的「待你判断」徽标走的是作业列表，
-                与绑定不同源。下面的阶段与推进按钮取自作业列表上的这个作业；
-                点之前请确认作业名是你要推进的那一个。
-              </p>
-              {handoffDraft === null ? null : (
-                <HandoffEditor
-                  controller={controller}
-                  engagementId={derived.engagementId}
-                  draft={handoffDraft}
-                  expectedStateVersion={derived.stateVersion}
-                  onClose={() => {
-                    setHandoffDraft(null);
-                    setRefreshTick((value) => value + 1);
-                  }}
-                />
-              )}
-              <PhaseStrip
-                engagementName={derived.engagementName}
-                mainStatus={running.mainStatus}
-                currentPhase={running.currentPhase}
-                statusNote={running.active === null ? null : running.active.statusNote}
-              >
-                <AdvanceAction
-                  mainStatus={running.mainStatus}
-                  currentPhase={running.currentPhase}
-                  {...(handoffDraft === null ? { onAdvancePhase: advance } : {})}
-                  advanceBusy={advanceBusy}
-                  advanceError={advanceError}
-                />
-              </PhaseStrip>
-            </Card>
+            <DegradedRunCard
+              engagementName={derived.engagementName}
+              mainStatus={running.mainStatus}
+              currentPhase={running.currentPhase}
+              statusNote={running.active === null ? null : running.active.statusNote}
+              advanceBusy={advanceBusy}
+              advanceError={advanceError}
+              {...(handoffDraft === null ? { onAdvancePhase: advance } : {})}
+              {...(handoffDraft === null
+                ? {}
+                : {
+                    editor: (
+                      <HandoffEditor
+                        controller={controller}
+                        engagementId={derived.engagementId}
+                        draft={handoffDraft}
+                        expectedStateVersion={derived.stateVersion}
+                        onClose={() => {
+                          setHandoffDraft(null);
+                          setRefreshTick((value) => value + 1);
+                        }}
+                      />
+                    ),
+                  })}
+            />
           ) : (
             <Card title="这张卡片读不到状态">
               <p>

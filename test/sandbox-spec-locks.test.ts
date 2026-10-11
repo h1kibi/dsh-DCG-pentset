@@ -367,3 +367,25 @@ test('chunk 上限：容器常量 ↔ 常驻提示词/文档里的数字必须�
   }
   assert.deepEqual(offenders, [], 'chunk 上限的数字必须与容器常量同源');
 });
+
+/** 端口可信度阈值与样本量的**数字单一来源**锁（2026-10-11 质检）。 */
+test('端口可信度：技能配方里的阈值与样本下限必须与容器常量同值（手抄即漂移）', () => {
+  // 为什么要有它：`recon-network-surface` 的第 3b 步给了**手写扫描**时的自查配方（带 `0.8` 与
+  // "样本足够大"），而容器侧 `port_state_trust` 用的是同一口径的常量。两处若漂移，症状是
+  // "工具说 suspect、技能说 ok"——而人只会相信其中一个。
+  const dispatcher = readFileSync(new URL('../docker/tools/pentest-tool', import.meta.url), 'utf8');
+  const minSample = /PORT_STATE_TRUST_MIN_SAMPLE = (\d+)/u.exec(dispatcher)?.[1];
+  assert.ok(minSample !== undefined, '容器侧必须有 PORT_STATE_TRUST_MIN_SAMPLE 常量');
+  assert.match(dispatcher, /ratio >= 0\.8/, '容器侧的阈值必须仍是 0.8（改了就要同步技能与文档）');
+
+  const skill = readFileSync(new URL('../skills/recon-network-surface/SKILL.md', import.meta.url), 'utf8');
+  assert.match(skill, /ratio >= 0\.8/, '技能的配方必须与容器同阈值（0.8）——两者是同一个判据的两种写法');
+  assert.match(
+    skill,
+    /样本/,
+    '技能必须写明"样本很小时不按比例判"（否则 1/1 会被当成近全开，正常作业天天响假警报）',
+  );
+  // 手写配方**必须自足**：扫描与统计在同一条命令里（容器一次性），且读不到结果时**拒绝给结论**。
+  assert.match(skill, /nmap -sT -Pn -p "\$P" "\$T" -oN \/tmp\/ports\.txt/, '配方必须自己跑扫描（不能引用上一条命令的 /tmp 产物）');
+  assert.match(skill, /verdict=unknown/, '读不到扫描结果时必须给 unknown，不许静默判 ok');
+});

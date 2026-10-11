@@ -457,3 +457,60 @@ test('在环卡片的回退：读不到 ≠ 没有待办（外部审计 P0-4 第
   assert.equal(intakeFallbackOf(true, { code: 'client_call_failed' }), 'error');
   assert.equal(intakeFallbackOf(false, { code: 'client_call_failed' }), 'error');
 });
+
+// ── D1 降级视图（外部反馈：绑定缺失时阶段推进被堵死）──────────────────────────
+
+test('degradedRunOf：只认「人类选中的」或「唯一的」作业，且快照状态必须属于它', async () => {
+  const { degradedRunOf } = await import('../src/client/views/IntakePrompt.tsx');
+  const engagement = (id: string, name: string) => ({ id, name });
+  const state = (engagementId: string) => ({ engagementId });
+
+  // ① 人类选了作业 ⇒ 认领它（哪怕还有别的作业）
+  assert.deepEqual(
+    degradedRunOf({ engagements: [engagement('e1', '甲'), engagement('e2', '乙')], selectedEngagementId: 'e2', state: state('e2') }),
+    { engagementId: 'e2', engagementName: '乙' },
+  );
+  // ② 只有一个作业、且没选中 ⇒ 自动认领（这是"控制台刚打开"的常态）
+  assert.deepEqual(
+    degradedRunOf({ engagements: [engagement('e1', '甲')], selectedEngagementId: null, state: state('e1') }),
+    { engagementId: 'e1', engagementName: '甲' },
+  );
+  // ③ 多个作业、没选中 ⇒ **不认领**（画错作业的推进按钮比不画更糟）
+  assert.equal(
+    degradedRunOf({ engagements: [engagement('e1', '甲'), engagement('e2', '乙')], selectedEngagementId: null, state: state('e1') }),
+    null,
+  );
+  // ④ 快照状态不属于候选 ⇒ 不认领（否则状态版本张冠李戴，确认时必被拒）
+  assert.equal(
+    degradedRunOf({ engagements: [engagement('e1', '甲')], selectedEngagementId: 'e1', state: state('e9') }),
+    null,
+  );
+  // ⑤ 快照里没有状态（还没加载）⇒ 不认领（人看到说明卡后选中作业即可）
+  assert.equal(degradedRunOf({ engagements: [engagement('e1', '甲')], selectedEngagementId: 'e1', state: null }), null);
+});
+
+test('DegradedRunCard：绑定缺失时**推进按钮确实渲染**（D1 的堵死就是"按钮没有落点"）', async () => {
+  const { DegradedRunCard } = await import('../src/client/views/IntakePrompt.tsx');
+  const html = renderToStaticMarkup(
+    createElement(DegradedRunCard, {
+      engagementName: '甲',
+      mainStatus: 'waiting_human_review' as MainStatus,
+      currentPhase: 'intelligence-gathering' as Phase,
+      statusNote: null,
+      onAdvancePhase: () => undefined,
+    }),
+  );
+  assert.match(html, /阶段推进（降级视图：会话绑定缺失）/, '卡片要说清这是降级视图（数据来源不同）');
+  assert.match(html, /进入下一阶段：威胁建模/, '**按钮必须渲染**——这正是 D1 堵死的那一步');
+  // 反向：Agent 还在跑时不给按钮（与健康路径同一判定，不给"点了没反应"的入口）
+  const running = renderToStaticMarkup(
+    createElement(DegradedRunCard, {
+      engagementName: '甲',
+      mainStatus: 'worker_running' as MainStatus,
+      currentPhase: 'intelligence-gathering' as Phase,
+      statusNote: null,
+      onAdvancePhase: () => undefined,
+    }),
+  );
+  assert.doesNotMatch(running, /进入下一阶段/, '非等待人工判断时不得给推进按钮');
+});
