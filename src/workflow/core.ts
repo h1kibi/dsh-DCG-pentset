@@ -34,6 +34,7 @@ import { applySessionStatusChange } from './lease.ts';
 import { DEFAULTS } from '../contracts.ts';
 import type { AppendEventInput } from '../contracts.ts';
 import { SYSTEM_OPERATOR_ID, WorkflowRejection, asPlainRecord, asRecord, defaultCapabilities, readAuthorizationExpiry, readNumber, toInt, toScopeProposal } from './model.ts';
+import { DANGLING_RUNNING_SETTLE_SQL } from './dangling.ts';
 import type { CapabilityResolver, ConfirmationExpansion, EngagementRow, ScopeProposalRow, SessionRow, WorkflowServiceDeps } from './model.ts';
 
 export class WorkflowCore {
@@ -1544,6 +1545,10 @@ export class WorkflowCore {
           [input.engagementId],
         )
         .catch(() => undefined);
+      // **主状态也要结算**（2026-10-11 外部缺陷报告）：转移事务已把 `current_status` 推到
+      // `worker_running`，而这次会话根本没建成 ⇒ 不结算就把作业留在「声称有 Agent 在跑、
+      // 实际没有活会话」的悬空态，而该主状态的两条出边一条要活 Agent、一条被 blocked 关掉。
+      await this.settleDanglingRunning(input.engagementId, `创建 dsh 会话失败：${detail}`);
       throw new WorkflowRejection(
         'classification_rejected',
         `创建 dsh 会话失败，engagement 已置为阻塞等待人类处置：${detail}`,
@@ -1588,6 +1593,36 @@ export class WorkflowCore {
    * 本方法**不抛**：它是在错误路径上执行的补偿，掩盖原始错误（会话不可达）比补偿
    * 本身失败更糟。补偿失败只记警告——与原错误一起出现在日志里，人能看到全貌。
    */
+  /**
+   * 结算**悬空态**：主状态 `worker_running` + 没有任何活会话（2026-10-11 外部缺陷报告）。
+   *
+   * 规则与 SQL 都是单一来源（见 `dangling.ts` 的模块注释）；这里只负责**调用 + 审计 + 绝不抛**。
+   * 返回是否真的结算了（没结算时调用方照旧抛主因）。
+   */
+  async settleDanglingRunning(engagementId: string, detail: string): Promise<boolean> {
+    try {
+      const settled = await this.deps.db.query<{ settled_from: string | null }>(
+        DANGLING_RUNNING_SETTLE_SQL,
+        [engagementId],
+      );
+      const rolledBackTo = settled.rows[0]?.settled_from ?? null;
+      if (rolledBackTo === null) return false;
+      await this.audit(engagementId, null, 'workflow.dangling_running_settled', {
+        detail,
+        rolledBackTo,
+      });
+      return true;
+    } catch (error) {
+      // 结算失败不掩盖主因：调用方那边抛的才是真正要说的事。
+      console.warn(
+        `[dsh-pentest] 悬空态结算失败（engagement ${engagementId}）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+  }
+
   async markDeliveryFailure(input: {
     readonly engagementId: string;
     readonly workerSessionId: string;
@@ -1622,6 +1657,9 @@ export class WorkflowCore {
         [input.engagementId],
       )
       .catch(() => undefined);
+    // 与创建失败同一处置：复用会话的重做走到这里时，主状态也已经是 `worker_running`
+    // 而该会话刚被判失败 ⇒ 不结算就是同一种悬空态（外部报告 §2.5 的第二条成因）。
+    await this.settleDanglingRunning(input.engagementId, `投递失败：${input.detail}`);
     try {
       await this.audit(input.engagementId, input.workerSessionId, 'workflow.delivery_failed', {
         detail: input.detail,

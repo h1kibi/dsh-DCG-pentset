@@ -172,10 +172,12 @@ describe('检测器自身：赋值与比较必须能分开（棘轮不能有洞�
 
   it('真实源码里的赋值点数量与登记 + tag 齐平（多了会红，少了说明检测器退化了）', () => {
     const { writes } = collectWrites();
-    // 7 处：pg-worker-tools 报告 1、updateEngagement 1、运行标记 1、策略切换 1、
-    // intake 暂存 1、范围确认 1、resume 1。数字变了就要在这里解释——防止检测器
-    // 因为一次正则改动而「什么都扫不到」还保持全绿。
-    assert.equal(writes.length, 7, `实际扫到 ${writes.length} 处：${writes.map((w) => `${w.file}:${w.line}`).join('、')}`);
+    // 8 处：pg-worker-tools 报告 1、updateEngagement 1、运行标记 1、策略切换 1、
+    // intake 暂存 1、范围确认 1、resume 1、**悬空态结算 1**（2026-10-11 外部缺陷报告：
+    // `dangling.ts` 的结算把主状态按回最后一次转移的 `from_status`，它发生在转移之外，
+    // 因此既登记在 `NON_TRANSITION_VERSION_BUMPS`，也在这里计入期望值）。
+    // 数字变了就要在这里解释——防止检测器因为一次正则改动而「什么都扫不到」还保持全绿。
+    assert.equal(writes.length, 8, `实际扫到 ${writes.length} 处：${writes.map((w) => `${w.file}:${w.line}`).join('、')}`);
   });
 });
 
@@ -202,5 +204,45 @@ describe('棘轮检测器自身的锁（评审用脚本实证的三种绕过）'
     assert.equal(isVersionWrite('  select state_version from pentest.engagements'), false);
     assert.equal(isVersionWrite('  if (state_version !== expected) {'), false);
     assert.equal(isVersionWrite('  set state_version', '  , updated_at = now()'), false);
+  });
+});
+
+describe('悬空态结算（2026-10-11 外部缺陷报告）：规则不变量与两条失败路径都接上', () => {
+  const read = (rel: string): string => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
+
+  it('结算 SQL 的四条守卫逐条在源码里（改掉任何一条都会红）', () => {
+    const sql = read('src/workflow/dangling.ts');
+    // ① 只在主状态是 worker_running 时
+    assert.match(sql, /e\.current_status = 'worker_running'/, '守卫①：主状态');
+    // ② 只在真没有活会话时（否则会把正常在跑的作业按回上一态）
+    assert.match(sql, /s\.status not in \('failed', 'closed', 'superseded'\)/, '守卫②：没有活会话');
+    // ③ 回滚目标取自**最后一次转移**的 from_status（路径无关，不猜）
+    assert.match(sql, /select from_status\s+from pentest\.state_transitions/, '守卫③：from_status 的来源');
+    assert.match(sql, /order by resulting_version desc/, '守卫③：取最近一次转移');
+    // ④ 清空活动会话指针（它还指着那个死会话）
+    assert.match(sql, /active_agent_session_id = null/, '守卫④：清空活动会话指针');
+    assert.match(sql, /state_version = e\.state_version \+ 1/, '版本推进一格');
+    assert.match(sql, /version-bump-registered:dangling-running-settle/, '转移之外的版本推进必须带登记 tag（棘轮）');
+  });
+
+  it('两条失败路径都必须结算：创建失败与投递失败（报告给的是后者同形）', () => {
+    const core = read('src/workflow/core.ts');
+    const calls = [...core.matchAll(/await this\.settleDanglingRunning\(/gu)].length;
+    assert.ok(calls >= 2, `创建失败与投递失败两条路径都要结算，实际 ${calls} 处调用`);
+    assert.match(core, /创建 dsh 会话失败：\$\{detail\}/, '创建失败那条要把原因带进结算的 detail');
+    assert.match(core, /投递失败：\$\{input\.detail\}/, '投递失败那条同理');
+  });
+
+  it('启动对账按**作业**扫悬空态（按"扫到的无主会话"驱动会漏掉报告里的场景）', () => {
+    const recovery = read('src/workflow/recovery.ts');
+    assert.match(recovery, /#findDanglingRunning\(/, '必须有作业侧的悬空扫描');
+    assert.match(
+      recovery,
+      /current_status = 'worker_running'[\s\S]{0,400}?not exists \(/u,
+      '扫描守卫与结算 SQL 同形（worker_running + 没有活会话）',
+    );
+    assert.match(recovery, /#settleDanglingCandidates\(/, '结算要逐个候选执行');
+    // 报告的场景里那个会话是**终态**：按"无主会话"驱动会一条都不扫到——这条注释就是那个教训。
+    assert.match(recovery, /不在无主扫描的集合里|不会出现在无主会话扫描里/, '说明为什么不能复用无主扫描的结果');
   });
 });

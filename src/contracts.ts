@@ -114,10 +114,34 @@ export interface RunActionAvailability {
   readonly canReopenTechnicalWork: boolean;
 }
 
+/**
+ * 活动会话是否**还活着**（可用于承接下一次驱动）。
+ *
+ * 三态语义（刻意区分，别合并）：
+ *   - `undefined`：调用方**不知道** ⇒ 不改判据（向后兼容：控制台快照里没有会话列表时的旧行为）；
+ *   - `null`：**没有活动会话** ⇒ 不能重做（服务端 `retryWorker` 会拒 `lease_required`）；
+ *   - 具体状态：`failed` / `closed` / `superseded` 是终态 ⇒ 不能重做。
+ *
+ * 为什么必须有它（2026-10-11 外部缺陷报告）：`重做` 只看主状态与运行标记，于是
+ * 「活动会话已 failed」时按钮照样亮着，人一点就再走一遍失败处置——而失败处置恰恰会把
+ * 作业留进悬空态。终态会话要**禁用并指路**（先「结束技术测试」再「重开技术工作」，
+ * 那条路会建新会话）。
+ */
+function sessionUsable(status: SessionStatus | null | undefined): boolean {
+  if (status === undefined) return true;
+  if (status === null) return false;
+  return status !== 'failed' && status !== 'closed' && status !== 'superseded';
+}
+
 export function runActionAvailability(state: {
   readonly mainStatus: MainStatus;
   readonly runMarker: RunMarker;
   readonly activeWorkerSessionId: string | null;
+  /**
+   * 活动会话的**会话级状态**：`null` = 没有活动会话、`undefined` = 不知道。
+   * 不知道时沿用旧判据（不因为缺数据就把按钮变灰）。
+   */
+  readonly activeSessionStatus?: SessionStatus | null;
 }): RunActionAvailability {
   if (state.mainStatus === 'complete') {
     return {
@@ -144,7 +168,12 @@ export function runActionAvailability(state: {
     // 「重做」是**主状态**边（§5.4 的 waiting_human_review → worker_running）：运行标记只用来
     // 排除终态——`aborted`/`failed` 下会话已全被置 closed，重做会打在终态行上被
     // `worker_sessions_state_progression` 拒成 `console/internal`（按钮可点但必失败）。
-    canRetryWorker: state.mainStatus === 'waiting_human_review' && !terminal,
+    //
+    // **还要看活动会话是否还活着**（2026-10-11 外部缺陷报告）：主状态够了但会话已 failed/closed/
+    // superseded（或根本没有会话）时，重做必然失败在半路（创建/投递失败 ⇒ 悬空态）——按钮该灰，
+    // 而且理由必须**指路**（先「结束技术测试」再「重开技术工作」）。
+    canRetryWorker:
+      state.mainStatus === 'waiting_human_review' && !terminal && sessionUsable(state.activeSessionStatus),
     // 「重开技术工作」同上，起点是报告就绪；终态标记下重开没有意义（那时该走恢复或终止）。
     canReopenTechnicalWork: state.mainStatus === 'report_ready' && !terminal,
   };
@@ -1031,6 +1060,9 @@ export const DOMAIN_EVENT_TYPES = [
   'session.reconciled',
   'engagement.blocked_by_recovery',
   'workflow.delivery_failed',
+  // 悬空态结算（2026-10-11 外部缺陷报告）：主状态 worker_running + 没有活会话 ⇒ 回滚到最后一次
+  // 转移的 from_status 并清空活动会话指针。它是**转移之外**的状态推进，因此必须留下可检索的痕迹。
+  'workflow.dangling_running_settled',
   'workflow.close_session_failed',
   'tool.run.marked_unknown',
   'worker.report',

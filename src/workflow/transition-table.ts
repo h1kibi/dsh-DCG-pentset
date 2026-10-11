@@ -201,6 +201,14 @@ export const NON_TRANSITION_VERSION_BUMPS = [
       'intake 暂存与复位：作业停在 `auth_pending`，图上还没有可记账的边；版本推进用于让其它控制台手上的旧版本失效。',
   },
   {
+    id: 'dangling-running-settle',
+    file: 'src/workflow/dangling.ts',
+    reason:
+      '悬空态结算（2026-10-11 外部缺陷报告）：主状态 worker_running + 没有活会话时，把主状态回滚到' +
+      '**最后一次转移的 from_status** 并清空 active_agent_session_id。它发生在转移之外（失败处置的附带' +
+      '动作），因此版本推进必须在这里登记——否则「账本出现无法解释的版本跳跃」就没人看得见。',
+  },
+  {
     id: 'policy-snapshot-switch',
     file: 'src/workflow/engagement.ts',
     reason:

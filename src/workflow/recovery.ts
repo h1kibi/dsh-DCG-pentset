@@ -45,6 +45,7 @@ import type { LeaseStore } from './lease.ts';
 import { revokeLease } from './lease.ts';
 import type { SessionReconciliationInput, SessionReconciliation } from './reconcile.ts';
 import { reconcileSession, isHighRiskPhase } from './reconcile.ts';
+import { DANGLING_RUNNING_SETTLE_SQL } from './dangling.ts';
 import type { Phase, SessionStatus } from '../contracts.ts';
 
 /**
@@ -107,6 +108,12 @@ interface RecoveryReport {
   readonly sessionsSuperseded: readonly string[];
   readonly toolRunsMarkedUnknown: readonly string[];
   readonly engagementsBlocked: readonly string[];
+  /**
+   * 本轮结算掉的**悬空态**（主状态 `worker_running` + 没有活会话 ⇒ 回滚到最后一次转移的
+   * `from_status`，2026-10-11 外部缺陷报告）。报告里必须看得见：它是「作业被按回上一态」，
+   * 静默发生的话人类会以为状态是自己变的。
+   */
+  readonly danglingSettled: readonly { readonly engagementId: string; readonly rolledBackTo: string }[];
   readonly needsHumanReconfirmation: readonly {
     readonly engagementId: string;
     readonly workerSessionId: string;
@@ -248,10 +255,10 @@ export class StartupRecovery {
     // 而且它返回的是别的作业的行——过滤掉之后仍然多做了 N 次查询。
     if (scopes === undefined) {
       const rows = (await this.#scanUnowned(200)).filter((r) => r.engagement_id === engagementId);
-      return this.#recoverGroup(rows);
+      return this.#withDanglingSettled(await this.#recoverGroup(rows), [engagementId]);
     }
     const rows = await scopes.run({ engagementId }, () => this.#scanUnowned(200));
-    return this.#recoverGroup(rows);
+    return this.#withDanglingSettled(await this.#recoverGroup(rows), [engagementId]);
   }
 
   /**
@@ -261,7 +268,7 @@ export class StartupRecovery {
    */
   async recoverAll(limit = 200): Promise<RecoveryReport> {
     const rows = await this.findUnownedSessions(limit);
-    return this.#recover(rows);
+    return this.#recover(rows, limit);
   }
 
   /**
@@ -277,7 +284,7 @@ export class StartupRecovery {
    *
    * 单个会话失败不中断整体：一个坏行不该让其余残留继续悬着（与改动前一致）。
    */
-  async #recover(rows: readonly StaleSessionRow[]): Promise<RecoveryReport> {
+  async #recover(rows: readonly StaleSessionRow[], limit: number): Promise<RecoveryReport> {
     const scopes = this.#rlsScope;
     if (scopes === undefined) return this.#recoverGroup(rows);
 
@@ -293,6 +300,7 @@ export class StartupRecovery {
     const sessionsSuperseded: string[] = [];
     const toolRunsMarkedUnknown: string[] = [];
     const engagementsBlocked: string[] = [];
+    const danglingSettled: { engagementId: string; rolledBackTo: string }[] = [];
     const needsHumanReconfirmation: RecoveryReport['needsHumanReconfirmation'][number][] = [];
     const errors: { engagementId: string; message: string }[] = [];
     for (const [engagementId, group] of byEngagement) {
@@ -305,15 +313,23 @@ export class StartupRecovery {
       sessionsSuperseded.push(...report.sessionsSuperseded);
       toolRunsMarkedUnknown.push(...report.toolRunsMarkedUnknown);
       engagementsBlocked.push(...report.engagementsBlocked);
+      danglingSettled.push(...report.danglingSettled);
       needsHumanReconfirmation.push(...report.needsHumanReconfirmation);
       errors.push(...report.errors);
     }
+    // **悬空态结算**（2026-10-11 外部缺陷报告 §2.4/§3.2 P2）：按作业扫一遍——报告里的场景
+    // （主状态 worker_running + 活动会话已终态）不会出现在无主会话扫描里，必须由作业侧驱动。
+    const dangling = await this.#settleDanglingCandidates(await this.#findDanglingRunning(limit));
+    danglingSettled.push(...dangling.settled);
+    errors.push(...dangling.errors);
+
     return {
       engagements,
       sessionsMarkedInterrupted,
       sessionsSuperseded,
       toolRunsMarkedUnknown,
       engagementsBlocked,
+      danglingSettled,
       needsHumanReconfirmation,
       errors,
     };
@@ -413,9 +429,96 @@ export class StartupRecovery {
       sessionsSuperseded: superseded,
       toolRunsMarkedUnknown: toolRunsUnknown,
       engagementsBlocked: [...new Set(blocked)].sort(),
+      // 悬空态结算**不在这里做**：它由**作业**驱动（见 `#findDanglingRunning`）——按"本次扫到的无主
+      // 会话"驱动会漏掉报告里的场景（那个失败会话是终态，不在无主扫描的集合里）。字段留空由调用方填。
+      danglingSettled: [],
       needsHumanReconfirmation: needsHuman,
       errors,
     };
+  }
+
+  /**
+   * 结算一个作业的**悬空态**（主状态 `worker_running` + 没有活会话）。
+   *
+   * 规则与 SQL 是单一来源（`dangling.ts`）；这里负责：走 `#write`（**必须有事务上下文**——
+   * 裸 `update` 会被 RLS 静默过滤成 0 行，见 {@link #write} 的说明）、写审计、且**绝不抛**。
+   *
+   * 返回被回滚到的主状态；没有需要结算的悬空态时返回 `null`。
+   */
+  async #settleDangling(engagementId: string): Promise<string | null> {
+    const rolledBackTo = await this.#write(async (tx) => {
+      const settled = await tx.query<{ settled_from: string | null }>(DANGLING_RUNNING_SETTLE_SQL, [
+        engagementId,
+      ]);
+      return settled.rows[0]?.settled_from ?? null;
+    });
+    if (rolledBackTo === null) return null;
+    await this.#audit(engagementId, null, 'workflow.dangling_running_settled', {
+      detail: '启动对账发现主状态与活动会话矛盾（worker_running 而没有活会话）；已按最后一次转移的 from_status 结算',
+      rolledBackTo,
+    });
+    return rolledBackTo;
+  }
+
+  /** 把"结算候选"的结果并进一份既有报告（`recoverEngagement` 的两个分支共用）。 */
+  async #withDanglingSettled(report: RecoveryReport, candidates: readonly string[]): Promise<RecoveryReport> {
+    if (candidates.length === 0) return report;
+    const { settled, errors } = await this.#settleDanglingCandidates(candidates);
+    return {
+      ...report,
+      danglingSettled: [...report.danglingSettled, ...settled],
+      errors: [...report.errors, ...errors],
+    };
+  }
+
+  /**
+   * 找出**悬空态**的作业：主状态 `worker_running` 而没有任何活会话。
+   *
+   * 为什么按**作业**扫而不是复用"无主会话"的扫描结果（2026-10-11 外部缺陷报告）：
+   * 报告里的那个会话是**终态 `failed`**，它不在无主扫描的集合里（那个扫描只找"还活着但没人驱动"的），
+   * 于是按会话驱动会**恰好在要治的场景下不触发**。守卫与结算 SQL 的 WHERE 逐字一致。
+   */
+  async #findDanglingRunning(limit: number): Promise<readonly string[]> {
+    const scopes = this.#rlsScope;
+    const query = () => this.#db.query<{ id: string }>(
+      `select e.id
+         from pentest.engagements e
+        where e.current_status = 'worker_running'
+          and not exists (
+            select 1
+              from pentest.worker_sessions s
+             where s.engagement_id = e.id
+               and s.status not in ('failed', 'closed', 'superseded')
+          )
+        order by e.updated_at
+        limit $1`,
+      [limit],
+    );
+    const rows = scopes === undefined
+      ? await query()
+      : await scopes.run({ engagementId: null }, query);
+    return rows.rows.map((row) => row.id);
+  }
+
+  /** 逐个结算候选作业（每个都在自己的作用域里；单条失败不中断其余）。 */
+  async #settleDanglingCandidates(
+    candidates: readonly string[],
+  ): Promise<{ settled: { engagementId: string; rolledBackTo: string }[]; errors: { engagementId: string; message: string }[] }> {
+    const scopes = this.#rlsScope;
+    const settled: { engagementId: string; rolledBackTo: string }[] = [];
+    const errors: { engagementId: string; message: string }[] = [];
+    for (const engagementId of candidates) {
+      try {
+        const run = () => this.#settleDangling(engagementId);
+        const rolledBackTo = scopes === undefined
+          ? await run()
+          : await scopes.run({ engagementId }, run);
+        if (rolledBackTo !== null) settled.push({ engagementId, rolledBackTo });
+      } catch (error) {
+        errors.push({ engagementId, message: describeError(error) });
+      }
+    }
+    return { settled, errors };
   }
 
   /**
@@ -544,7 +647,11 @@ export class StartupRecovery {
   async #audit(
     engagementId: string,
     workerSessionId: string | null,
-    eventType: 'session.reconciled' | 'engagement.blocked_by_recovery' | 'tool.run.marked_unknown',
+    eventType:
+      | 'session.reconciled'
+      | 'engagement.blocked_by_recovery'
+      | 'tool.run.marked_unknown'
+      | 'workflow.dangling_running_settled',
     payload: unknown,
   ): Promise<void> {
     if (this.#ledger === undefined) return;

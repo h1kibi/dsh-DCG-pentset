@@ -1624,6 +1624,44 @@ docker run --rm --network $NET $ENV $IMG "<命令行>"
 而**不给 `aborted`**——这是对的：§5 要的是"可分辨"，而 `partial`+`truncated`+`queue_remaining` 已经能分辨；
 改成 `aborted` 会与"扫了一部分"的语义打架。
 
+### 6.5.13.9 外部部署的报告：重做之后作业悬空、两个修法入口都点不动（2026-10-11）
+
+**现象**（别人部署 `CDUT-known` 的实测，我们逐条对证后**确认存在**）：点「重做」→ 新会话创建失败 →
+作业卡在 `worker_running`（主状态）+ `blocked`（运行标记）+ 活动会话指向 `failed` 会话。
+于是三个按钮**同时**不可用：**重做**灰（会话不存活）、**结束技术测试**灰（`blocked` ⇒ 不是 `running`）、
+**重开技术工作**灰（主状态不是 `report_ready`）——**唯一出路是「终止」**，而它会终结整个作业。
+
+**根因**（三条一环扣一环）：
+
+| 环 | 事实 |
+|---|---|
+| ① 「重做」不校验会话存活 | `retryWorker` 只校验主状态与 `active_agent_session_id !== null`；被指向的会话已经 `failed` 也照样放行 |
+| ② 创建失败只写运行标记，**不回滚主状态** | `createDshSessionOrMarkFailed` 的失败分支（与 `markDeliveryFailure`）只把 `engagements.status` 写成 `blocked`，**从不碰 `current_status`** ⇒ 造出"主状态说在跑、实际没有会话"的悬空态 |
+| ③ 启动对账**不结算**这种悬空态 | 对账找的是"还活着但没人驱动"的会话；`failed` 是终态、不在集合里 ⇒ 恰好在要治的场景下不触发（它的注释里写着「只改运行标记，不动主状态」） |
+
+**处置**（四条）：
+
+- **失败即结算**：两条失败路径都调 `WorkflowCore.settleDanglingRunning`——只在 `current_status='worker_running'`
+  且**确实没有活会话**时，回滚到**最后一次转移的 `from_status`**（不猜：重做失败回 `waiting_human_review`、
+  重开回 `report_ready`、切换回 `transition_confirmation`、启动回 `ready`），清空 `active_agent_session_id`，
+  推进一版并写事件 `workflow.dangling_running_settled`（SQL 单一来源在 `src/workflow/dangling.ts`）。
+- **启动对账**按**作业**驱动补一次结算（`RecoveryReport.danglingSettled`）：这是"客户端拿老版本、服务器上新版本"时的自愈路径。
+- **可用性**加"活动会话存活"：不存活时「重做」禁用，**理由直接指路**（"先「结束技术测试」再「重开技术工作」"）。
+- **界面**：活动会话徽标标注会话状态（`（已失败）`）；自相矛盾态显式告警并给出路，并写明**不要点「终止」**。
+
+**由此产生的行为（不是 bug，但要知道）**：重做失败后作业**回到 `waiting_human_review`**（不是留在 `worker_running`），
+`state_version` 会 +1，界面上多一条「悬空态结算」的审计事件；需要落库核对时按
+`select event_type, payload_json->>'rolledBackTo' from pentest.context_events where event_type='workflow.dangling_running_settled'`。
+
+**可复跑命令**（测试库，勿指向 `pentest_personal`）：
+
+```bash
+# 真库行为锁：正例（结算发生）+ 反例（有活租约的会话 ⇒ 不动）+ 可用性矩阵 + 存活规则 + 组件渲染
+PENTEST_DATABASE_URL='postgresql://postgres:check@127.0.0.1:55446/pentest' \
+  node --import ./test/helpers/tsx-loader.mjs --test --experimental-strip-types --test-timeout=60000 \
+  test/recovery.test.ts test/client-run-controls.test.ts test/state-ledger.test.ts
+```
+
 ---
 
 ## 6.5.14 本机跑测试需要独立的 `pentest` 测试库（2026-10-10 补）

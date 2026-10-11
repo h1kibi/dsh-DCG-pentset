@@ -37,17 +37,39 @@ function inertController(): ConsoleController {
   });
 }
 
-function snapshotWith(state: ConsoleSnapshot['state']): ConsoleSnapshot {
+function snapshotWith(
+  state: ConsoleSnapshot['state'],
+  sessions: ConsoleSnapshot['sessions'] = [],
+): ConsoleSnapshot {
   return {
     engagements: [],
     selectedEngagementId: state === null ? null : 'e1',
     state,
-    sessions: [],
+    sessions,
     loading: false,
     lastError: null,
     conflict: false,
     loadedAt: null,
   };
+}
+
+/** 造一行会话摘要（只覆盖本文件关心的字段）。 */
+function sessionRow(over: Partial<ConsoleSnapshot['sessions'][number]> & { readonly id: string }): ConsoleSnapshot['sessions'][number] {
+  return {
+    dshSessionId: `dsh-${over.id}`,
+    phase: 'exploitation',
+    status: 'active',
+    attempt: 1,
+    iteration: 1,
+    scopeVersion: 1,
+    previousAgentSessionId: null,
+    retryOfSessionId: null,
+    transitionId: null,
+    statusNote: null,
+    statusNoteSource: null,
+    statusNoteAt: null,
+    ...over,
+  } as ConsoleSnapshot['sessions'][number];
 }
 
 function workflowState(
@@ -462,4 +484,74 @@ test('交接面板不发出 RPC：渲染是纯的（挂载期无写入是硬约�
     }),
   );
   assert.ok(html.length > 0);
+});
+
+// ───────── 悬空态：重做之后作业悬空与按钮不可达（2026-10-11 外部缺陷报告）─────────
+
+test('可用性矩阵：四个布尔由 mainStatus × runMarker 完全决定（外部报告 §4 的可穷举表）', () => {
+  // 这张表是外部报告给的验证方法：修复前后都必须逐行成立——它是"状态机算得没错"的凭据，
+  // 也是将来改动 `runActionAvailability` 时的护栏（任何一行变了都会红）。
+  const rows: readonly {
+    readonly mainStatus: NonNullable<ConsoleSnapshot['state']>['mainStatus'];
+    readonly runMarker: RunMarker;
+    readonly retry: boolean;
+    readonly reopen: boolean;
+    readonly finish: boolean;
+    readonly resume: boolean;
+  }[] = [
+    { mainStatus: 'worker_running', runMarker: 'running', retry: false, reopen: false, finish: true, resume: false },
+    // **本次悬空态**：对账把运行标记写成 blocked，于是唯一亮着的是「恢复」。
+    { mainStatus: 'worker_running', runMarker: 'blocked', retry: false, reopen: false, finish: false, resume: true },
+    { mainStatus: 'waiting_human_review', runMarker: 'running', retry: true, reopen: false, finish: true, resume: false },
+    { mainStatus: 'report_ready', runMarker: 'running', retry: false, reopen: true, finish: false, resume: false },
+    { mainStatus: 'report_ready', runMarker: 'blocked', retry: false, reopen: true, finish: false, resume: true },
+    { mainStatus: 'worker_running', runMarker: 'aborted', retry: false, reopen: false, finish: false, resume: false },
+    { mainStatus: 'worker_running', runMarker: 'failed', retry: false, reopen: false, finish: false, resume: false },
+  ];
+  for (const row of rows) {
+    const a = runActionAvailability(
+      workflowState({ mainStatus: row.mainStatus, runMarker: row.runMarker, activeWorkerSessionId: 'w1' }),
+    );
+    const where = `${row.mainStatus}/${row.runMarker}`;
+    assert.equal(a.canRetryWorker, row.retry, `${where} canRetryWorker`);
+    assert.equal(a.canReopenTechnicalWork, row.reopen, `${where} canReopen`);
+    assert.equal(a.canFinishTesting, row.finish, `${where} canFinishTesting`);
+    assert.equal(a.canResume, row.resume, `${where} canResume`);
+  }
+});
+
+test('重做还要看活动会话是否活着：终态会话/没有会话 ⇒ 禁用，且理由指出出路', () => {
+  // 2026-10-11 外部缺陷报告 P1：`重做` 此前只看主状态与运行标记，于是「活动会话已 failed」
+  // 时按钮照样亮着，人一点就再走一遍失败处置——而失败处置恰恰会把作业留进悬空态。
+  const base = { mainStatus: 'waiting_human_review' as const, runMarker: 'running' as const, activeWorkerSessionId: 'w1' };
+  for (const status of ['failed', 'closed', 'superseded'] as const) {
+    const a = runActionAvailability({ ...base, activeSessionStatus: status });
+    assert.equal(a.canRetryWorker, false, `活动会话 ${status} 时不得重做（会打在终态行上/半路失败）`);
+    assert.match(String(a.retryWorkerReason), /重开技术工作/, `理由必须指出出路而不是只说为什么不行：${String(a.retryWorkerReason)}`);
+  }
+  const none = runActionAvailability({ ...base, activeSessionStatus: null });
+  assert.equal(none.canRetryWorker, false, '没有活动会话时可重做必然是 lease_required');
+  assert.match(String(none.retryWorkerReason), /没有活动会话/);
+  // 活着的会话照旧可用；**不知道**时沿用旧判据（不因缺数据把按钮变灰）。
+  assert.equal(runActionAvailability({ ...base, activeSessionStatus: 'active' }).canRetryWorker, true);
+  assert.equal(runActionAvailability({ ...base, activeSessionStatus: 'waiting_human' }).canRetryWorker, true);
+  assert.equal(runActionAvailability({ ...base }).canRetryWorker, true, 'undefined = 不知道 ⇒ 不改判据');
+});
+
+test('悬空态在界面上**显式告警并指路**（主状态说在跑、活动会话已终态）', () => {
+  const html = renderToStaticMarkup(
+    createElement(RunControls, {
+      controller: inertController(),
+      snapshot: snapshotWith(
+        workflowState({ mainStatus: 'worker_running', runMarker: 'blocked', activeWorkerSessionId: 'w-failed' }),
+        [sessionRow({ id: 'w-failed', status: 'failed' })],
+      ),
+      now: NOW,
+    }),
+  );
+  assert.match(html, /自相矛盾的状态/, '矛盾态必须显式说出来（此前界面完全沉默）');
+  assert.match(html, /先点「恢复」/, '要说清第一步点哪里');
+  assert.match(html, /重开技术工作/, '要给出最终出路');
+  assert.match(html, /不要点「终止」/, '要警告终止会把重做/重开永久关掉');
+  assert.match(html, /活动会话 w-failed（已失败）/, '徽标必须标注终态，别让人以为它是活会话');
 });

@@ -37,7 +37,8 @@ import type { RunActionAvailability as SharedRunActionAvailability } from '../..
 import { APPROVAL_MODES, PHASES, runActionAvailability as decideRunActions } from '../../contracts.ts';
 import { APPROVAL_MODE_HINTS, APPROVAL_MODE_LABELS } from '../presets.ts';
 import type { ConsoleController, ConsoleSnapshot } from '../controller.ts';
-import { formatCount, mainStatusLabel, phaseLabel, runMarkerLabel } from '../format.ts';
+import type { SessionStatus } from '../../contracts.ts';
+import { formatCount, mainStatusLabel, phaseLabel, runMarkerLabel, sessionStatusLabel } from '../format.ts';
 import { Badge, Button, Card, Field, TextArea, TextInput } from '../ui.tsx';
 
 /** 启动 Agent 时可选填写的预算上限。留空即不设限（由阶段默认值决定）。 */
@@ -149,7 +150,13 @@ interface RunActionAvailability extends SharedRunActionAvailability {
  * （2026-10-05 复核 F1）。文案仍留在客户端渲染（服务端只回事实）。
  */
 export function runActionAvailability(
-  state: { readonly mainStatus: MainStatus; readonly runMarker: RunMarker; readonly activeWorkerSessionId: string | null } | null,
+  state: {
+    readonly mainStatus: MainStatus;
+    readonly runMarker: RunMarker;
+    readonly activeWorkerSessionId: string | null;
+    /** 活动会话的会话级状态（`null` = 没有活动会话、`undefined` = 不知道）；见契约层 `sessionUsable`。 */
+    readonly activeSessionStatus?: SessionStatus | null;
+  } | null,
 ): RunActionAvailability {
   if (state === null) {
     const why = '尚未选中 engagement';
@@ -201,7 +208,16 @@ export function runActionAvailability(
         : `仅运行中或已暂停可追加预算；当前运行标记：${runMarkerLabel(marker)}`,
     retryWorkerReason: decided.canRetryWorker
       ? null
-      : `仅「等待人工判断」可重做（那时人类刚看过报告）；当前主状态：${mainStatusLabel(state.mainStatus)}`,
+      : state.mainStatus !== 'waiting_human_review'
+        ? `仅「等待人工判断」可重做（那时人类刚看过报告）；当前主状态：${mainStatusLabel(state.mainStatus)}`
+        : // 主状态是对的，那就是**活动会话不可用**：重做会复用/新建一个会话，而眼下没有可用的会话。
+          // 这条路必须指出去，否则人类只会看到一个灰按钮（2026-10-11 外部缺陷报告）。
+          `活动 Worker 会话已结束或不存在（${
+            state.activeSessionStatus === null || state.activeSessionStatus === undefined
+              ? '没有活动会话'
+              : sessionStatusLabel(state.activeSessionStatus)
+          }）：` +
+          '先点「结束技术测试」再点「重开技术工作」——那条路会建一个新的会话',
     reopenTechnicalWorkReason: decided.canReopenTechnicalWork
       ? null
       : `仅「报告就绪（尚未签字）」可重开技术工作；当前主状态：${mainStatusLabel(state.mainStatus)}，运行标记：${runMarkerLabel(marker)}`,
@@ -267,7 +283,39 @@ export function RunControls(props: RunControlsProps): ReactNode {
     return null;
   }
 
-  const availability = runActionAvailability(state);
+  /**
+   * 活动会话（**会话级状态**在这里才拿得到：`snapshot.sessions` 是 `listWorkerSessions` 的结果）。
+   *
+   * `null` = 快照里没有这一行（会话已不存在/已终态被清理）；`undefined`（`state === null`）=
+   * 还没读到作业状态 ⇒ 不参与判定（见契约层 `sessionUsable` 的三态语义）。
+   */
+  const activeSession = state === null || state.activeWorkerSessionId === null
+    ? null
+    : props.snapshot.sessions.find((session) => session.id === state.activeWorkerSessionId) ?? null;
+  const activeSessionStatus: SessionStatus | null | undefined = state === null
+    ? undefined
+    : activeSession?.status ?? null;
+  /**
+   * **自相矛盾态**（2026-10-11 外部缺陷报告 §3.3）：主状态说「Agent 正在跑」，而活动会话
+   * 已经结束（或根本没有会话）。界面此前对此完全沉默，人类只能从两个灰按钮里猜。
+   */
+  const dangling = state !== null
+    && state.mainStatus === 'worker_running'
+    && (activeSessionStatus === null
+      || activeSessionStatus === 'failed'
+      || activeSessionStatus === 'closed'
+      || activeSessionStatus === 'superseded');
+
+  const availability = runActionAvailability(
+    state === null
+      ? null
+      : {
+          mainStatus: state.mainStatus,
+          runMarker: state.runMarker,
+          activeWorkerSessionId: state.activeWorkerSessionId,
+          activeSessionStatus,
+        },
+  );
   /**
    * 追加预算的三项：空 = 不追加这一项（合法），**填了但解析不了 = 拒绝提交**。
    *
@@ -412,6 +460,14 @@ export function RunControls(props: RunControlsProps): ReactNode {
         )}
         {modeNotice === null ? null : <p className="pentest-runcontrols__notice">{modeNotice}</p>}
       </div>
+      {dangling ? (
+        <p className="pentest-runcontrols__failure" role="alert">
+          {`主状态是「Agent 正在运行」，但${activeSessionStatus === null ? '没有活动会话' : `活动会话已${sessionStatusLabel(activeSessionStatus)}`}——` +
+            '这是一个自相矛盾的状态（通常是重做/切换时新会话创建失败留下的）。出路按顺序点：' +
+            '若「结束技术测试」是灰的，先点「恢复」；然后「结束技术测试」→「重开技术工作」（后者会建新会话）。' +
+            '不要点「终止」：那会让重做与重开永久不可用。'}
+        </p>
+      ) : null}
       <div className="pentest-runcontrols__status">
         <Badge text={state === null ? '状态未知' : runMarkerLabel(state.runMarker)} tone="neutral" />
         <Badge
@@ -421,8 +477,14 @@ export function RunControls(props: RunControlsProps): ReactNode {
         />
         {state === null || state.activeWorkerSessionId === null ? null : (
           <Badge
-            text={`活动会话 ${state.activeWorkerSessionId.slice(0, 8)}`}
-            tone="done"
+            text={
+              // 终态会话必须**说出来**：此前只显示会话短 id，人类看到的「活动会话 482fb2a5」
+              // 其实是一个已经 failed 的死会话（2026-10-11 外部缺陷报告 §2.5）。
+              activeSession === null
+                ? `活动会话 ${state.activeWorkerSessionId.slice(0, 8)}（快照里已无此行）`
+                : `活动会话 ${state.activeWorkerSessionId.slice(0, 8)}（${sessionStatusLabel(activeSession.status)}）`
+            }
+            tone={activeSession !== null && (activeSession.status === 'failed' || activeSession.status === 'closed' || activeSession.status === 'superseded') ? 'attention' : 'done'}
             hint="单活动会话：一个 engagement 同时只有一个 Worker"
           />
         )}

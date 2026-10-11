@@ -505,4 +505,89 @@ describe('启动对账执行者（真实 PostgreSQL）', { skip: DATABASE_URL ==
     );
     assert.equal(events.rows[0]!.n, '0', '未配账本时不写审计——这是明确降级，不是静默失败');
   });
+
+  // ───────── 悬空态结算：重做之后作业悬空、按钮不可达（2026-10-11 外部缺陷报告）─────────
+
+  /**
+   * 造出报告里的现场：主状态 `worker_running`、唯一会话已终态 `failed`、运行标记 `blocked`，
+   * 且**最后一次转移**是 `waiting_human_review → worker_running`（即人类点的那次「重做」）。
+   */
+  async function seedDangling(input: {
+    readonly liveSession?: boolean;
+  }): Promise<{ engagementId: string; deadSessionId: string; stateVersion: number }> {
+    const engagementId = await newEngagement();
+    const deadSessionId = await newSession({
+      engagementId,
+      status: input.liveSession === true ? 'active' : 'failed',
+    });
+    const decision = await pool.query<{ id: string }>(
+      `insert into pentest.human_decisions
+         (engagement_id, operator_id, decision_type, subject_id, decision, reason, auth_context)
+       values ($1::uuid, 'tester', 'retry', $2, 'reuse_session', '外部报告现场：重做', '{}'::jsonb)
+       returning id`,
+      [engagementId, deadSessionId],
+    );
+    await pool.query(
+      `insert into pentest.state_transitions
+         (engagement_id, from_status, to_status, transition_type, session_reused, expected_version,
+          resulting_version, human_decision_id, reason)
+       values ($1::uuid, 'waiting_human_review', 'worker_running', 'retry', true, 15, 16, $2::uuid, '重做')`,
+      [engagementId, decision.rows[0]?.id],
+    );
+    await pool.query(
+      `update pentest.engagements
+          set current_status = 'worker_running', status = 'blocked',
+              state_version = 16, active_agent_session_id = $2::uuid
+        where id = $1::uuid`,
+      [engagementId, deadSessionId],
+    );
+    return { engagementId, deadSessionId, stateVersion: 16 };
+  }
+
+  test('悬空态结算：主状态 worker_running + 没有活会话 ⇒ 回滚到最近一次转移的 from_status', async () => {
+    const { engagementId, stateVersion } = await seedDangling({});
+
+    const report = await recovery().recoverEngagement(engagementId);
+
+    assert.deepEqual(
+      report.danglingSettled,
+      [{ engagementId, rolledBackTo: 'waiting_human_review' }],
+      '结算必须出现在报告里（静默把状态按回去，人类会以为是自己变的）',
+    );
+    const after = await pool.query(
+      `select current_status, status, state_version, active_agent_session_id
+         from pentest.engagements where id = $1::uuid`,
+      [engagementId],
+    );
+    const row = after.rows[0] as {
+      current_status: string;
+      status: string;
+      state_version: string | number;
+      active_agent_session_id: string | null;
+    };
+    assert.equal(row.current_status, 'waiting_human_review', '主状态回到转移前的状态（不是猜的，来自 from_status）');
+    assert.equal(row.active_agent_session_id, null, '活动会话指针必须清空（它还指着那个死会话）');
+    assert.equal(Number(row.state_version), stateVersion + 1, '版本推进一格（登记在 NON_TRANSITION_VERSION_BUMPS）');
+    assert.equal(row.status, 'blocked', '运行标记保持 blocked（那是「等人类处置」的如实标记）');
+  });
+
+  test('悬空态结算不误伤：还有活会话时**不动**主状态', async () => {
+    const { engagementId, deadSessionId } = await seedDangling({ liveSession: true });
+    // **必须带一个有效租约**：没有租约的会话在对账眼里就是"没人驱动的残留"，会被判中断 ——
+    // 那样作业确实变成悬空态，结算反而是对的（第一版夹具就栽在这里）。生产里正常在跑的会话
+    // 必然持有租约，所以这一条才是"不误伤"的正确形态。
+    await newLease({ engagementId, workerSessionId: deadSessionId, expired: false });
+
+    const report = await recovery().recoverEngagement(engagementId);
+
+    assert.deepEqual(report.danglingSettled, [], '还有 active 会话 ⇒ 不是悬空态');
+    const after = await pool.query(
+      `select current_status, active_agent_session_id from pentest.engagements where id = $1::uuid`,
+      [engagementId],
+    );
+    const row = after.rows[0] as { current_status: string; active_agent_session_id: string | null };
+    assert.equal(row.current_status, 'worker_running', '正常在跑的作业不得被按回上一态');
+    assert.notEqual(row.active_agent_session_id, null, '活动会话指针不得被清空');
+  });
 });
+
